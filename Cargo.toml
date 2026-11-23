@@ -1,0 +1,196 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/desktop",
+    "crates/core",
+    "crates/model",
+    "crates/vault",
+    "crates/markdown",
+    "crates/cache",
+    "crates/formats",
+    "crates/commands",
+    "crates/control",
+    "crates/cli",
+    "crates/search",
+    "crates/text",
+    "crates/canvas",
+    "crates/suggest",
+    "crates/pdf",
+    "crates/math",
+    "crates/highlight",
+    "crates/mermaid",
+    "crates/export",
+    "crates/audio",
+    "crates/paste",
+    "crates/spell",
+    "crates/bench",
+]
+
+[workspace.package]
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.95"
+repository = "https://github.com/lkh0310kr/tft"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+core = { path = "crates/core" }
+model = { path = "crates/model" }
+vault = { path = "crates/vault" }
+markdown = { path = "crates/markdown" }
+cache = { path = "crates/cache" }
+formats = { path = "crates/formats" }
+commands = { path = "crates/commands" }
+control = { path = "crates/control" }
+cli = { path = "crates/cli" }
+search = { path = "crates/search" }
+text = { path = "crates/text" }
+canvas = { path = "crates/canvas" }
+suggest = { path = "crates/suggest" }
+pdf = { path = "crates/pdf" }
+math = { path = "crates/math" }
+highlight = { path = "crates/highlight" }
+mermaid = { path = "crates/mermaid" }
+export = { path = "crates/export" }
+audio = { path = "crates/audio" }
+paste = { path = "crates/paste" }
+spell = { path = "crates/spell" }
+
+anyhow = "1"
+# std::time for wasm32-unknown-unknown, where std has no clock.
+web-time = "1"
+# The KaTeX font crate embeds its faces through rust-embed; on wasm, debug
+# builds must embed them too because there is no filesystem to read.
+rust-embed = "8"
+# The WHATWG HTML parser Servo uses, pure Rust (MIT/Apache-2.0), and the
+# reference tree it builds: copied rich text (`text/html`) is parsed with them
+# before `paste` writes it out as Markdown. A browser's fragment is
+# rarely well formed, and a spec parser recovers from it the way the page did.
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+serde_yaml = "0.9"
+async-channel = "2"
+# AF_UNIX on Windows (10 1803 and later) behind std's own socket API: the
+# control socket is a Unix domain socket there too. Already in the tree.
+uds_windows = "1.2"
+# Order-preserving map: Obsidian writes types.json in insertion order, so a
+# sorted map would rewrite the file on every save.
+indexmap = { version = "2", features = ["serde"] }
+walkdir = "2"
+tempfile = "3"
+rayon = "1"
+regex = "1"
+# Prism's patterns use lookahead and lookbehind, which `regex` has not got.
+# `fancy-regex` is pure Rust: it hands what it can to `regex` and backtracks
+# for the rest. Only `highlight` needs it.
+fancy-regex = "0.16"
+notify = "8"
+# Pure Rust PDF rasterizer for the PDF view and `![[x.pdf]]` embeds. The default
+# features embed the 14 standard fonts and the CMaps, so a PDF without its own
+# fonts renders the same on every machine without touching system fonts.
+hayro = "0.8"
+# RaTeX: a KaTeX-compatible TeX math engine in pure Rust, for `$x$` and `$$x$$`.
+# The parser and layout crates hand back a display list in em units that the
+# app paints with gpui; `ratex-katex-fonts` embeds the KaTeX faces (SIL OFL)
+# the metrics belong to. Pinned together: the four crates share a version.
+ratex-parser = "0.1.15"
+ratex-layout = "0.1.15"
+ratex-types = "0.1.15"
+ratex-font = "0.1.15"
+ratex-katex-fonts = "0.1.15"
+# limu: a Rust port of Pele, the Mermaid renderer Obsidian bundles (Pele 1.13.0
+# in Obsidian 1.15.1), whose tests hold its layout to Pele's number for number.
+# It stops at a scene (shapes, paths and text runs) that mermaid turns
+# into a drawing list the app paints with gpui. MIT, standard library only.
+# Pinned exactly: it is 0.x and its API moves between releases.
+limu = "=0.2.1"
+# Already in the tree through krilla; mermaid shapes diagram text with
+# it to measure it as the browser's canvas does (HarfBuzz's own port).
+rustybuzz = "0.20"
+# Already in the tree through gpui, whose PathBuilder takes lyon's stroke
+# options; the app names its caps and joins for Mermaid diagrams' strokes.
+lyon = "1"
+# Rasterizes the KaTeX glyphs for the app to paint as images: gpui's own font
+# database prunes a face with no `m` glyph (every KaTeX size face) and cannot
+# tell the KaTeX italics from the uprights (no italic flag in the files).
+ab_glyph = "0.2"
+# Already in the tree through gpui; apps/desktop/build.rs compiles the icon
+# and VERSIONINFO into tft.exe with it, and does nothing off Windows.
+embed-resource = "3"
+# Already in the tree through gpui; the app wraps a rendered PDF page in one
+# of its frames to hand gpui the texture.
+image = "0.25"
+# Already in the tree through gpui; the app needs it for the local civil
+# date a daily note is named after and a template's `{{date}}` renders.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# gpui is pinned to a Zed release commit rather than the crates.io release: the crates.io 0.2.2
+# bundles blade 0.7.1, whose unconditional ray-tracing request fails vkCreateDevice on NVIDIA.
+# Zed v1.3.6 (2026) is known to run on the development machine and builds with rustc 1.95.
+# Bump deliberately, one release at a time, and re-run `cargo run -p desktop` on a real GPU.
+# Cargo.lock also pins libc to 0.2.189: gpui -> http_client -> async-tar -> xattr 0.2.3 reads
+# `libc::ENOATTR`, which libc 0.2.190 removed on Linux. Drop the pin once async-tar moves to xattr 1.x.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01", features = ["font-kit", "wayland", "x11"] }
+# gpui's own HTTP trait, from the same commit: `img()` fetches a URI through whatever client
+# the app sets, and the default one refuses every request. TFT's client is `apps/desktop/src/
+# remote.rs`, over ureq.
+http_client = { git = "https://github.com/zed-industries/zed", rev = "4ce18741ad2ea007cb20a1dd96d2a170d224cc01" }
+# Fetches remote images (`![alt](https://...)`) for gpui's `img()`: blocking, one thread per
+# request, rustls on ring with the webpki roots, so no system TLS library and no cmake.
+ureq = "3"
+# Already in the tree through gpui; the HTTP client hands its answer back over a oneshot.
+futures = "0.3"
+# Already in the tree through gpui. The window zoom wraps gpui's platform and
+# its windows (`apps/desktop/src/zoom.rs`), whose traits name these two; and
+# Toggle window always on top calls each desktop's own API through the native
+# handle: x11rb's pure-Rust connection on X11, objc2 on macOS, windows on
+# Windows, each the version gpui's own platform crates use.
+raw-window-handle = "0.6"
+smallvec = "1"
+x11rb = { version = "0.13", default-features = false }
+objc2 = "0.6"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+# Export to PDF writes its pages with krilla (MIT OR Apache-2.0): a pure Rust
+# PDF writer that embeds and subsets the fonts it is handed. `simple-text` is
+# off: `export` lays the pages out and hands krilla positioned glyphs.
+krilla = { version = "0.8", default-features = false, features = ["raster-images"] }
+# Already in the tree through gpui: Export as image paints the canvas with
+# tiny-skia, draws the mark with resvg and writes the PNG with png.
+tiny-skia = "0.11"
+resvg = { version = "0.45", default-features = false }
+png = "0.17"
+# The audio player (2026-11-15) decodes with symphonia, pure Rust: MP3, WAV
+# (PCM and ADPCM), FLAC, Ogg Vorbis, AAC in MP4/M4A/3GP, and the Matroska
+# and WebM containers. symphonia 0.5 has no Opus decoder, so `.opus` (and Opus
+# in Ogg or WebM) is opus-decoder (MIT OR Apache-2.0, pure Rust, no unsafe,
+# RFC 8251's twelve conformance vectors, one dependency: thiserror), fed the
+# packets symphonia's demuxer reads. Output is the same cpal.
+cpal = "0.18"
+# Spellchecking (spell). spellbook (MPL-2.0, used unmodified, the Helix
+# editor's checker) reads Hunspell .aff/.dic files in pure Rust, no_std plus
+# alloc, and checks and suggests the way Hunspell does; chosen 2026-11-15 over
+# zspell (suggestions still behind an unstable flag) and spellkit and the
+# hunspell crates (native libraries: NSSpellChecker, the Windows checker, or C
+# hunspell). option-ext puts MPL-2.0 in the tree already. md-5 (already in the
+# tree through gpui) writes the checksum line of `Custom Dictionary.txt`, the
+# file Chromium, and so Obsidian, keeps the added words in.
+spellbook = "0.4"
+md-5 = "0.10"
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3", "pcm", "wav", "adpcm", "flac", "ogg", "vorbis", "mkv"] }
+opus-decoder = "0.1.1"
+
+[profile.dev]
+opt-level = 0
+
+# gpui and its graphics stack are slow at opt-level 0; keep dependencies optimized in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+# opus-decoder 0.1.1 shifts a `u8` collapse mask past its width for some CELT
+# bands (`celt/vq.rs`, `extract_collapse_mask`), which panics with overflow
+# checks on and wraps in a release build; libopus keeps the low bits too, so
+# debug builds (and the tests) run it the way release does.
+[profile.dev.package.opus-decoder]
+overflow-checks = false

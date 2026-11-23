@@ -1,0 +1,13 @@
+[package]
+name = "paste"
+description = "What a paste or a drop writes into a note: the names pasted and dropped attachments are saved under, and the clipboard formats the app does not read"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+[lib]
+name = "tft_paste"
+
+

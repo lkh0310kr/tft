@@ -1,0 +1,878 @@
+//! Table commands over the one parser's table node; each rewrites the whole
+//! table the way Obsidian does.
+
+use std::ops::Range;
+use tft_markdown::{parse, Alignment, BlockKind};
+
+/// The narrowest a column may be: `---` is what the delimiter needs.
+const MIN_WIDTH: usize = 3;
+
+/// One of Obsidian's table commands, by its command id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableCommand {
+    RowBefore,
+    RowAfter,
+    RowUp,
+    RowDown,
+    RowCopy,
+    RowDelete,
+    ColBefore,
+    ColAfter,
+    ColLeft,
+    ColRight,
+    ColCopy,
+    ColDelete,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+}
+
+impl TableCommand {
+    /// The command with this Obsidian id, if it is a table command.
+    pub fn from_id(id: &str) -> Option<TableCommand> {
+        Some(match id {
+            "editor:table-row-before" => TableCommand::RowBefore,
+            "editor:table-row-after" => TableCommand::RowAfter,
+            "editor:table-row-up" => TableCommand::RowUp,
+            "editor:table-row-down" => TableCommand::RowDown,
+            "editor:table-row-copy" => TableCommand::RowCopy,
+            "editor:table-row-delete" => TableCommand::RowDelete,
+            "editor:table-col-before" => TableCommand::ColBefore,
+            "editor:table-col-after" => TableCommand::ColAfter,
+            "editor:table-col-left" => TableCommand::ColLeft,
+            "editor:table-col-right" => TableCommand::ColRight,
+            "editor:table-col-copy" => TableCommand::ColCopy,
+            "editor:table-col-delete" => TableCommand::ColDelete,
+            "editor:table-col-align-left" => TableCommand::AlignLeft,
+            "editor:table-col-align-center" => TableCommand::AlignCenter,
+            "editor:table-col-align-right" => TableCommand::AlignRight,
+            _ => return None,
+        })
+    }
+}
+
+/// A table as the commands work on it: the header is row 0. The first body
+/// row does not move up into it: Obsidian 1.15.0 hides "Move row up" there
+/// (the palette on the gate vault, 2026-11-08), where the 1.14.4 plugin
+/// probe had recorded a swap with the header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Table {
+    pub alignments: Vec<Alignment>,
+    /// The header first, then the body rows, every row the same width.
+    pub rows: Vec<Vec<String>>,
+}
+
+/// The table the cursor is in, and where in it the cursor is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAt {
+    /// The table's bytes in the document, the trailing newline excluded.
+    pub span: Range<usize>,
+    pub table: Table,
+    /// The bytes each cell stands for, the header row first. A row written
+    /// with too few cells has too few spans: there is nowhere to type.
+    pub cells: Vec<Vec<Range<usize>>>,
+    /// The row the cursor is in, the header being 0.
+    pub row: usize,
+    pub col: usize,
+}
+
+/// What a command writes: the text replacing [`TableAt::span`], and where
+/// in it the cursor lands — the start of the cell it was in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableEdit {
+    pub text: String,
+    pub cursor: usize,
+}
+
+/// Characters in a cell, which is what the padding counts.
+fn width(cell: &str) -> usize {
+    cell.chars().count()
+}
+
+impl Table {
+    pub fn columns(&self) -> usize {
+        self.alignments.len()
+    }
+
+    /// Each column as wide as its widest cell, and never under three.
+    fn widths(&self) -> Vec<usize> {
+        (0..self.columns())
+            .map(|c| {
+                self.rows
+                    .iter()
+                    .filter_map(|r| r.get(c))
+                    .map(|cell| width(cell))
+                    .chain(std::iter::once(MIN_WIDTH))
+                    .max()
+                    .unwrap_or(MIN_WIDTH)
+            })
+            .collect()
+    }
+
+    /// The whole table as Obsidian writes it back.
+    pub fn render(&self) -> String {
+        let widths = self.widths();
+        let mut out = String::new();
+        for (ix, row) in self.rows.iter().enumerate() {
+            push_row(&mut out, row, &widths, &self.alignments);
+            if ix == 0 {
+                push_delimiter(&mut out, &widths, &self.alignments);
+            }
+        }
+        // The last line carries no newline: the span it replaces had none.
+        out.pop();
+        out
+    }
+
+    /// Byte offset of column `col`'s text within rendered row `row`, for
+    /// putting the cursor back in the cell it was in.
+    fn cell_start(&self, row: usize, col: usize) -> usize {
+        let mut at = 1;
+        for (c, w) in self.widths().iter().enumerate().take(col) {
+            let cell = self.rows[row].get(c).map(String::as_str).unwrap_or("");
+            at += 1 + cell.len() + w.saturating_sub(width(cell)) + 2;
+        }
+        at + 1
+    }
+
+    /// Byte offset of the cell at `row`, `col` in the whole rendered table.
+    fn cursor_at(&self, text: &str, row: usize, col: usize) -> usize {
+        // Row 0 is the header, and the delimiter follows it.
+        let line = if row == 0 { 0 } else { row + 1 };
+        let start: usize = text.split_inclusive('\n').take(line).map(|l| l.len()).sum();
+        start + self.cell_start(row, col)
+    }
+
+    fn empty_row(&self) -> Vec<String> {
+        vec![String::new(); self.columns()]
+    }
+}
+
+fn pad(cell: &str, to: usize, align: Alignment) -> String {
+    let room = to.saturating_sub(width(cell));
+    match align {
+        Alignment::Right => format!("{}{cell}", " ".repeat(room)),
+        // The odd space goes on the right.
+        Alignment::Center => {
+            let left = room / 2;
+            format!("{}{cell}{}", " ".repeat(left), " ".repeat(room - left))
+        }
+        _ => format!("{cell}{}", " ".repeat(room)),
+    }
+}
+
+fn push_row(out: &mut String, row: &[String], widths: &[usize], alignments: &[Alignment]) {
+    out.push('|');
+    for (c, w) in widths.iter().enumerate() {
+        let cell = row.get(c).map(String::as_str).unwrap_or("");
+        let align = alignments.get(c).copied().unwrap_or(Alignment::None);
+        out.push(' ');
+        out.push_str(&pad(cell, *w, align));
+        out.push_str(" |");
+    }
+    out.push('\n');
+}
+
+fn push_delimiter(out: &mut String, widths: &[usize], alignments: &[Alignment]) {
+    out.push('|');
+    for (c, w) in widths.iter().enumerate() {
+        let align = alignments.get(c).copied().unwrap_or(Alignment::None);
+        out.push(' ');
+        match align {
+            Alignment::None => out.push_str(&"-".repeat(*w)),
+            Alignment::Left => {
+                out.push(':');
+                out.push_str(&"-".repeat(w - 1));
+            }
+            Alignment::Right => {
+                out.push_str(&"-".repeat(w - 1));
+                out.push(':');
+            }
+            Alignment::Center => {
+                out.push(':');
+                out.push_str(&"-".repeat(w - 2));
+                out.push(':');
+            }
+        }
+        out.push_str(" |");
+    }
+    out.push('\n');
+}
+
+/// Every table in `text`, by the bytes it covers, from one parse.
+pub fn tables(text: &str) -> Vec<Range<usize>> {
+    parse(text)
+        .blocks
+        .iter()
+        .filter(|b| matches!(b.kind, BlockKind::Table { .. }))
+        .map(|b| b.span.start..b.span.end)
+        .collect()
+}
+
+/// The table containing `offset`, parsed from `text`.
+///
+/// The cursor counts as inside the table anywhere in its lines, the
+/// delimiter row included; a cursor on the delimiter is treated as being in
+/// the header, which is the row its alignment belongs to.
+pub fn table_at(text: &str, offset: usize) -> Option<TableAt> {
+    let doc = parse(text);
+    let block = doc.blocks.iter().find(|b| {
+        matches!(b.kind, BlockKind::Table { .. }) && (b.span.start..=b.span.end).contains(&offset)
+    })?;
+    let BlockKind::Table {
+        alignments,
+        header,
+        rows,
+    } = &block.kind
+    else {
+        return None;
+    };
+    let span = block.span.start..block.span.end;
+    let columns = alignments.len().max(header.len());
+    let cell_text = |span: &tft_markdown::Span| text[span.start..span.end].to_string();
+    let mut table = Table {
+        alignments: alignments.clone(),
+        rows: Vec::with_capacity(rows.len() + 1),
+    };
+    table.alignments.resize(columns, Alignment::None);
+    let mut spans: Vec<Vec<Range<usize>>> = Vec::with_capacity(rows.len() + 1);
+    let mut push = |cells: &[tft_markdown::TableCell<'_>], table: &mut Table| {
+        let mut row: Vec<String> = cells.iter().map(|c| cell_text(&c.span)).collect();
+        row.resize(columns, String::new());
+        table.rows.push(row);
+        spans.push(cells.iter().map(|c| c.span.start..c.span.end).collect());
+    };
+    push(header, &mut table);
+    for row in rows {
+        push(row, &mut table);
+    }
+    // Which cell the cursor is in: the row whose line holds it, and the
+    // last cell that starts at or before it.
+    let line_of = |at: usize| text[span.start..at.min(span.end)].matches('\n').count();
+    let line = line_of(offset);
+    // Line 1 is the delimiter; the header owns its alignment.
+    let row = if line == 0 { 0 } else { line.saturating_sub(1) };
+    let row = row.min(table.rows.len() - 1);
+    let col = spans
+        .get(row)
+        .map(|cells| {
+            cells
+                .iter()
+                .rposition(|s| s.start <= offset)
+                .unwrap_or(0)
+                .min(columns - 1)
+        })
+        .unwrap_or(0);
+    Some(TableAt {
+        span,
+        table,
+        cells: spans,
+        row,
+        col,
+    })
+}
+
+/// The text `cmd` writes for the table at the cursor, or `None` when it
+/// cannot apply — deleting the only column, or moving the first column
+/// left.
+pub fn apply(at: &TableAt, cmd: TableCommand) -> Option<TableEdit> {
+    applies_inner(at, cmd)
+}
+
+/// Whether `cmd` would write anything at `at`. Obsidian hides a table
+/// command whose check fails, so the palette asks this before listing one.
+pub fn applies(at: &TableAt, cmd: TableCommand) -> bool {
+    applies_inner(at, cmd).is_some()
+}
+
+fn applies_inner(at: &TableAt, cmd: TableCommand) -> Option<TableEdit> {
+    let mut t = at.table.clone();
+    let (mut row, mut col) = (at.row, at.col);
+    let rows = t.rows.len();
+    let cols = t.columns();
+    match cmd {
+        TableCommand::RowBefore => {
+            t.rows.insert(row, t.empty_row());
+        }
+        TableCommand::RowAfter => {
+            t.rows.insert(row + 1, t.empty_row());
+            row += 1;
+        }
+        TableCommand::RowUp => {
+            // Row 1 is the first body row; the header is not a row it can
+            // change places with.
+            if row <= 1 {
+                return None;
+            }
+            t.rows.swap(row, row - 1);
+            row -= 1;
+        }
+        TableCommand::RowDown => {
+            if row + 1 >= rows {
+                return None;
+            }
+            t.rows.swap(row, row + 1);
+            row += 1;
+        }
+        TableCommand::RowCopy => {
+            let copy = t.rows[row].clone();
+            t.rows.insert(row + 1, copy);
+            row += 1;
+        }
+        TableCommand::RowDelete => {
+            // The header is a row like any other: deleting it promotes the
+            // one below, and the last row standing cannot go.
+            if rows <= 1 {
+                return None;
+            }
+            t.rows.remove(row);
+            row = row.min(t.rows.len() - 1);
+        }
+        TableCommand::ColBefore => {
+            insert_column(&mut t, col, Alignment::None, None);
+        }
+        TableCommand::ColAfter => {
+            insert_column(&mut t, col + 1, Alignment::None, None);
+            col += 1;
+        }
+        TableCommand::ColLeft => {
+            if col == 0 {
+                return None;
+            }
+            swap_columns(&mut t, col, col - 1);
+            col -= 1;
+        }
+        TableCommand::ColRight => {
+            if col + 1 >= cols {
+                return None;
+            }
+            swap_columns(&mut t, col, col + 1);
+            col += 1;
+        }
+        TableCommand::ColCopy => {
+            let cells: Vec<String> = t.rows.iter().map(|r| r[col].clone()).collect();
+            let align = t.alignments[col];
+            insert_column(&mut t, col + 1, align, Some(cells));
+            col += 1;
+        }
+        TableCommand::ColDelete => {
+            if cols <= 1 {
+                return None;
+            }
+            for r in &mut t.rows {
+                r.remove(col);
+            }
+            t.alignments.remove(col);
+            col = col.min(t.columns() - 1);
+        }
+        TableCommand::AlignLeft => t.alignments[col] = Alignment::Left,
+        TableCommand::AlignCenter => t.alignments[col] = Alignment::Center,
+        TableCommand::AlignRight => t.alignments[col] = Alignment::Right,
+    }
+    let text = t.render();
+    let cursor = t.cursor_at(&text, row, col.min(t.columns() - 1));
+    Some(TableEdit { text, cursor })
+}
+
+/// Where row or column `from` ends up when it is dropped into the gap
+/// `slot`, counted in the order before the move: the gap after the last
+/// line is `len`, and a line dropped into the gap either side of itself
+/// stays where it is.
+pub fn move_destination(from: usize, slot: usize) -> usize {
+    if from < slot {
+        slot - 1
+    } else {
+        slot
+    }
+}
+
+/// Moves one row, or one column when `columns` is set, to the gap `slot`:
+/// what dragging a row or column handle does. The header is a row like any
+/// other, so it can be dragged and a body row dropped above it, as the
+/// move commands treat it; a column takes its alignment with it. `None`
+/// when the drop leaves the line where it was or names a gap that is not
+/// there. The cursor lands in the moved line's first cell, which is where
+/// Obsidian's (probe of 2026-11-08, `table-handles`).
+pub fn move_line(at: &TableAt, columns: bool, from: usize, slot: usize) -> Option<TableEdit> {
+    let mut t = at.table.clone();
+    let len = if columns { t.columns() } else { t.rows.len() };
+    if from >= len || slot > len {
+        return None;
+    }
+    let dest = move_destination(from, slot);
+    if dest == from {
+        return None;
+    }
+    if columns {
+        for r in &mut t.rows {
+            let cell = r.remove(from);
+            r.insert(dest, cell);
+        }
+        let align = t.alignments.remove(from);
+        t.alignments.insert(dest, align);
+    } else {
+        let row = t.rows.remove(from);
+        t.rows.insert(dest, row);
+    }
+    let text = t.render();
+    let (row, col) = if columns { (0, dest) } else { (dest, 0) };
+    let cursor = t.cursor_at(&text, row, col);
+    Some(TableEdit { text, cursor })
+}
+
+/// The table at `at` written as a command writes it, every cell padded to
+/// its column, with the cursor at the start of the cell it was in. The
+/// caller compares the text with the bytes it replaces: a table that is
+/// already padded is left alone.
+///
+/// Obsidian 1.15.0 rewrites a table this way on the first click into a
+/// cell, with nothing typed (`| A | B |` became `| A   | B   |`), so a
+/// table is not left ragged once a caret has been in it, even though
+/// typing itself re-pads nothing ([[Specification#Observed table
+/// behavior]], the `inline-title-and-table-entry` probe of 2026-11-08).
+pub fn repad(at: &TableAt) -> TableEdit {
+    let text = at.table.render();
+    let cursor = at.table.cursor_at(&text, at.row, at.col);
+    TableEdit { text, cursor }
+}
+
+/// Appends an empty row under the last row, or an empty column to the
+/// right of the last when `columns` is set: what the "+" bar below a table
+/// and the one to its right do (probe of 2026-11-08, `table-handles`). The
+/// table is re-padded as a command re-pads it, and the cursor lands in the
+/// new row's first cell or the new column's header cell, where Obsidian's
+/// does.
+pub fn append_line(at: &TableAt, columns: bool) -> Option<TableEdit> {
+    // The commands insert beside the cursor and leave it on the line it was
+    // in, so it is put in the last row's first cell for a row and the last
+    // column's header cell for a column: the new line's first cell is then
+    // where the cursor lands.
+    let mut at = at.clone();
+    let (row, col) = if columns {
+        (0, at.table.columns().checked_sub(1)?)
+    } else {
+        (at.table.rows.len().checked_sub(1)?, 0)
+    };
+    at.row = row;
+    at.col = col;
+    apply(
+        &at,
+        if columns {
+            TableCommand::ColAfter
+        } else {
+            TableCommand::RowAfter
+        },
+    )
+}
+
+fn insert_column(t: &mut Table, at: usize, align: Alignment, cells: Option<Vec<String>>) {
+    for (ix, r) in t.rows.iter_mut().enumerate() {
+        let cell = cells
+            .as_ref()
+            .and_then(|c| c.get(ix).cloned())
+            .unwrap_or_default();
+        r.insert(at.min(r.len()), cell);
+    }
+    t.alignments.insert(at.min(t.alignments.len()), align);
+}
+
+fn swap_columns(t: &mut Table, a: usize, b: usize) {
+    for r in &mut t.rows {
+        r.swap(a, b);
+    }
+    t.alignments.swap(a, b);
+}
+
+/// What text typed into a cell is written as.
+///
+/// A bare `|` would split the cell in two and a newline would end the row,
+/// so both are kept inside the cell they were typed in. Editing a cell
+/// re-pads nothing: Obsidian only re-pads when a table command runs, so the
+/// rest of the table keeps its bytes.
+pub fn cell_text(typed: &str) -> String {
+    let mut out = String::with_capacity(typed.len());
+    let mut chars = typed.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' | '\r' => out.push(' '),
+            // One already escaped stays as it is.
+            '\\' if chars.peek() == Some(&'|') => {
+                out.push('\\');
+                out.push(chars.next().expect("peeked"));
+            }
+            '|' => out.push_str("\\|"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// The table `editor:insert-table` writes: a blank line, then two by two
+/// empty cells, with the cursor in the first header cell.
+pub fn insert_table() -> TableEdit {
+    let table = Table {
+        alignments: vec![Alignment::None; 2],
+        rows: vec![vec![String::new(); 2]; 2],
+    };
+    let text = format!("\n{}\n", table.render());
+    // The cursor goes in the first header cell, just past its pipe.
+    TableEdit {
+        text,
+        cursor: "\n|".len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs `cmd` with the cursor at the first byte of `cell` in `src`.
+    fn run(src: &str, cursor: &str, cmd: TableCommand) -> String {
+        let offset = src.find(cursor).expect("the cursor text is in the table");
+        let at = table_at(src, offset).expect("the cursor is in a table");
+        let edit = apply(&at, cmd).expect("the command applies");
+        let mut out = src.to_string();
+        out.replace_range(at.span.clone(), &edit.text);
+        out
+    }
+
+    const PADDED: &str = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+
+    /// Drags `from` into the gap `slot` and returns the document and where
+    /// the cursor landed in it.
+    fn dragged(src: &str, columns: bool, from: usize, slot: usize) -> Option<(String, usize)> {
+        let at = table_at(src, 2).expect("a table");
+        let edit = move_line(&at, columns, from, slot)?;
+        let mut out = src.to_string();
+        out.replace_range(at.span.clone(), &edit.text);
+        Some((out, at.span.start + edit.cursor))
+    }
+
+    const THREE: &str =
+        "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |\n";
+
+    #[test]
+    fn a_dragged_row_lands_in_the_gap_and_the_cursor_in_its_first_cell() {
+        // Probe of 2026-11-08. The header is row 0, so the rows 1, 4 and 7 are 1, 2 and 3:
+        // row 4 below 7, row 4 above 1, row 1 below 4, row 7 above 4.
+        let (out, at) = dragged(THREE, false, 2, 4).unwrap();
+        assert_eq!(
+            out,
+            "| A   | B   | C   |\n| --- | --- | --- |\n| 1   | 2   | 3   |\n| 7   | 8   | 9   |\n| 4   | 5   | 6   |\n"
+        );
+        assert_eq!(&out[at..at + 1], "4");
+        let (out, _) = dragged(THREE, false, 2, 1).unwrap();
+        assert!(out.contains("| 4   | 5   | 6   |\n| 1   | 2   | 3   |\n| 7   | 8   | 9   |\n"));
+        let (out, _) = dragged(THREE, false, 1, 3).unwrap();
+        assert!(out.contains("| 4   | 5   | 6   |\n| 1   | 2   | 3   |\n| 7   | 8   | 9   |\n"));
+        let (out, _) = dragged(THREE, false, 3, 2).unwrap();
+        assert!(out.contains("| 1   | 2   | 3   |\n| 7   | 8   | 9   |\n| 4   | 5   | 6   |\n"));
+    }
+
+    #[test]
+    fn a_dragged_column_takes_its_alignment_and_the_cursor_goes_to_its_header() {
+        let src = "| A | B | C |\n| --- | :-: | --: |\n| 1 | 2 | 3 |\n";
+        let (out, at) = dragged(src, true, 1, 3).unwrap();
+        assert_eq!(
+            out,
+            "| A   |   C |  B  |\n| --- | --: | :-: |\n| 1   |   3 |  2  |\n"
+        );
+        assert_eq!(&out[at..at + 3], " B ");
+        let (out, _) = dragged(src, true, 1, 0).unwrap();
+        assert!(out.starts_with("|  B  | A   |   C |\n| :-: | --- | --: |\n"));
+    }
+
+    #[test]
+    fn the_header_is_a_row_that_can_be_dragged() {
+        let (out, _) = dragged(THREE, false, 0, 2).unwrap();
+        assert!(out.starts_with("| 1   | 2   | 3   |\n| --- | --- | --- |\n| A   | B   | C   |\n"));
+    }
+
+    #[test]
+    fn the_plus_bars_append_a_row_below_and_a_column_to_the_right() {
+        // The bytes and the cursor Obsidian 1.15.0 left after a click on
+        // each bar, from the probe's `s08-add-buttons`.
+        let src = "intro\n\n| A   | B   | C   |\n| --- | --- | --- |\n| 1   | 2   | 3   |\n| 4   | 5   | 6   |\n| 7   | 8   | 9   |\n\nafter\n";
+        let at = table_at(src, src.find("| A").unwrap()).expect("a table");
+        let row = append_line(&at, false).expect("a row appends");
+        let mut out = src.to_string();
+        out.replace_range(at.span.clone(), &row.text);
+        assert_eq!(
+            out,
+            "intro\n\n| A   | B   | C   |\n| --- | --- | --- |\n| 1   | 2   | 3   |\n| 4   | 5   | 6   |\n| 7   | 8   | 9   |\n|     |     |     |\n\nafter\n"
+        );
+        // The new row's first cell, at the cell's start as every edit's
+        // cursor is (Obsidian's sits at its end: the cell is empty).
+        let cursor = at.span.start + row.cursor;
+        assert_eq!(&out[cursor - 2..cursor + 5], "|     |");
+        assert_eq!(out[..cursor].matches('\n').count(), 7);
+
+        let col = append_line(&at, true).expect("a column appends");
+        let mut out = src.to_string();
+        out.replace_range(at.span.clone(), &col.text);
+        assert_eq!(
+            out,
+            "intro\n\n| A   | B   | C   |     |\n| --- | --- | --- | --- |\n| 1   | 2   | 3   |     |\n| 4   | 5   | 6   |     |\n| 7   | 8   | 9   |     |\n\nafter\n"
+        );
+        // The new column's header cell, on the header line.
+        let cursor = at.span.start + col.cursor;
+        assert_eq!(&out[cursor - 2..cursor + 5], "|     |");
+        assert_eq!(out[..cursor].matches('\n').count(), 2);
+    }
+
+    #[test]
+    fn a_drop_that_changes_nothing_writes_nothing() {
+        // Either gap beside the line, and a gap that is not there.
+        assert!(dragged(THREE, false, 2, 2).is_none());
+        assert!(dragged(THREE, false, 2, 3).is_none());
+        assert!(dragged(THREE, true, 0, 1).is_none());
+        assert!(dragged(THREE, false, 2, 9).is_none());
+        assert_eq!(move_destination(3, 5), 4);
+        assert_eq!(move_destination(3, 2), 2);
+    }
+
+    #[test]
+    fn any_command_rewrites_the_whole_table() {
+        // Obsidian pads every cell, however the table was written.
+        assert_eq!(
+            run("|A|B|\n|-|-|\n|1|2|\n|3|4|\n", "1", TableCommand::RowAfter),
+            "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n| 3   | 4   |\n"
+        );
+        // Outer pipes are added to a table written without them.
+        assert_eq!(
+            run("A | B\n--- | ---\n1 | 2\n", "1 |", TableCommand::RowAfter),
+            "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n"
+        );
+    }
+
+    #[test]
+    fn rows_are_added_moved_copied_and_deleted() {
+        assert_eq!(
+            run(PADDED, "1", TableCommand::RowBefore),
+            "| A   | B   |\n| --- | --- |\n|     |     |\n| 1   | 2   |\n| 3   | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "1", TableCommand::RowAfter),
+            "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n|     |     |\n| 3   | 4   |\n"
+        );
+        // The first body row has nowhere to go: it does not swap with the
+        // header (Obsidian 1.15.0 hides the command there). The second
+        // swaps with the first.
+        let first = table_at(PADDED, PADDED.find('1').unwrap()).unwrap();
+        assert_eq!(apply(&first, TableCommand::RowUp), None);
+        assert_eq!(
+            run(PADDED, "3", TableCommand::RowUp),
+            "| A   | B   |\n| --- | --- |\n| 3   | 4   |\n| 1   | 2   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "1", TableCommand::RowDown),
+            "| A   | B   |\n| --- | --- |\n| 3   | 4   |\n| 1   | 2   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "1", TableCommand::RowCopy),
+            "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n| 1   | 2   |\n| 3   | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "1", TableCommand::RowDelete),
+            "| A   | B   |\n| --- | --- |\n| 3   | 4   |\n"
+        );
+        // Deleting the header promotes the row below it.
+        assert_eq!(
+            run(PADDED, "A", TableCommand::RowDelete),
+            "| 1   | 2   |\n| --- | --- |\n| 3   | 4   |\n"
+        );
+    }
+
+    #[test]
+    fn columns_are_added_moved_copied_and_deleted() {
+        assert_eq!(
+            run(PADDED, "A", TableCommand::ColBefore),
+            "|     | A   | B   |\n| --- | --- | --- |\n|     | 1   | 2   |\n|     | 3   | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "A", TableCommand::ColAfter),
+            "| A   |     | B   |\n| --- | --- | --- |\n| 1   |     | 2   |\n| 3   |     | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "A", TableCommand::ColRight),
+            "| B   | A   |\n| --- | --- |\n| 2   | 1   |\n| 4   | 3   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "B", TableCommand::ColLeft),
+            "| B   | A   |\n| --- | --- |\n| 2   | 1   |\n| 4   | 3   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "A", TableCommand::ColCopy),
+            "| A   | A   | B   |\n| --- | --- | --- |\n| 1   | 1   | 2   |\n| 3   | 3   | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "A", TableCommand::ColDelete),
+            "| B   |\n| --- |\n| 2   |\n| 4   |\n"
+        );
+    }
+
+    /// A ragged table is re-padded as a click into a cell re-pads it, the
+    /// cursor staying in the cell; one already padded renders to itself.
+    #[test]
+    fn repad_pads_every_cell_and_keeps_the_cursor_in_its_cell() {
+        let text = "x\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4444 |\n\ny\n";
+        let at = table_at(text, text.find("| 3").unwrap() + 2).expect("a table");
+        let edit = repad(&at);
+        assert_eq!(
+            edit.text,
+            "| A   | B    |\n| --- | ---- |\n| 1   | 2    |\n| 3   | 4444 |"
+        );
+        assert_eq!(&edit.text[edit.cursor..edit.cursor + 1], "3");
+        let padded = format!("x\n\n{}\n\ny\n", edit.text);
+        let at = table_at(&padded, padded.find("| 3").unwrap() + 2).expect("a table");
+        assert_eq!(repad(&at).text, edit.text);
+    }
+
+    #[test]
+    fn alignment_sets_the_delimiter_and_repads_the_column() {
+        assert_eq!(
+            run(PADDED, "B", TableCommand::AlignLeft),
+            "| A   | B   |\n| --- | :-- |\n| 1   | 2   |\n| 3   | 4   |\n"
+        );
+        assert_eq!(
+            run(PADDED, "B", TableCommand::AlignCenter),
+            "| A   |  B  |\n| --- | :-: |\n| 1   |  2  |\n| 3   |  4  |\n"
+        );
+        assert_eq!(
+            run(PADDED, "B", TableCommand::AlignRight),
+            "| A   |   B |\n| --- | --: |\n| 1   |   2 |\n| 3   |   4 |\n"
+        );
+        // Wider columns grow the delimiter and keep the odd space right.
+        let ragged = "| Long header | B |\n| --- | ------ |\n| x | yyyyyy |\n| z | w |\n";
+        assert_eq!(
+            run(ragged, "yyyyyy", TableCommand::AlignCenter),
+            "| Long header |   B    |\n| ----------- | :----: |\n| x           | yyyyyy |\n| z           |   w    |\n"
+        );
+        assert_eq!(
+            run(ragged, "yyyyyy", TableCommand::AlignRight),
+            "| Long header |      B |\n| ----------- | -----: |\n| x           | yyyyyy |\n| z           |      w |\n"
+        );
+    }
+
+    #[test]
+    fn existing_alignments_survive_an_edit() {
+        let aligned = "| A | B | C |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n";
+        assert_eq!(
+            run(aligned, "A", TableCommand::RowAfter),
+            "| A   |  B  |   C |\n| :-- | :-: | --: |\n|     |     |     |\n| 1   |  2  |   3 |\n"
+        );
+        // Alignment travels with the column it belongs to.
+        assert_eq!(
+            run(aligned, "A", TableCommand::ColRight),
+            "|  B  | A   |   C |\n| :-: | :-- | --: |\n|  2  | 1   |   3 |\n"
+        );
+        assert_eq!(
+            run(aligned, "A", TableCommand::ColCopy),
+            "| A   | A   |  B  |   C |\n| :-- | :-- | :-: | --: |\n| 1   | 1   |  2  |   3 |\n"
+        );
+        assert_eq!(
+            run(aligned, "A", TableCommand::ColDelete),
+            "|  B  |   C |\n| :-: | --: |\n|  2  |   3 |\n"
+        );
+    }
+
+    #[test]
+    fn short_rows_are_filled_out_and_escapes_are_kept() {
+        assert_eq!(
+            run(
+                "| A | B | C |\n| --- | --- | --- |\n| 1 |\n",
+                "1",
+                TableCommand::RowAfter
+            ),
+            "| A   | B   | C   |\n| --- | --- | --- |\n| 1   |     |     |\n|     |     |     |\n"
+        );
+        // `\|` keeps the cell whole, and the escape is written back.
+        let escaped = "| a | b |\n| --- | --- |\n| x \\| y | [[Alpha]] |\n";
+        assert_eq!(
+            run(escaped, "Alpha", TableCommand::RowAfter),
+            "| a      | b         |\n| ------ | --------- |\n| x \\| y | [[Alpha]] |\n|        |           |\n"
+        );
+    }
+
+    #[test]
+    fn a_header_the_parser_rejects_is_not_a_table() {
+        // A `|` inside a code span splits a cell, so this header has three
+        // cells against the delimiter's two and GFM makes it a paragraph.
+        // Obsidian's table editor is looser and would rewrite it into a
+        // three-column table; TFT acts on what the parser calls a table,
+        // so the command does not apply rather than turning prose into one.
+        let rich = "| `a|b` | **bold** |\n| --- | --- |\n| x | y |\n";
+        assert!(table_at(rich, rich.find("bold").unwrap()).is_none());
+    }
+
+    #[test]
+    fn a_command_that_cannot_apply_writes_nothing() {
+        let at = table_at(PADDED, PADDED.find('A').unwrap()).unwrap();
+        // Nothing is above the header, nothing is left of the first column.
+        assert_eq!(apply(&at, TableCommand::RowUp), None);
+        assert_eq!(apply(&at, TableCommand::ColLeft), None);
+        assert!(!applies(&at, TableCommand::RowUp));
+        assert!(applies(&at, TableCommand::RowDown));
+        // The first body row cannot move up either, and the last cannot
+        // move down.
+        let at = table_at(PADDED, PADDED.find('1').unwrap()).unwrap();
+        assert!(!applies(&at, TableCommand::RowUp));
+        assert!(applies(&at, TableCommand::RowDown));
+        let at = table_at(PADDED, PADDED.find('3').unwrap()).unwrap();
+        assert!(applies(&at, TableCommand::RowUp));
+        assert!(!applies(&at, TableCommand::RowDown));
+        let one = "| A |\n| --- |\n| 1 |\n";
+        let at = table_at(one, one.find('1').unwrap()).unwrap();
+        assert_eq!(apply(&at, TableCommand::ColDelete), None);
+    }
+
+    #[test]
+    fn the_cursor_is_found_in_the_right_cell() {
+        let at = table_at(PADDED, PADDED.find('4').unwrap()).unwrap();
+        assert_eq!((at.row, at.col), (2, 1));
+        // The delimiter belongs to the header, whose alignment it carries.
+        let at = table_at(PADDED, PADDED.find("---").unwrap()).unwrap();
+        assert_eq!(at.row, 0);
+        // Text outside any table is not in one.
+        let src = "para\n\n| A |\n| --- |\n| 1 |\n\nafter\n";
+        assert!(table_at(src, 0).is_none());
+        assert!(table_at(src, src.find("after").unwrap()).is_none());
+        assert!(table_at(src, src.find('1').unwrap()).is_some());
+    }
+
+    #[test]
+    fn typed_cell_text_keeps_the_row_whole() {
+        assert_eq!(cell_text("plain"), "plain");
+        // A bare pipe would split the cell; an escaped one is already safe.
+        assert_eq!(cell_text("x|y"), "x\\|y");
+        assert_eq!(cell_text("x\\|y"), "x\\|y");
+        assert_eq!(cell_text("a|b|c"), "a\\|b\\|c");
+        // A newline would end the row.
+        assert_eq!(cell_text("two\nlines"), "two lines");
+        assert_eq!(cell_text("`a|b`"), "`a\\|b`");
+    }
+
+    #[test]
+    fn insert_writes_an_empty_two_by_two_table() {
+        let edit = insert_table();
+        assert_eq!(edit.text, "\n|     |     |\n| --- | --- |\n|     |     |\n");
+        assert_eq!(&edit.text[edit.cursor..edit.cursor + 5], "     ");
+    }
+
+    #[test]
+    fn the_cursor_lands_in_the_cell_it_was_in() {
+        // The cell the cursor was in, in the rewritten table.
+        let at = table_at(PADDED, PADDED.find('4').unwrap()).unwrap();
+        let edit = apply(&at, TableCommand::RowCopy).unwrap();
+        assert_eq!(&edit.text[edit.cursor..edit.cursor + 1], "4");
+        let at = table_at(PADDED, PADDED.find('A').unwrap()).unwrap();
+        let edit = apply(&at, TableCommand::ColAfter).unwrap();
+        // The new column is empty, and the cursor sits in it.
+        assert_eq!(&edit.text[edit.cursor..edit.cursor + 3], "   ");
+        // A multibyte cell still lands on a character boundary.
+        let wide = "| é | b |\n| --- | --- |\n| ü | x |\n";
+        let at = table_at(wide, wide.find('x').unwrap()).unwrap();
+        let edit = apply(&at, TableCommand::RowAfter).unwrap();
+        assert!(edit.text.is_char_boundary(edit.cursor));
+    }
+}

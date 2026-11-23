@@ -1,0 +1,2 @@
+[alias]
+wasm-check = "check --target wasm32-unknown-unknown -p core -p model -p markdown -p formats -p cache -p search -p commands -p text -p canvas -p suggest -p math -p mermaid -p highlight -p paste -p pdf"

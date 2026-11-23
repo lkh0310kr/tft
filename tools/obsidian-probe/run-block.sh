@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# Run one CDP probe script against a fresh scratch vault, in phases:
+#   fixtures  (Obsidian not running: the script writes its notes)
+#   run       (Obsidian running; may end by quitting it)
+#   after-restart (only if "run" quit Obsidian: relaunch and finish)
+# Usage: run-block.sh <script.mjs> <results.json> [vault-dir]
+# Never points Obsidian at a real vault: it creates its own folder under $TMPDIR
+# unless a vault-dir is given, swaps ~/.config/obsidian/obsidian.json in for the
+# duration, and restores it byte-identical on exit.
+#
+# With USER_DATA_DIR set, Obsidian is launched with `--user-data-dir` on that
+# folder instead: it keeps its own obsidian.json, IndexedDB and update there,
+# holds its own single-instance lock, and the person's Obsidian can stay open
+# on their vault throughout (seen 2026-11-02). The newest obsidian-*.asar of
+# ~/.config/obsidian is copied in once so the run is on the version the person
+# runs rather than the installer's. CDP_PORT picks the port (default 9222).
+#
+# On macOS the run is always under a data directory of its own (USER_DATA_DIR,
+# default a fresh folder under $TMPDIR): the person's ~/Library/Application
+# Support/obsidian is never written, and Obsidian is launched from
+# /Applications/Obsidian.app (OBSIDIAN_APP overrides) rather than a PATH
+# `obsidian`, which on a Mac may be the command-line client.
+#
+# OBSIDIAN_ARGS adds flags to the launch, split on spaces: `--inspect=9341`
+# opens Node's inspector on the main process, where a probe can stand in for a
+# native dialog (`dialog.showOpenDialog`) without a person at the keyboard.
+set -euo pipefail
+# realpath without GNU readlink's -m: macOS has neither -m nor, before 13, -f.
+abspath() { python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$1"; }
+DARWIN=0; [ "$(uname -s)" = Darwin ] && DARWIN=1
+SCRIPT=$(abspath "$1"); RESULTS=$(abspath "$2")
+VAULT=$(abspath "${3:-$(mktemp -d "${TMPDIR:-/tmp}/tft-probe-vault.XXXXXX")}")
+CDP_PORT=${CDP_PORT:-9222}
+export CDP_BASE="http://127.0.0.1:$CDP_PORT"
+UDD=${USER_DATA_DIR:-}
+if [ "$DARWIN" = 1 ]; then
+  [ -n "$UDD" ] || UDD=$(mktemp -d "${TMPDIR:-/tmp}/tft-probe-udd.XXXXXX")
+  UDD=$(abspath "$UDD")
+  OBSIDIAN_APP=${OBSIDIAN_APP:-/Applications/Obsidian.app}
+  OBSIDIAN_BIN="$OBSIDIAN_APP/Contents/MacOS/Obsidian"
+  CONFIG_HOME="$HOME/Library/Application Support/obsidian"
+else
+  OBSIDIAN_BIN=obsidian
+  CONFIG_HOME="$HOME/.config/obsidian"
+fi
+UDD_FLAG=()
+if [ -n "$UDD" ]; then
+  mkdir -p "$UDD"
+  # updateDisabled: a fresh data directory otherwise fetches and installs an
+  # update on first launch, and the run would no longer be on the person's version.
+  if [ "$DARWIN" = 1 ]; then INIT='{"vaults":{},"updateDisabled":true}'; else INIT='{"vaults":{}}'; fi
+  [ -f "$UDD/obsidian.json" ] || printf '%s' "$INIT" > "$UDD/obsidian.json"
+  if ! ls "$UDD"/obsidian-*.asar >/dev/null 2>&1; then
+    NEWEST=$(ls "$CONFIG_HOME"/obsidian-*.asar 2>/dev/null | sort -V | tail -n 1 || true)
+    [ -n "$NEWEST" ] && command cp -f "$NEWEST" "$UDD/"
+  fi
+  CFG=$UDD/obsidian.json
+  UDD_FLAG=("--user-data-dir=$UDD")
+else
+  CFG="$CONFIG_HOME/obsidian.json"
+fi
+BACKUP=$(mktemp); command cp -f "$CFG" "$BACKUP"
+LOG=$(mktemp)
+# Anchored at ^/nix/store so it can never match this shell. The group admits the
+# --remote-debugging-port flag between the electron binary and the asar: without
+# it nothing launched with CDP matches, the kill is a no-op, and the next launch
+# is swallowed by the single-instance lock of the survivor. With a data dir of
+# our own, only an instance on that dir counts, running or to be killed.
+if [ "$DARWIN" = 1 ]; then
+  PGREP="^$OBSIDIAN_BIN( --[^ ]*)* --user-data-dir=$UDD( |\$)"
+elif [ -n "$UDD" ]; then
+  PGREP="^/nix/store/[^ ]*electron( --[^ ]*)* --user-data-dir=$UDD( --[^ ]*)* /nix/store/[^ ]*obsidian"
+else
+  PGREP='^/nix/store/[^ ]*electron( --[^ ]*)* /nix/store/[^ ]*obsidian'
+fi
+
+# Only an Obsidian this run launched is killed on the way out: refusing to
+# start because one was already running must not close that one.
+LAUNCHED=0
+restore() {
+  if [ "$LAUNCHED" = 1 ] && pgrep -f "$PGREP" >/dev/null; then pkill -f "$PGREP" || true; sleep 2; fi
+  command cp -f "$BACKUP" "$CFG"; rm -f "$BACKUP"
+  echo "[run-block] obsidian.json restored; vault left at $VAULT; obsidian log $LOG" >&2
+}
+trap restore EXIT
+
+# A previous instance can linger for seconds after its window closes, and a new
+# launch during that window is handed to the dying instance (which then opens
+# ITS vault, not ours). Wait for both the process and the CDP endpoint to go.
+settled() { ! pgrep -f "$PGREP" >/dev/null && ! curl -s --max-time 1 "$CDP_BASE/json" >/dev/null 2>&1; }
+for i in $(seq 1 40); do settled && break; sleep 0.5; done
+if ! settled; then echo "[run-block] Obsidian is already running; stop it first" >&2; exit 2; fi
+sleep 2
+mkdir -p "$VAULT/.obsidian"; [ -f "$VAULT/.obsidian/app.json" ] || printf '{}' > "$VAULT/.obsidian/app.json"
+export VAULT RESULTS
+
+# Register the scratch vault under a fresh 16-hex id. Reusing an id across
+# folders inherits that id's IndexedDB cache; a malformed id is ignored.
+ID=$(python3 -c 'import secrets;print(secrets.token_hex(8))')
+python3 - "$BACKUP" "$CFG" "$ID" "$VAULT" <<'PY'
+import json,sys
+src,dst,id_,path=sys.argv[1:]
+d=json.load(open(src))
+for v in d['vaults'].values(): v.pop('open',None)
+d['vaults'][id_]={'path':path,'ts':1792373000000,'open':True}
+json.dump(d,open(dst,'w'))
+PY
+
+# Launch, wait for a booted vault window, and refuse to proceed unless it is OUR vault.
+launch_once() {
+  LAUNCHED=1
+  # shellcheck disable=SC2086
+  nohup "$OBSIDIAN_BIN" "${UDD_FLAG[@]}" --remote-debugging-port="$CDP_PORT" ${OBSIDIAN_ARGS:-} >>"$LOG" 2>&1 &
+  node -e "
+    import('$(dirname "$SCRIPT")/cdp.mjs').then(async (m) => {
+      await m.waitForObsidian(90000);
+      const c = await m.connect();
+      const p = await c.vaultPath(); c.close();
+      const want = process.env.VAULT.replace(/\/+$/, '');
+      if (p.replace(/\/+$/, '') !== want) { console.error('[run-block] wrong vault open: ' + p + ' (wanted ' + want + ')'); process.exit(3); }
+      process.exit(0);
+    }).catch((e) => { console.error(e.message); process.exit(1); })"
+}
+launch() {
+  if launch_once; then return 0; fi
+  echo "[run-block] relaunching once after a bad start" >&2
+  pkill -f "$PGREP" || true
+  for i in $(seq 1 40); do settled && break; sleep 0.5; done; sleep 2
+  launch_once
+}
+gone() { ! curl -s --max-time 1 "$CDP_BASE/json" >/dev/null 2>&1; }
+
+echo "[run-block] phase fixtures" >&2;   node "$SCRIPT" fixtures
+echo "[run-block] launch" >&2;           launch
+echo "[run-block] phase run" >&2;        node "$SCRIPT" run || echo "[run-block] run phase exited non-zero" >&2
+sleep 2
+if gone; then
+  echo "[run-block] Obsidian quit during run; relaunching for after-restart" >&2
+  launch
+  echo "[run-block] phase after-restart" >&2; node "$SCRIPT" after-restart || echo "[run-block] after-restart exited non-zero" >&2
+fi
+echo "[run-block] done: $RESULTS" >&2

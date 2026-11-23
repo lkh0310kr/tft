@@ -1,0 +1,18 @@
+* text=auto eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.txt text eol=lf
+
+# The conformance corpus is byte-exact test data; one note deliberately uses CRLF.
+crates/markdown/tests/corpus/** -text
+
+# The format fixtures are the bytes Obsidian wrote, which is the whole point of
+# them: one canvas fixture is deliberately CRLF and another carries a BOM, and
+# the rest end without a newline.
+crates/formats/tests/canvas/** -text
+
+# The corpus's expected renderings are generated test data; without this Linguist
+# counts their HTML ahead of the Rust and GitHub files the repository as an HTML project.
+crates/markdown/tests/corpus/expected/** linguist-generated

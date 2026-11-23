@@ -1,0 +1,8 @@
+# Settings
+! also a comment
+app.name = TFT
+app.port: 8080
+path=C:\\data\\files
+multi = first \
+        second
+empty

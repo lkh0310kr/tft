@@ -1,0 +1,965 @@
+//! The control socket: one JSON request per line, driving the running window.
+//! The full protocol is bound by `--control`; the predictable handover socket
+//! answers only its small method set. Every request has a deadline.
+
+use crate::popout::PopoutWindow;
+use crate::workspace::{context_names, ViewMode, Workspace};
+use gpui::{
+    point, prelude::*, px, size, AnyWindowHandle, App, AsyncApp, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta,
+    ScrollWheelEvent, TouchPhase, Window, WindowHandle,
+};
+use serde_json::{json, Value};
+use std::cell::Cell;
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant};
+use tft_control::net::{UnixListener, UnixStream};
+use tft_control::{Request, Response};
+
+/// How often a deferred reply looks at the app again. Short enough that a
+/// client's round trip is dominated by the thing it is waiting for.
+const POLL: Duration = Duration::from_millis(8);
+
+/// The longest any wait may be asked for. Nothing the socket waits for
+/// takes ten minutes, and `timeout_ms` comes off the wire: an unbounded one
+/// overflows the deadline rather than waiting for it.
+const MAX_WAIT_MS: usize = 600_000;
+
+/// The most frames a `wait_idle` may chain. Each one dirties the window, so
+/// a caller's number is also a number of forced repaints.
+const MAX_FRAMES: usize = 240;
+
+/// The bound socket paths, so both the `quit` method and the `Quit` action
+/// can take the files away again. Two at most: `--control`'s and the
+/// vault's handover socket.
+static SOCKETS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Which methods a socket answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Every method: `--control`, on a path the caller chose.
+    Full,
+    /// The handover calls only, for the socket named after the vault.
+    Instance,
+}
+
+/// Starts a control socket. One thread accepts connections and gives each
+/// one a reader thread; the readers hand requests to the main thread and block
+/// on the answer, so the app itself is only ever touched where gpui expects.
+pub fn start(path: PathBuf, scope: Scope, window: WindowHandle<Workspace>, cx: &mut App) {
+    // A socket file outlives the run that bound it, and `bind` refuses an
+    // existing path, so a stale one has to go. One that still answers is
+    // not stale: taking its name away would leave another TFT's clients
+    // talking to a listener nobody will read.
+    if UnixStream::connect(&path).is_ok() {
+        eprintln!(
+            "control: {} is already serving a running TFT; not binding",
+            path.display()
+        );
+        return;
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = match UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("control: cannot bind {}: {error}", path.display());
+            return;
+        }
+    };
+    // Connecting to a Unix socket needs write permission on its name, and this
+    // one opens and rewrites the vault: the default mode leaves it to the
+    // umask, which on a stock login is permissive enough for anyone with a
+    // local account. Windows has no mode to set: there the socket takes its
+    // folder's ACL, so the caller chooses a folder of the user's own.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(error) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        {
+            eprintln!("control: cannot restrict {}: {error}", path.display());
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+    }
+    if let Ok(mut sockets) = SOCKETS.lock() {
+        sockets.push(path.clone());
+    }
+    match scope {
+        Scope::Full => eprintln!("control: listening on {}", path.display()),
+        // One line per run, on the way up, so a person who wonders why a
+        // second `tft` did not open a window can see the rendezvous.
+        Scope::Instance => eprintln!("instance: listening on {}", path.display()),
+    }
+
+    let (requests, incoming) = async_channel::unbounded::<Pending>();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else {
+                continue;
+            };
+            let requests = requests.clone();
+            std::thread::spawn(move || serve(stream, requests));
+        }
+    });
+
+    cx.spawn(async move |cx| {
+        while let Ok(pending) = incoming.recv().await {
+            let id = pending.request.id;
+            let mut ctl = Ctl {
+                win: window,
+                cx: &mut *cx,
+            };
+            // The handover socket serves a launcher, not a driver, and says
+            // so by name rather than answering `unknown method`.
+            let out_of_scope = scope == Scope::Instance
+                && !tft_control::is_instance_method(&pending.request.method);
+            let line = if out_of_scope {
+                let error = format!(
+                    "the handover socket does not answer `{}`; run the app with --control for that",
+                    pending.request.method
+                );
+                Some(Response::err(id, error).line())
+            } else {
+                match handle(&mut ctl, &pending.request, &pending.reply) {
+                    Ok(Some(result)) => Some(Response::ok(id, result).line()),
+                    Ok(None) => None,
+                    Err(error) => Some(Response::err(id, error).line()),
+                }
+            };
+            if let Some(line) = line {
+                let _ = pending.reply.send(line);
+            }
+        }
+    })
+    .detach();
+}
+
+/// Removes the socket files, so the next run can bind the same paths.
+pub fn cleanup() {
+    let Some(paths) = SOCKETS
+        .lock()
+        .ok()
+        .map(|mut sockets| std::mem::take(&mut *sockets))
+    else {
+        return;
+    };
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// One request waiting for the main thread, with the channel the connection
+/// that sent it is blocked on.
+struct Pending {
+    request: Request,
+    reply: mpsc::Sender<String>,
+}
+
+/// Reads request lines from one connection and blocks on the main thread's
+/// answer, so a client sees exactly one response line per request, in order.
+fn serve(stream: UnixStream, requests: async_channel::Sender<Pending>) {
+    let Ok(reader) = stream.try_clone() else {
+        return;
+    };
+    let mut writer = stream;
+    for line in BufReader::new(reader).lines() {
+        let Ok(line) = line else {
+            return;
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<Request>(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                // A line that is not a request is still answered, under id 0,
+                // and the connection stays open: a client that mistypes one
+                // call carries on with the next.
+                if write_line(&mut writer, &Response::err(0, error).line()).is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
+        let id = request.id;
+        // One channel per request: a handler that drops its sender without
+        // answering fails the `recv` instead of parking this thread on a
+        // reply that can never come.
+        let (reply, replies) = mpsc::channel::<String>();
+        if requests.send_blocking(Pending { request, reply }).is_err() {
+            return;
+        }
+        let answer = match replies.recv() {
+            Ok(answer) => answer,
+            Err(_) => Response::err(id, "the app dropped the request").line(),
+        };
+        if write_line(&mut writer, &answer).is_err() {
+            return;
+        }
+    }
+}
+
+fn write_line(stream: &mut UnixStream, line: &str) -> std::io::Result<()> {
+    stream.write_all(line.as_bytes())?;
+    stream.flush()
+}
+
+/// What a handler is allowed to reach: the window, and the workspace inside
+/// it, one at a time.
+struct Ctl<'a> {
+    win: WindowHandle<Workspace>,
+    cx: &'a mut AsyncApp,
+}
+
+impl Ctl<'_> {
+    /// Runs `f` with the workspace, its window and its own context.
+    fn workspace<R>(
+        &mut self,
+        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        match self.win.update(self.cx, f) {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Runs `f` with the window and the app, leaving the workspace where it
+    /// is. Input dispatch has to go through here: it re-enters whatever view
+    /// is focused, and gpui panics on a circular lease if the workspace is
+    /// already borrowed out of the entity map.
+    fn window<R>(
+        &mut self,
+        f: impl FnOnce(&mut Window, &mut App) -> Result<R, String>,
+    ) -> Result<R, String> {
+        match self
+            .cx
+            .update_window(self.win.into(), |_, window, cx| f(window, cx))
+        {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// The window a caller is driving: the Settings window while it is up,
+    /// since Settings is a window of its own rather than a modal over the
+    /// workspace; otherwise the window the active group is in, which is a
+    /// popout's when the active tab was moved out to one, and the
+    /// workspace's own window the rest of the time. Coordinates are
+    /// window-local, so this is also the window a click is aimed at.
+    ///
+    /// A request may name the window instead (`window`: `"main"`, or a
+    /// popout's id as `state.groups.windows` lists it), which is how a
+    /// caller clicks into the main window while a popout holds the active
+    /// group — the one thing a person does that no other method can.
+    fn input_window(&mut self, named: Option<&str>) -> Result<AnyWindowHandle, String> {
+        let main = self.win;
+        let wanted = match named {
+            None => None,
+            Some("main") => return Ok(main.into()),
+            Some(id) => Some(
+                id.parse::<u64>()
+                    .map_err(|_| format!("window must be \"main\" or a popout id, not {id:?}"))?,
+            ),
+        };
+        self.cx
+            .update(|cx| {
+                let ws = main.read(cx).ok()?;
+                Some(match wanted {
+                    Some(id) => ws
+                        .popout_window(id, cx)
+                        .ok_or_else(|| format!("no open popout window {id}")),
+                    None => Ok(ws
+                        .settings_window(cx)
+                        .unwrap_or_else(|| ws.active_window(cx))),
+                })
+            })
+            .unwrap_or(Ok(main.into()))
+    }
+
+    /// Runs `f` with the workspace inside the window a command runs in:
+    /// the one named, else the window the active group is in, which is
+    /// where a person's hotkey would land. The difference from
+    /// [`Ctl::workspace`] is the window `f` sees, and the one command that
+    /// reads it is `workspace:close-window`, which closes the window it
+    /// ran in. The workspace is the main window's root; a popout's root
+    /// knows it.
+    fn command<R>(
+        &mut self,
+        named: Option<&str>,
+        f: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let main = self.win;
+        let target = match named {
+            Some(_) => self.input_window(named)?,
+            None => self
+                .cx
+                .update(|cx| main.read(cx).ok().map(|ws| ws.active_window(cx)))
+                .unwrap_or(main.into()),
+        };
+        if target == AnyWindowHandle::from(main) {
+            return self.workspace(f);
+        }
+        match self.cx.update_window(target, |root, window, cx| {
+            let popout = root
+                .downcast::<PopoutWindow>()
+                .map_err(|_| "that window is not a popout".to_string())?;
+            let ws = popout
+                .read(cx)
+                .workspace()
+                .upgrade()
+                .ok_or_else(|| "the workspace is gone".to_string())?;
+            ws.update(cx, |ws, cx| f(ws, window, cx))
+        }) {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Runs `f` against [`Ctl::input_window`]. Every event a user would
+    /// raise goes through here rather than [`Ctl::window`], which is the
+    /// workspace's own window whatever is in front of it.
+    fn input<R>(
+        &mut self,
+        named: Option<&str>,
+        f: impl FnOnce(&mut Window, &mut App) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let target = self.input_window(named)?;
+        match self.cx.update_window(target, |_, window, cx| f(window, cx)) {
+            Ok(result) => result,
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+/// Answers one request. `Ok(None)` means the reply is deferred: the handler
+/// has taken a copy of `reply` and sends on it when the app is ready.
+fn handle(
+    ctl: &mut Ctl,
+    request: &Request,
+    reply: &mpsc::Sender<String>,
+) -> Result<Option<Value>, String> {
+    match request.method.as_str() {
+        "ping" => Ok(Some(json!({
+            "ok": true,
+            "protocol": tft_control::PROTOCOL,
+            "version": tft_control::VERSION,
+        }))),
+        "protocol" => Ok(Some(tft_control::protocol_json())),
+        "wait_loaded" => {
+            let timeout = request
+                .opt_usize("timeout_ms")
+                .unwrap_or(10_000)
+                .min(MAX_WAIT_MS) as u64;
+            wait_loaded(ctl, request.id, timeout, reply.clone());
+            Ok(None)
+        }
+        "wait_idle" => {
+            let frames = request.opt_usize("frames").unwrap_or(2).min(MAX_FRAMES);
+            let timeout = request
+                .opt_usize("timeout_ms")
+                .unwrap_or(2_000)
+                .min(MAX_WAIT_MS) as u64;
+            wait_idle(ctl, request.id, frames, timeout, reply.clone())?;
+            Ok(None)
+        }
+        "state" => {
+            let text = request.bool_param("text", false);
+            let rows = request.opt_usize("rows").unwrap_or(50);
+            // Described from the window the active group is in, so the
+            // focus and the window size are the ones a caller looking at
+            // a popout sees.
+            ctl.workspace(|ws, window, cx| {
+                ws.ensure_reading_built(cx);
+                Ok(ws.in_active_window(window, cx, |ws, window, cx| {
+                    ws.describe(text, rows, window, cx)
+                }))
+            })
+            .map(Some)
+        }
+        "open" => {
+            let name = request.str_param("name")?;
+            let mode = request.opt_str("mode");
+            ctl.workspace(|ws, window, cx| {
+                if !ws.is_loaded() {
+                    return Err("the vault is still loading".to_string());
+                }
+                // Validated first and applied after: "open X in mode M"
+                // is about X, and switching before leaving would change the
+                // mode of the note being left -- which its history entry
+                // then remembers as the mode it was read in.
+                let mode = ws.open_mode(mode)?;
+                // A name that matches nothing is not an error: the
+                // protocol answers with a null current file, so a caller
+                // cannot mistake the note that is still open for the one it
+                // asked for.
+                if !ws.open_by_name(name, cx) {
+                    return Ok(json!({"current": Value::Null}));
+                }
+                if let Some(mode) = mode {
+                    ws.set_mode(mode, window, cx);
+                }
+                Ok(json!({"current": ws.current()}))
+            })
+            .map(Some)
+        }
+        "open_path" => {
+            let path = request.str_param("path")?;
+            let mode = request.opt_str("mode");
+            ctl.workspace(|ws, window, cx| {
+                // Every pane is keyed on the vault's own spelling of the
+                // path; the caller's is only a request for it. Opening the
+                // raw string instead would leave the explorer, the
+                // backlinks and the outline looking up a key nothing has.
+                let key = ws
+                    .vault_file_path(path)
+                    .ok_or_else(|| format!("no such file in the vault: {path}"))?;
+                if let Some(mode) = ws.open_mode(mode)? {
+                    ws.set_mode(mode, window, cx);
+                }
+                ws.open_file(key, None, cx);
+                Ok(json!({"current": ws.current()}))
+            })
+            .map(Some)
+        }
+        "set_mode" => {
+            let name = request.str_param("mode")?;
+            let mode = ViewMode::parse(name).ok_or_else(|| format!("unknown mode: {name}"))?;
+            ctl.workspace(|ws, window, cx| {
+                ws.set_mode(mode, window, cx);
+                Ok(json!({"mode": mode.as_str()}))
+            })
+            .map(Some)
+        }
+        "uri" => {
+            let uri = request.str_param("uri")?;
+            ctl.workspace(|ws, window, cx| {
+                ws.handle_uri(uri, window, cx)?;
+                Ok(json!({"status": ws.status_text()}))
+            })
+            .map(Some)
+        }
+        "command" => {
+            let id = request.str_param("id")?;
+            ctl.command(request.opt_str("window"), |ws, window, cx| {
+                ws.run_command(id, window, cx);
+                Ok(json!({"status": ws.status_text()}))
+            })
+            .map(Some)
+        }
+        "keys" => {
+            let names = request.str_list("keys")?;
+            let strokes = names
+                .iter()
+                .map(|name| Keystroke::parse(name).map_err(|error| error.to_string()))
+                .collect::<Result<Vec<_>, String>>()?;
+            ctl.input(request.opt_str("window"), |window, cx| {
+                let handled = strokes
+                    .into_iter()
+                    .map(|stroke| window.dispatch_keystroke(stroke, cx))
+                    .collect::<Vec<bool>>();
+                Ok(json!({"handled": handled, "pending": window.has_pending_keystrokes()}))
+            })
+            .map(Some)
+        }
+        "type" => {
+            let text = request.str_param("text")?;
+            // Where the text goes is a question for the window the active
+            // group is in, a popout's included.
+            let target = ctl.workspace(|ws, window, cx| {
+                Ok(ws.in_active_window(window, cx, |ws, window, cx| ws.type_target(window, cx)))
+            })?;
+            match target {
+                "editor" | "canvas-editor" => ctl
+                    .workspace(|ws, window, cx| {
+                        let target = ws.in_active_window(window, cx, |ws, window, cx| {
+                            ws.type_into_focused(text, window, cx)
+                        });
+                        Ok(json!({"target": target}))
+                    })
+                    .map(Some),
+                // Outside the workspace lease: one keystroke carrying the
+                // whole string is what an IME commit looks like to gpui, and
+                // delivering it re-enters whatever view is focused, which
+                // may be the workspace itself.
+                "input" => ctl
+                    .input(request.opt_str("window"), |window, cx| {
+                        let typed = Keystroke {
+                            key_char: Some(text.to_string()),
+                            ..Keystroke::default()
+                        };
+                        let handled = window.dispatch_keystroke(typed, cx);
+                        Ok(json!({"target": if handled { "input" } else { "none" }}))
+                    })
+                    .map(Some),
+                _ => Ok(Some(json!({"target": "none"}))),
+            }
+        }
+        "click" => {
+            let position = position(request)?;
+            let button = button(request.opt_str("button"))?;
+            let modifiers = modifiers(request)?;
+            let click_count = request.opt_usize("count").unwrap_or(1);
+            ctl.input(request.opt_str("window"), |window, cx| {
+                // The move goes first so gpui's hover state and the hitboxes
+                // an `on_click` was registered against agree on what is under
+                // the pointer when the press lands.
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: None,
+                        modifiers,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        button,
+                        position,
+                        modifiers,
+                        click_count,
+                        first_mouse: false,
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        button,
+                        position,
+                        modifiers,
+                        click_count,
+                    }),
+                    cx,
+                );
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "mouse" => {
+            let action = request.str_param("action")?;
+            let position = position(request)?;
+            let button = button(request.opt_str("button"))?;
+            let modifiers = modifiers(request)?;
+            let event = match action {
+                // A move with a `button` named is a drag in progress: gpui
+                // starts an element's drag only from a move that says which
+                // button is held.
+                "move" => PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    // Naming a button is what makes the move a drag; leaving
+                    // it out is a hover, which is how a control that only
+                    // appears under the pointer is revealed.
+                    pressed_button: request.opt_str("button").map(|_| button),
+                    modifiers,
+                }),
+                "down" => PlatformInput::MouseDown(MouseDownEvent {
+                    button,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                "up" => PlatformInput::MouseUp(MouseUpEvent {
+                    button,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }),
+                other => return Err(format!("unknown mouse action: {other}")),
+            };
+            ctl.input(request.opt_str("window"), |window, cx| {
+                window.dispatch_event(event, cx);
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "drop" => {
+            let paths: Vec<std::path::PathBuf> = request
+                .str_list("paths")?
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            let position = position(request)?;
+            ctl.input(request.opt_str("window"), |window, cx| {
+                // The three events a platform drop sends: the drag comes in
+                // over the point, hovers, and is let go.
+                window.dispatch_event(
+                    PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                        position,
+                        paths: gpui::ExternalPaths(paths.into()),
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::FileDrop(gpui::FileDropEvent::Pending { position }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::FileDrop(gpui::FileDropEvent::Submit { position }),
+                    cx,
+                );
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "scroll" => {
+            let position = position(request)?;
+            let dx = request.f32_param("dx")?;
+            let dy = request.f32_param("dy")?;
+            let delta = match request.opt_str("unit").unwrap_or("lines") {
+                "lines" => ScrollDelta::Lines(point(dx, dy)),
+                "pixels" => ScrollDelta::Pixels(point(px(dx), px(dy))),
+                other => return Err(format!("unknown scroll unit: {other}")),
+            };
+            let modifiers = modifiers(request)?;
+            ctl.input(request.opt_str("window"), |window, cx| {
+                window.dispatch_event(
+                    PlatformInput::ScrollWheel(ScrollWheelEvent {
+                        position,
+                        delta,
+                        modifiers,
+                        touch_phase: TouchPhase::Moved,
+                    }),
+                    cx,
+                );
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "modifiers" => {
+            let modifiers = modifiers(request)?;
+            ctl.input(request.opt_str("window"), |window, cx| {
+                window.dispatch_event(
+                    PlatformInput::ModifiersChanged(gpui::ModifiersChangedEvent {
+                        modifiers,
+                        capslock: Default::default(),
+                    }),
+                    cx,
+                );
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "set_selection" => {
+            let start = request.usize_param("start")?;
+            let end = request.opt_usize("end").unwrap_or(start);
+            ctl.workspace(|ws, window, cx| {
+                ws.editor().update(cx, |editor, cx| {
+                    editor.set_selection_range(start, end, window, cx)
+                });
+                let dump = ws.editor().read(cx).describe(false, cx);
+                let cursor = dump.get("cursor").cloned().unwrap_or(Value::Null);
+                Ok(json!({"cursor": cursor}))
+            })
+            .map(Some)
+        }
+        "scroll_to" => {
+            let line = request.usize_param("line")?;
+            ctl.workspace(|ws, window, cx| {
+                ws.editor()
+                    .update(cx, |editor, cx| editor.scroll_to_line(line, window, cx));
+                Ok(json!({"ok": true}))
+            })
+            .map(Some)
+        }
+        "focus" => {
+            let set = request.opt_str("set");
+            ctl.workspace(|ws, window, cx| {
+                if let Some(name) = set {
+                    ws.focus_view(name, window, cx)?;
+                }
+                // Reported from the window the active group is in.
+                Ok(ws.in_active_window(window, cx, |ws, window, cx| {
+                    json!({
+                        "name": ws.focus_name(window, cx),
+                        "context_stack": context_names(window),
+                    })
+                }))
+            })
+            .map(Some)
+        }
+        "window" => {
+            let activate = request.bool_param("activate", false);
+            let width = request.opt_f32("width");
+            let height = request.opt_f32("height");
+            // A resize is the app's window being sized; activation and the
+            // size reported back are the front window's, which is what a
+            // screenshot captures and what click coordinates are local to.
+            if width.is_some() || height.is_some() {
+                ctl.window(|window, _| {
+                    let now = window.viewport_size();
+                    let width = width.unwrap_or_else(|| f32::from(now.width));
+                    let height = height.unwrap_or_else(|| f32::from(now.height));
+                    // Zero, negative and non-finite are not sizes any
+                    // compositor accepts, and the request carries whatever
+                    // number the caller put in it.
+                    if !(width.is_finite() && height.is_finite()) || width < 1.0 || height < 1.0 {
+                        return Err(format!("{width}x{height} is not a window size"));
+                    }
+                    window.resize(size(px(width), px(height)));
+                    Ok(())
+                })?;
+            }
+            let result = ctl.input(request.opt_str("window"), |window, _| {
+                if activate {
+                    window.activate_window();
+                }
+                // The window's origin is always zero on Wayland, so only the
+                // size is worth reporting.
+                let viewport = window.viewport_size();
+                Ok(json!({
+                    "width": f32::from(viewport.width),
+                    "height": f32::from(viewport.height),
+                    "scale": window.scale_factor(),
+                    "active": window.is_window_active(),
+                }))
+            })?;
+            // The title is the workspace's, not the platform window's: it
+            // is what the last paint set, so it says which note and which
+            // vault the window is showing.
+            let title = ctl.workspace(|ws, _, _| Ok(ws.window_title()))?;
+            let mut result = result;
+            if let Value::Object(map) = &mut result {
+                map.insert("title".into(), json!(title));
+            }
+            Ok(Some(result))
+        }
+        "read_file" => {
+            // The path needs the vault, which only the main thread has; the
+            // disk does not, and a large attachment or a slow mount would
+            // hold up every frame and every other connection while it was
+            // read.
+            let path = request.str_param("path")?.to_string();
+            let absolute = ctl.workspace(|ws, _, _| ws.vault_path(&path))?;
+            let (id, reply) = (request.id, reply.clone());
+            ctl.cx
+                .spawn(async move |cx| {
+                    let answer: Result<Value, String> = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let bytes = std::fs::read(&absolute)
+                                .map_err(|error| format!("{path}: {error}"))?;
+                            let count = bytes.len();
+                            let text = String::from_utf8(bytes)
+                                .map_err(|_| format!("{path} is not UTF-8"))?;
+                            Ok(json!({"text": text, "bytes": count}))
+                        })
+                        .await;
+                    let _ = reply.send(answer_line(id, answer));
+                })
+                .detach();
+            Ok(None)
+        }
+        "write_file" => {
+            let path = request.str_param("path")?.to_string();
+            let text = request.str_param("text")?.to_string();
+            let absolute = ctl.workspace(|ws, _, _| ws.vault_path(&path))?;
+            let (id, reply) = (request.id, reply.clone());
+            ctl.cx
+                .spawn(async move |cx| {
+                    let answer: Result<Value, String> = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let count = text.len();
+                            // The caller's bytes land on disk exactly as
+                            // given: nothing here preserves line endings or
+                            // a BOM, because the caller supplies the whole
+                            // file and TFT never rewrites bytes it did
+                            // not change.
+                            tft_vault::write_no_follow(&absolute, text.as_bytes())
+                                .map_err(|error| format!("{path}: {error}"))?;
+                            Ok(json!({"bytes": count}))
+                        })
+                        .await;
+                    let _ = reply.send(answer_line(id, answer));
+                })
+                .detach();
+            Ok(None)
+        }
+        "list_files" => {
+            let folder = request.opt_str("folder");
+            ctl.workspace(|ws, _, _| Ok(Value::Array(ws.list_vault_files(folder))))
+                .map(Some)
+        }
+        "list_commands" => ctl
+            .workspace(|ws, window, cx| Ok(Value::Array(ws.list_commands(window, cx))))
+            .map(Some),
+        "notice_clear" => ctl
+            .workspace(|ws, _, cx| {
+                ws.clear_status(cx);
+                Ok(json!({"ok": true}))
+            })
+            .map(Some),
+        "quit" => {
+            ctl.workspace(|ws, _, cx| {
+                ws.on_quit(cx);
+                Ok(())
+            })?;
+            let _ = reply.send(Response::ok(request.id, json!({"ok": true})).line());
+            cleanup();
+            // The reply only reaches the client once the connection thread
+            // wakes up and writes it, which cannot happen while this handler
+            // is running: quit a beat later so the bytes get out.
+            ctl.cx
+                .spawn(async move |cx| {
+                    cx.background_executor().timer(POLL * 6).await;
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            Ok(None)
+        }
+        other => Err(format!("unknown method: {other}")),
+    }
+}
+
+/// One response line for an answer that came back from somewhere other
+/// than the handler itself.
+fn answer_line(id: u64, answer: Result<Value, String>) -> String {
+    match answer {
+        Ok(result) => Response::ok(id, result).line(),
+        Err(error) => Response::err(id, error).line(),
+    }
+}
+
+/// When a wait of `timeout_ms` runs out. The callers clamp the timeout
+/// already, so the fallback is unreachable - but `Instant + Duration`
+/// panics on overflow, and nothing that arrived over the socket may panic
+/// the app.
+fn wait_deadline(timeout_ms: u64) -> Instant {
+    let now = Instant::now();
+    now.checked_add(Duration::from_millis(timeout_ms.min(MAX_WAIT_MS as u64)))
+        .unwrap_or(now)
+}
+
+/// Answers once the vault has finished indexing, or when the deadline passes.
+fn wait_loaded(ctl: &mut Ctl, id: u64, timeout_ms: u64, reply: mpsc::Sender<String>) {
+    let win = ctl.win;
+    ctl.cx
+        .spawn(async move |cx| {
+            let deadline = wait_deadline(timeout_ms);
+            loop {
+                // "Loaded" has to mean "finished opening": the vault indexes
+                // on a background thread and the startup flags only run once
+                // it lands, so a client that answered to `is_loaded` alone
+                // would read the window mid-arrangement and see no open note.
+                let ready = win
+                    .update(cx, |ws, _, _| ws.is_loaded() && ws.is_started())
+                    .unwrap_or(false);
+                let timed_out = !ready && Instant::now() >= deadline;
+                if ready || timed_out {
+                    let result = json!({"loaded": ready, "timed_out": timed_out});
+                    let _ = reply.send(Response::ok(id, result).line());
+                    return;
+                }
+                cx.background_executor().timer(POLL).await;
+            }
+        })
+        .detach();
+}
+
+/// Answers once `frames` more frames have been rendered and the editor has
+/// finished parsing, or when the deadline passes. The deadline is not
+/// optional: a sleeping monitor stops the compositor's frame callbacks, and
+/// then no number of frames is ever reached.
+fn wait_idle(
+    ctl: &mut Ctl,
+    id: u64,
+    frames: usize,
+    timeout_ms: u64,
+    reply: mpsc::Sender<String>,
+) -> Result<(), String> {
+    let drawn = Rc::new(Cell::new(0usize));
+    let done = Rc::new(Cell::new(false));
+    let (counter, stop) = (drawn.clone(), done.clone());
+    // The front window, so a wait after a click in Settings waits for the
+    // frames that click asked for.
+    ctl.input(None, move |window, _| {
+        chain_frames(frames, counter, stop, window);
+        Ok(())
+    })?;
+    let win = ctl.win;
+    ctl.cx
+        .spawn(async move |cx| {
+            let deadline = wait_deadline(timeout_ms);
+            loop {
+                let parsing = win
+                    .update(cx, |ws, _, cx| ws.editor().read(cx).is_parsing())
+                    .unwrap_or(false);
+                let idle = drawn.get() >= frames && !parsing;
+                let timed_out = !idle && Instant::now() >= deadline;
+                if idle || timed_out {
+                    // Before the reply, and on the timed-out path too: the
+                    // chain dirties the window at every step, so one that
+                    // outlived its wait would repaint at full frame rate for
+                    // the rest of the run.
+                    done.set(true);
+                    let result =
+                        json!({"frames": drawn.get(), "parsing": parsing, "timed_out": timed_out});
+                    let _ = reply.send(Response::ok(id, result).line());
+                    return;
+                }
+                cx.background_executor().timer(POLL).await;
+            }
+        })
+        .detach();
+    Ok(())
+}
+
+/// Counts the next `remaining` rendered frames, until the wait that asked
+/// for them sets `done`. Each step dirties the window first: a window with
+/// nothing to redraw never asks for a frame, and then the callback would
+/// never run.
+fn chain_frames(
+    remaining: usize,
+    drawn: Rc<Cell<usize>>,
+    done: Rc<Cell<bool>>,
+    window: &mut Window,
+) {
+    if remaining == 0 || done.get() {
+        return;
+    }
+    window.refresh();
+    window.on_next_frame(move |window, _| {
+        drawn.set(drawn.get() + 1);
+        chain_frames(remaining - 1, drawn, done, window);
+    });
+}
+
+/// Window-local logical pixels, the only coordinates the protocol speaks: on
+/// Wayland there is no window origin to translate screen ones through.
+fn position(request: &Request) -> Result<Point<Pixels>, String> {
+    Ok(point(
+        px(request.f32_param("x")?),
+        px(request.f32_param("y")?),
+    ))
+}
+
+fn button(name: Option<&str>) -> Result<MouseButton, String> {
+    match name.unwrap_or("left") {
+        "left" => Ok(MouseButton::Left),
+        "right" => Ok(MouseButton::Right),
+        "middle" => Ok(MouseButton::Middle),
+        other => Err(format!("unknown mouse button: {other}")),
+    }
+}
+
+fn modifiers(request: &Request) -> Result<Modifiers, String> {
+    let mut modifiers = Modifiers::none();
+    // Absent and `null` mean the same thing here as everywhere else in the
+    // protocol: no modifiers held.
+    if request.params.get("mods").is_none_or(Value::is_null) {
+        return Ok(modifiers);
+    }
+    for name in request.str_list("mods")? {
+        match name.as_str() {
+            "ctrl" | "control" => modifiers.control = true,
+            "alt" | "option" => modifiers.alt = true,
+            "shift" => modifiers.shift = true,
+            "cmd" | "super" | "platform" => modifiers.platform = true,
+            other => return Err(format!("unknown modifier: {other}")),
+        }
+    }
+    Ok(modifiers)
+}

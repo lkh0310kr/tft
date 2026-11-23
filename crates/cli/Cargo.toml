@@ -1,0 +1,20 @@
+[package]
+name = "cli"
+description = "TFT's command line: the flags, the file and URI arguments, and the running instance they are handed to"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+[lib]
+name = "tft_cli"
+
+[dependencies]
+control.workspace = true
+formats.workspace = true
+vault.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

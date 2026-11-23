@@ -1,0 +1,17 @@
+[package]
+name = "pdf"
+description = "PDF documents for the viewer and `![[x.pdf]]` embeds: page sizes, rendered pages, the outline, text for find"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+[lib]
+name = "tft_pdf"
+
+[dependencies]
+hayro = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

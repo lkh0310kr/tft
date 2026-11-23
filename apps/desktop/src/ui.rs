@@ -1,0 +1,450 @@
+//! The chrome several views draw the same way: tooltips, icon buttons,
+//! menu frames and the panel obsidian's prompts and pickers sit in.
+
+use crate::assets::icon;
+use crate::theme::{Theme, FONT_UI_SMALL, ICON_SIZE};
+use gpui::{
+    div, prelude::*, px, AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window,
+};
+
+/// The small label a button shows on hover.
+pub struct Tooltip {
+    text: SharedString,
+}
+
+impl Render for Tooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.global::<Theme>().clone();
+        // Obsidian's `.tooltip`: `--tooltip-color` on `--tooltip-background`
+        // under `--tooltip-shadow`, no border (probe of 2026-11-04).
+        div()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(theme.tokens.tooltip_background)
+            .shadow_md()
+            .text_size(px(12.))
+            .text_color(theme.tokens.tooltip_color)
+            .child(self.text.clone())
+    }
+}
+
+/// A tooltip builder for `.tooltip(..)`.
+pub fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView {
+    let text: SharedString = text.into();
+    move |_, cx| cx.new(|_| Tooltip { text: text.clone() }).into()
+}
+
+/// One `clickable-icon`. `glyph` draws a text symbol instead of a Lucide
+/// icon; `label` adds the hover tooltip; `active` paints the hover wash and
+/// the focused icon colour.
+#[allow(clippy::too_many_arguments)]
+fn icon_button_in(
+    id: impl Into<ElementId>,
+    group: SharedString,
+    glyph: Option<&'static str>,
+    name: &'static str,
+    label: Option<SharedString>,
+    active: bool,
+    width: f32,
+    height: f32,
+    icon_size: f32,
+    font_size: f32,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let t = &theme.tokens;
+    let color = if active {
+        t.icon_color_focused
+    } else {
+        t.icon_color
+    };
+    let opacity = if active {
+        t.icon_opacity_active
+    } else {
+        t.icon_opacity
+    };
+    let mut button = div()
+        .id(id)
+        .group(group.clone())
+        .flex_shrink_0()
+        .w(px(width))
+        .h(px(height))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .cursor_pointer()
+        .when(active, |d| d.bg(t.background_modifier_hover))
+        .hover(|s| s.bg(t.background_modifier_hover))
+        .when_some(label, |d, text| d.tooltip(tooltip(text)));
+    button = match glyph {
+        Some(glyph) => button
+            .text_size(px(font_size))
+            .text_color(color)
+            .hover(|s| s.text_color(t.icon_color_hover))
+            .child(glyph),
+        None => button.child(icon(name, icon_size, color).opacity(opacity).group_hover(
+            group,
+            |s| {
+                s.opacity(t.icon_opacity_hover)
+                    .text_color(t.icon_color_hover)
+            },
+        )),
+    };
+    button
+}
+
+/// The view header's back/forward/link buttons: 28 by 24, no tooltip.
+pub fn icon_button(id: &'static str, name: &'static str, theme: &Theme) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        id.into(),
+        None,
+        name,
+        None,
+        false,
+        28.,
+        24.,
+        ICON_SIZE,
+        13.,
+        theme,
+    )
+}
+
+/// The explorer's header buttons: [`icon_button`] with a tooltip and the
+/// `is-active` state.
+pub fn header_button(
+    id: &'static str,
+    name: &'static str,
+    label: &'static str,
+    active: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        id.into(),
+        None,
+        name,
+        Some(label.into()),
+        active,
+        28.,
+        24.,
+        ICON_SIZE,
+        13.,
+        theme,
+    )
+}
+
+/// A 32 px canvas-menu button with a tooltip.
+pub fn canvas_icon_button(
+    id: (&'static str, usize),
+    group: SharedString,
+    name: &'static str,
+    label: &'static str,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        group,
+        None,
+        name,
+        Some(label.into()),
+        false,
+        32.,
+        32.,
+        ICON_SIZE,
+        13.,
+        theme,
+    )
+}
+
+/// A PDF toolbar button: the `clickable-icon` at `width` × `height`, with
+/// its enabled, active and tooltip states. The caller adds the click.
+#[allow(clippy::too_many_arguments)]
+pub fn toolbar_button(
+    id: &'static str,
+    name: &str,
+    tip: &'static str,
+    enabled: bool,
+    active: bool,
+    width: f32,
+    height: f32,
+    icon_size: f32,
+    radius: f32,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let t = &theme.tokens;
+    div()
+        .id(id)
+        .group(id)
+        .w(px(width))
+        .h(px(height))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(radius))
+        .when(active, |d| d.bg(t.background_modifier_active_hover))
+        .when(enabled, |d| {
+            d.cursor_pointer()
+                .hover(|s| s.bg(t.background_modifier_hover))
+        })
+        .tooltip(tooltip(tip))
+        .child(if !enabled {
+            icon(name, icon_size, t.text_faint)
+        } else if active {
+            icon(name, icon_size, t.icon_color_active).opacity(t.icon_opacity_active)
+        } else {
+            icon(name, icon_size, t.icon_color)
+                .opacity(t.icon_opacity)
+                .group_hover(id, |s| {
+                    s.opacity(t.icon_opacity_hover)
+                        .text_color(t.icon_color_hover)
+                })
+        })
+}
+
+/// The graph view's text-glyph buttons.
+pub fn glyph_button(
+    id: impl Into<ElementId>,
+    glyph: &'static str,
+    size: f32,
+    font_size: f32,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        SharedString::from(glyph),
+        Some(glyph),
+        "",
+        None,
+        false,
+        size,
+        size,
+        font_size,
+        font_size,
+        theme,
+    )
+}
+
+/// Obsidian's `.menu`: the menu background in a border-coloured frame,
+/// rows in the normal text colour at the small UI size.
+pub fn menu_panel(id: impl Into<ElementId>, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .bg(theme.tokens.menu_background)
+        .border_1()
+        .border_color(theme.tokens.menu_border_color)
+        .rounded_md()
+        .shadow_lg()
+        .text_size(px(FONT_UI_SMALL))
+        .text_color(theme.tokens.text_normal)
+}
+
+/// The hairline between two menu sections.
+pub fn menu_separator(theme: &Theme) -> Div {
+    div()
+        .my_1()
+        .h(px(1.))
+        .bg(theme.tokens.background_modifier_border)
+}
+
+/// A menu row: the hover wash, the 3 px horizontal inset and the icon gap
+/// every menu's items share.
+pub fn menu_row(id: impl Into<ElementId>, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .cursor_pointer()
+        .text_color(theme.tokens.text_normal)
+        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+}
+
+/// The panel a prompt, picker or chooser floats in, at `width` pixels.
+pub fn modal_panel(id: impl Into<ElementId>, width: f32, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .bg(theme.tokens.prompt_background)
+        .border_1()
+        .border_color(theme.tokens.prompt_border_color)
+        .rounded_lg()
+        .shadow_lg()
+}
+
+/// A dialog's panel: the secondary background in a border-coloured frame,
+/// the large radius and shadow every one of TFT's dialogs shares.
+pub fn dialog_panel(id: &'static str, width: f32, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(px(width))
+        .flex()
+        .flex_col()
+        .p_4()
+        .bg(theme.tokens.background_secondary)
+        .border_1()
+        .border_color(theme.tokens.background_modifier_border)
+        .rounded_lg()
+        .shadow_lg()
+}
+
+/// The title row of a [`dialog_panel`], with its close button.
+pub fn dialog_header(
+    id: &'static str,
+    title: &'static str,
+    theme: &Theme,
+    on_close: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .child(
+            div()
+                .text_size(px(15.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.tokens.text_normal)
+                .child(title),
+        )
+        .child(
+            div()
+                .id((id, 1usize))
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+                .on_click(on_close)
+                .child(icon("x", 16., theme.tokens.text_muted)),
+        )
+}
+
+/// A dialog button: `primary` is Obsidian's `mod-cta`, `error` its
+/// `mod-destructive` accent.
+pub fn button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    primary: bool,
+    error: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let label: SharedString = label.into();
+    div()
+        .id(id)
+        .h(px(30.))
+        .px(px(14.))
+        .flex()
+        .items_center()
+        .rounded(px(5.))
+        .cursor_pointer()
+        .text_size(px(FONT_UI_SMALL))
+        .when(primary && !error, |d| {
+            d.bg(theme.tokens.interactive_accent)
+                .text_color(theme.tokens.text_on_accent)
+                .hover(|s| s.bg(theme.tokens.interactive_accent_hover))
+        })
+        .when(error, |d| {
+            d.bg(theme.tokens.text_error)
+                .text_color(theme.tokens.text_on_accent)
+        })
+        .when(!primary && !error, |d| {
+            d.bg(theme.tokens.background_modifier_hover)
+                .text_color(theme.tokens.text_normal)
+                .hover(|s| s.bg(theme.tokens.interactive_hover))
+        })
+        .child(label)
+}
+
+/// The keyboard focus ring drawn over a row.
+pub(crate) fn focus_ring(radius: f32, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .border_2()
+        .border_color(theme.tokens.background_modifier_border_focus)
+}
+
+/// Obsidian's 34 by 19 settings toggle.
+pub(crate) fn toggle(id: (&'static str, usize), on: bool, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .relative()
+        .w(px(34.))
+        .h(px(19.))
+        .rounded_full()
+        .bg(if on {
+            theme.tokens.interactive_accent
+        } else {
+            theme.tokens.background_modifier_border_hover
+        })
+        .cursor_pointer()
+        .child(
+            div()
+                .absolute()
+                .top(px(2.))
+                .left(px(if on { 17. } else { 2. }))
+                .size(px(15.))
+                .rounded_full()
+                .bg(theme.tokens.toggle_thumb_color),
+        )
+}
+
+/// A menu in Obsidian's shape.
+pub(crate) fn menu(id: &'static str, theme: &Theme) -> Stateful<Div> {
+    menu_panel(id, theme)
+        .min_w(px(172.))
+        .p(px(6.))
+        .rounded(px(8.))
+        .occlude()
+}
+
+/// One `menu-item` with an optional icon or check.
+pub(crate) fn menu_item(
+    prefix: &'static str,
+    ix: usize,
+    icon_name: Option<&'static str>,
+    title: &'static str,
+    checked: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let glyph: Option<gpui::Svg> = if checked {
+        Some(icon("check", 14., theme.tokens.text_muted))
+    } else {
+        icon_name.map(|n| icon(n, ICON_SIZE, theme.tokens.text_muted))
+    };
+    div()
+        .id((prefix, ix))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+        .child(
+            div()
+                .w(px(16.))
+                .h(px(16.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(glyph),
+        )
+        .child(div().whitespace_nowrap().child(title))
+}

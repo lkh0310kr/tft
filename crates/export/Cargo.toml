@@ -1,0 +1,27 @@
+[package]
+name = "export"
+description = "Exports without gpui: a note's reading view laid out on PDF pages, a canvas rasterised to PNG"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+[lib]
+name = "tft_export"
+
+[dependencies]
+math.workspace = true
+mermaid.workspace = true
+highlight.workspace = true
+formats.workspace = true
+canvas.workspace = true
+krilla.workspace = true
+ab_glyph.workspace = true
+tiny-skia.workspace = true
+resvg.workspace = true
+png.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+pdf.workspace = true
