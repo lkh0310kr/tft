@@ -11,7 +11,6 @@ use gpui::{
 use serde_json::{json, Value};
 use std::cell::Cell;
 
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -363,13 +362,6 @@ impl Target {
 /// A click exactly on either end of the selection was not probed — it is
 /// taken as inside, the way a pointer landing on the edge of the painted
 /// highlight reads (OBSERVE).
-pub fn right_click_caret(selection: &Range<usize>, at: usize) -> Option<usize> {
-    if !selection.is_empty() && selection.start <= at && at <= selection.end {
-        None
-    } else {
-        Some(at)
-    }
-}
 
 /// The menu for a target, in Obsidian's order.
 ///

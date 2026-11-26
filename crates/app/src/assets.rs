@@ -209,9 +209,8 @@ impl AssetSource for Assets {
     }
 }
 
-/// Inter's static faces and Rubik's Black, registered with the text system
-/// at startup so the families resolve on a machine that does not have them
-/// installed.
+/// The bundled interface and Korean font faces, registered with the text
+/// system at startup so they resolve on machines without those fonts.
 pub fn fonts() -> Vec<Cow<'static, [u8]>> {
     vec![
         Cow::Borrowed(RUBIK_BLACK),
@@ -221,6 +220,12 @@ pub fn fonts() -> Vec<Cow<'static, [u8]>> {
         Cow::Borrowed(INTER_SEMIBOLD),
         Cow::Borrowed(INTER_BOLD),
         Cow::Borrowed(INTER_BOLD_ITALIC),
+        Cow::Borrowed(include_bytes!(
+            "../../../assets/fonts/ibm-plex-sans-kr/IBMPlexSansKR-Regular.ttf"
+        )),
+        Cow::Borrowed(include_bytes!(
+            "../../../assets/fonts/ibm-plex-sans-kr/IBMPlexSansKR-SemiBold.ttf"
+        )),
     ]
 }
 

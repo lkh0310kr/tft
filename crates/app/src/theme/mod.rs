@@ -1,5 +1,5 @@
 //! The shell's GPUI theme: `appearance.json` chooses dark, light or system.
-//! Token values come from `tft_core::design`; this module converts them to
+//! Token values come from `crate::design`; this module converts them to
 //! GPUI colours. Paint sites read the surface's own token.
 
 pub mod color;
@@ -10,11 +10,11 @@ use std::sync::OnceLock;
 use gpui::{rgb, Global, Hsla, SharedString};
 use tft_formats::config::AppearanceConfig;
 
-pub use registry::Tokens;
-pub use tft_core::design::{
+pub use crate::design::{
     heading_style, DEFAULT_MONO_FONT, FONT_UI_MEDIUM, FONT_UI_SMALL, FONT_UI_SMALLER,
     HEADER_HEIGHT, HEADINGS, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH, TAB_CURVE,
 };
+pub use registry::Tokens;
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -33,7 +33,7 @@ pub struct Theme {
     pub tokens: Tokens,
 }
 
-pub type CanvasColors = tft_core::design::CanvasColors<Hsla>;
+pub type CanvasColors = crate::design::CanvasColors<Hsla>;
 
 impl Global for Theme {}
 

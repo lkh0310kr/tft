@@ -1,15 +1,15 @@
-//! The workspace state machine shared by GPUI and web. No UI and no I/O.
+//! Workspace application state shared by Desktop and Web. No UI or I/O.
 
+use crate::NodeId;
 use serde_json::{json, Map, Value};
 
-pub mod effect;
-pub mod vault;
-
-pub use effect::{VaultEffect, VaultEvent};
-pub use vault::{
-    BackendInstanceId, BackendObjectId, FileMeta, LookupError, NameConflict, NodeId, NodeKind,
-    RenameError, ScannedNode, VaultData, VaultNode,
-};
+/// A platform-neutral request from the Workspace UI to its host. The parent
+/// is a Vault-relative path (`""` means the Vault root); filesystem paths and
+/// remote object IDs stay inside the platform adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOperationRequest {
+    CreateNote { parent: String },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -375,6 +375,35 @@ impl TabGroup {
         self.open_target(Some(node), path, mode)
     }
 
+    /// Opens a fresh tab for `node`, even when another tab already shows it.
+    pub fn open_node_in_new_tab(&mut self, node: NodeId, path: String, mode: ViewMode) -> usize {
+        let mut tab = Tab::unloaded(path, mode);
+        tab.node = Some(node);
+        if let Some(entry) = tab.history.last_mut() {
+            entry.node = Some(node);
+        }
+        let at = place_new_tab(&mut self.tabs, self.active_tab, tab);
+        self.active_tab = at;
+        at
+    }
+
+    /// Navigates the active tab to a node and appends its navigation history.
+    pub fn navigate_node(&mut self, node: NodeId, path: String, mode: ViewMode) -> bool {
+        let Some(tab) = self.active_mut() else {
+            return false;
+        };
+        tab.open_node(node, path, mode, 0);
+        true
+    }
+
+    pub fn back(&mut self) -> Option<HistoryEntry> {
+        self.active_mut()?.back().cloned()
+    }
+
+    pub fn forward(&mut self) -> Option<HistoryEntry> {
+        self.active_mut()?.forward().cloned()
+    }
+
     fn open_target(&mut self, node: Option<NodeId>, path: String, mode: ViewMode) -> usize {
         let existing = match node {
             Some(node) => self.tabs.iter().position(|tab| tab.node == Some(node)),
@@ -472,6 +501,36 @@ impl WorkspaceModel {
         self.group_mut(group).map(|g| g.open_node(node, path, mode))
     }
 
+    pub fn open_node_in_new_tab(
+        &mut self,
+        group: u64,
+        node: NodeId,
+        path: String,
+        mode: ViewMode,
+    ) -> Option<usize> {
+        self.group_mut(group)
+            .map(|g| g.open_node_in_new_tab(node, path, mode))
+    }
+
+    pub fn navigate_node(
+        &mut self,
+        group: u64,
+        node: NodeId,
+        path: String,
+        mode: ViewMode,
+    ) -> bool {
+        self.group_mut(group)
+            .is_some_and(|g| g.navigate_node(node, path, mode))
+    }
+
+    pub fn back(&mut self, group: u64) -> Option<HistoryEntry> {
+        self.group_mut(group)?.back()
+    }
+
+    pub fn forward(&mut self, group: u64) -> Option<HistoryEntry> {
+        self.group_mut(group)?.forward()
+    }
+
     pub fn close(&mut self, group: u64, ix: usize) -> bool {
         self.group_mut(group).is_some_and(|g| g.close(ix))
     }
@@ -516,6 +575,40 @@ mod tests {
         assert!(group.close(0));
         assert_eq!(group.tabs.len(), 1);
         assert_eq!(group.active().unwrap().path, None);
+    }
+
+    #[test]
+    fn linked_new_tab_keeps_existing_node_tab_and_opens_duplicate_after_active() {
+        let mut group = TabGroup::new(1, ViewMode::Source);
+        group
+            .active_mut()
+            .unwrap()
+            .open_node(NodeId(1), "A.md".into(), ViewMode::Source, 0);
+        group.open_node(NodeId(2), "B.md".into(), ViewMode::Source);
+
+        let ix = group.open_node_in_new_tab(NodeId(2), "B.md".into(), ViewMode::Source);
+
+        assert_eq!(ix, 2);
+        assert_eq!(group.tabs.len(), 3);
+        assert_eq!(group.tabs[1].node, Some(NodeId(2)));
+        assert_eq!(group.tabs[2].node, Some(NodeId(2)));
+        assert_eq!(group.active_tab, 2);
+        assert_eq!(group.active().unwrap().history[0].node, Some(NodeId(2)));
+    }
+
+    #[test]
+    fn following_a_link_and_history_navigation_stay_in_the_active_tab() {
+        let mut group = TabGroup::new(1, ViewMode::Reading);
+        group
+            .active_mut()
+            .unwrap()
+            .open_node(NodeId(1), "A.md".into(), ViewMode::Reading, 0);
+        assert!(group.navigate_node(NodeId(2), "B.md".into(), ViewMode::Reading));
+
+        assert_eq!(group.tabs.len(), 1);
+        assert_eq!(group.active().unwrap().path.as_deref(), Some("B.md"));
+        assert_eq!(group.back().unwrap().path, "A.md");
+        assert_eq!(group.forward().unwrap().path, "B.md");
     }
 
     #[test]

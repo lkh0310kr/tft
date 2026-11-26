@@ -307,6 +307,27 @@ impl VaultData {
         ids
     }
 
+    /// Validates a name for a new child in the canonical Vault model. Hosts
+    /// should repeat the collision check at the storage boundary to handle
+    /// concurrent external changes.
+    pub fn validate_new_child_name(&self, parent: NodeId, name: &str) -> Result<(), RenameError> {
+        let Some(parent_node) = self.node(parent) else {
+            return Err(RenameError::NotFound);
+        };
+        if !matches!(parent_node.kind, NodeKind::Folder) {
+            return Err(RenameError::NotFound);
+        }
+        validate_file_name(name).map_err(|_| RenameError::InvalidName)?;
+        let key = name_key(name);
+        if self.children(parent).iter().any(|child| {
+            self.node(*child)
+                .is_some_and(|node| name_key(&node.name) == key)
+        }) {
+            return Err(RenameError::DestinationExists);
+        }
+        Ok(())
+    }
+
     fn collect_subtree(&self, id: NodeId, out: &mut Vec<NodeId>) {
         out.push(id);
         for child in self.children(id) {
@@ -720,6 +741,37 @@ mod tests {
         assert_eq!(data.path(a), Some("A"));
         assert_eq!(data.path(b), Some("B"));
         assert!(data.lookup("A/Empty").is_ok());
+    }
+
+    #[test]
+    fn new_child_name_validation_is_shared_and_case_insensitive() {
+        let mut data = VaultData::default();
+        let notes = folder(&mut data, None, "Notes", "notes");
+        let note = file(
+            &mut data,
+            Some(BackendObjectId::Local("notes".into())),
+            "Welcome.md",
+            "welcome",
+        );
+        data.rebuild_indexes();
+
+        assert_eq!(data.validate_new_child_name(notes, "New.md"), Ok(()));
+        assert_eq!(
+            data.validate_new_child_name(notes, "welcome.MD"),
+            Err(RenameError::DestinationExists)
+        );
+        assert_eq!(
+            data.validate_new_child_name(note, "Child.md"),
+            Err(RenameError::NotFound)
+        );
+        assert_eq!(
+            data.validate_new_child_name(notes, "../escape.md"),
+            Err(RenameError::InvalidName)
+        );
+        assert_eq!(
+            data.validate_new_child_name(NodeId(u64::MAX), "New.md"),
+            Err(RenameError::NotFound)
+        );
     }
 
     #[test]

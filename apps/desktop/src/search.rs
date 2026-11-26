@@ -31,9 +31,10 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
-use tft_cache::{all_tags, CachedMetadata};
+use tft_cache::CachedMetadata;
+pub(crate) use tft_search::inputs;
 use tft_search::{
-    context_window, match_lines, natural_cmp, parse, MatchLine, Query, Search, SearchFile, TaskLine,
+    context_window, match_lines, natural_cmp, parse, MatchLine, Query, Search, SearchFile,
 };
 
 #[derive(Debug, Clone)]
@@ -1336,48 +1337,6 @@ impl Render for SearchPane {
     }
 }
 
-pub type Inputs = (
-    Vec<String>,
-    Vec<Range<usize>>,
-    Vec<Range<usize>>,
-    Vec<TaskLine>,
-);
-
-/// Per-file search inputs derived from the cache record: tags, block
-/// ranges, section ranges and task lines.
-pub fn inputs(meta: &CachedMetadata, text: &str) -> Inputs {
-    let tags: Vec<String> = all_tags(meta)
-        .into_iter()
-        .map(|t| t.to_lowercase())
-        .collect();
-    let blocks: Vec<Range<usize>> = meta
-        .sections
-        .iter()
-        .map(|s| s.position.start.offset..s.position.end.offset)
-        .collect();
-    let mut sections = Vec::new();
-    let mut at = 0;
-    for h in &meta.headings {
-        let start = h.position.start.offset;
-        if start > at {
-            sections.push(at..start);
-        }
-        at = start;
-    }
-    sections.push(at..text.len());
-    let tasks: Vec<TaskLine> = meta
-        .list_items
-        .iter()
-        .filter_map(|item| {
-            item.task.map(|c| TaskLine {
-                range: item.position.start.offset..item.position.end.offset,
-                done: c != ' ',
-            })
-        })
-        .collect();
-    (tags, blocks, sections, tasks)
-}
-
 /// Runs `search` over every note; results in file name order.
 pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
     let cache = state.cache();
@@ -1399,15 +1358,15 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
         .par_iter()
         .filter_map(|(path, meta)| {
             let text = texts.get(*path)?;
-            let (tags, blocks, sections, tasks) = inputs(meta, text);
+            let inputs = tft_search::inputs(meta, text);
             let file = SearchFile {
                 path,
                 content: text,
-                tags: &tags,
+                tags: &inputs.tags,
                 frontmatter: meta.frontmatter.as_ref(),
-                blocks: &blocks,
-                sections: &sections,
-                tasks: &tasks,
+                blocks: &inputs.blocks,
+                sections: &inputs.sections,
+                tasks: &inputs.tasks,
             };
             let hits = search.matches(&file)?;
             let name = path

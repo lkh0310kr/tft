@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
-pub use tft_core::explorer::{
+pub use tft_app::explorer::{
     display_name, drop_folder, drop_moves, kind_name, move_into_label, FileTree, SortOrder,
 };
 
@@ -1064,7 +1064,8 @@ impl FileExplorer {
                 // (`--nav-item-color-active` on `--nav-item-background-active`)
                 // or under the pointer (`-hover`).
                 let t = &theme.tokens;
-                let row_el = div().id(("row", ix));
+                let row_el =
+                    crate::ui::file_tree_row(("row", ix), row.depth, active, focused, &theme);
                 // A file's row previews it; a folder's previews nothing.
                 let row_el = if row.is_folder {
                     row_el
@@ -1091,37 +1092,6 @@ impl FileExplorer {
                 };
                 Some(
                     row_el
-                        .w_full()
-                        .h(px(25.))
-                        .mb(px(2.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        // The 2 px border is the keyboard's ring (Obsidian's
-                        // `has-focus`), transparent on every other row so the
-                        // text does not move when the ring arrives.
-                        .border_2()
-                        .border_color(if focused {
-                            t.background_modifier_border_focus
-                        } else {
-                            gpui::transparent_black()
-                        })
-                        .pl(px(6. + row.depth as f32 * 14.))
-                        .pr(px(6.))
-                        .rounded(px(8.))
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .text_color(if active {
-                            t.nav_item_color_active
-                        } else {
-                            t.nav_item_color
-                        })
-                        .when(active, |d| d.bg(t.nav_item_background_active))
-                        .hover(|s| {
-                            s.bg(t.nav_item_background_hover)
-                                .text_color(t.nav_item_color_hover)
-                        })
-                        .relative()
                         .when(block_top, |d| d.text_color(t.text_accent))
                         .when(dragged, |d| {
                             d.bg(t.interactive_accent).text_color(gpui::white())

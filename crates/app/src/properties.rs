@@ -13,7 +13,10 @@ pub const PROPERTIES_FOLD_ID: usize = usize::MAX;
 /// First `RichText` id a property value may use. Property rows are built at
 /// render time, after the model's own ids, so they start past any note's
 /// counter instead of colliding with a paragraph's runs.
+#[cfg(target_pointer_width = "64")]
 pub const PROPERTY_ID_BASE: usize = 1 << 40;
+#[cfg(target_pointer_width = "32")]
+pub const PROPERTY_ID_BASE: usize = 1 << 30;
 
 /// The glyph that stands for a property type. Obsidian uses Lucide icons
 /// (`lucide-text`, `lucide-binary`, ...); TFT is clean room, so these are

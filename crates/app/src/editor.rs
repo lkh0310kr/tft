@@ -18,7 +18,6 @@ use crate::rtl::{rtl_row_origin, rtl_rows, RtlRows};
 use crate::suggest::{Anchor, SuggestState};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
-use crate::workspace::VaultState;
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, size, AnyElement, App, AvailableSpace,
     Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Element, ElementId,
@@ -34,18 +33,40 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
 use tft_formats::config::PropertyTypes;
 use tft_formats::properties::{self as props, PropertiesInDocument};
 use tft_markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use tft_markdown::{Block, BlockKind, Document};
-use tft_suggest::blocks::{self, IdInsertion, Placement};
-use tft_suggest::{self as suggest, Accept, BlockId, Suggestion};
+use tft_suggest::{self as suggest, Accept, Item as SuggestionItem, Suggestion, Triggered};
 use tft_text::table::{self, TableCommand};
 use tft_text::{
     autopair, find, shifted, wrap, BlockInsert, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax,
     Sel, TextBuffer,
 };
+use web_time::Instant;
+
+/// A suggestion popup is backed by a host's live Vault state. The editor owns cursor,
+/// selection and text edits; the host owns indexing and writes to other notes.
+pub trait SuggestionSource: Send + Sync {
+    fn suggestions(&self, trigger: &Triggered<'_>, source: &str) -> Vec<Suggestion>;
+
+    fn insert(
+        &self,
+        trigger: &Triggered<'_>,
+        item: &SuggestionItem,
+        accept: Accept,
+        source: &str,
+        current_text: &str,
+        options: suggest::Options,
+        crlf: bool,
+    ) -> Result<SuggestionInsertion, String>;
+}
+
+/// The edit an accepted host suggestion applies, including a block ID written into this note.
+pub struct SuggestionInsertion {
+    pub text: tft_suggest::Insertion,
+    pub own_note: Option<tft_suggest::blocks::IdInsertion>,
+}
 
 actions!(
     editor,
@@ -154,17 +175,31 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-n", MoveDown, Some("SuggestPopup")),
         KeyBinding::new("ctrl-p", MoveUp, Some("SuggestPopup")),
     ]);
+    #[cfg(target_arch = "wasm32")]
+    cx.bind_keys([
+        KeyBinding::new("cmd-a", SelectAll, ctx),
+        KeyBinding::new("cmd-z", Undo, ctx),
+        KeyBinding::new("cmd-shift-z", Redo, ctx),
+        KeyBinding::new("cmd-c", Copy, ctx),
+        KeyBinding::new("cmd-x", Cut, ctx),
+        KeyBinding::new("cmd-v", Paste, ctx),
+        KeyBinding::new("cmd-shift-v", PastePlain, ctx),
+        KeyBinding::new("cmd-left", LineStart, ctx),
+        KeyBinding::new("cmd-right", LineEnd, ctx),
+        KeyBinding::new("cmd-up", DocumentStart, ctx),
+        KeyBinding::new("cmd-down", DocumentEnd, ctx),
+        KeyBinding::new("alt-left", MoveWordLeft, ctx),
+        KeyBinding::new("alt-right", MoveWordRight, ctx),
+        KeyBinding::new("cmd-shift-left", SelectLineStart, ctx),
+        KeyBinding::new("cmd-shift-right", SelectLineEnd, ctx),
+        KeyBinding::new("cmd-shift-up", SelectDocumentStart, ctx),
+        KeyBinding::new("cmd-shift-down", SelectDocumentEnd, ctx),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, ctx),
+        KeyBinding::new("alt-shift-right", SelectWordRight, ctx),
+    ]);
 }
 
 /// The dominant line ending of `text`, which is what a write into it uses.
-fn newline_of(text: &str) -> &'static str {
-    let crlf = text.matches("\r\n").count();
-    if crlf > 0 && crlf * 2 >= text.matches('\n').count() {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
 
 /// Horizontal padding either side of the text.
 const GUTTER: f32 = 24.0;
@@ -725,8 +760,10 @@ pub struct Editor {
     title_hit: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The open autocompletion popup, with the rows it is offering.
     suggest: Option<SuggestState>,
-    /// The vault the suggester reads; `None` until one is open.
-    suggest_vault: Option<Arc<VaultState>>,
+    /// The host supplies Vault-backed suggestions and mutations.
+    suggestion_source: Option<Arc<dyn SuggestionSource>>,
+    /// Optional host bridge for file paths in the native clipboard, which GPUI does not expose.
+    clipboard_file_reader: Option<Box<dyn Fn() -> Vec<std::path::PathBuf>>>,
     /// `newLinkFormat` and `useMarkdownLinks`, for the links it writes.
     link_options: suggest::Options,
     /// The Slash commands core plugin is on: `/` offers commands.
@@ -862,7 +899,8 @@ impl Editor {
             footer_hit: Rc::new(Cell::new(None)),
             footer_shrank: false,
             suggest: None,
-            suggest_vault: None,
+            suggestion_source: None,
+            clipboard_file_reader: None,
             link_options: suggest::Options::default(),
             slash_enabled: false,
             slash_commands: None,
@@ -955,6 +993,30 @@ impl Editor {
     /// The buffer's text, `\n`-ended without the BOM; the reading view is rebuilt from it.
     pub fn text(&self) -> &str {
         self.buf.text()
+    }
+
+    /// Test-only browser bridge used to verify the production editor's input path.
+    #[cfg(all(feature = "browser-test", target_arch = "wasm32"))]
+    fn publish_browser_test_state(&self) {
+        use wasm_bindgen::JsValue;
+        let state = js_sys::Object::new();
+        let selection = self.buf.selection();
+        for (key, value) in [
+            ("text", JsValue::from_str(self.buf.text())),
+            ("source", JsValue::from_str(&self.buf.file_contents())),
+            ("head", JsValue::from_f64(self.buf.head as f64)),
+            ("anchor", JsValue::from_f64(self.buf.anchor as f64)),
+            ("selectionStart", JsValue::from_f64(selection.start as f64)),
+            ("selectionEnd", JsValue::from_f64(selection.end as f64)),
+            ("dirty", JsValue::from_bool(self.buf.is_dirty())),
+        ] {
+            let _ = js_sys::Reflect::set(&state, &JsValue::from_str(key), &value);
+        }
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__tftEditorState"),
+            &state,
+        );
     }
 
     /// Whether `raw` is this buffer, ignoring the BOM and line endings normalized away.
@@ -1067,6 +1129,14 @@ impl Editor {
         }
     }
 
+    /// Installs a host bridge for clipboard file paths that GPUI does not expose.
+    pub fn set_clipboard_file_reader(
+        &mut self,
+        reader: impl Fn() -> Vec<std::path::PathBuf> + 'static,
+    ) {
+        self.clipboard_file_reader = Some(Box::new(reader));
+    }
+
     /// The vault's `types.json`, for the properties widget's type glyphs.
     pub fn set_property_types(&mut self, types: PropertyTypes) {
         self.property_types = types;
@@ -1077,10 +1147,9 @@ impl Editor {
         self.properties_in_document = mode;
     }
 
-    /// The vault the autocompletion popup offers rows from; the state is read through its
-    /// locks on every keystroke, so files added or renamed while open are offered.
-    pub fn set_suggest_vault(&mut self, state: Arc<VaultState>) {
-        self.suggest_vault = Some(state);
+    /// Sets the platform host that supplies Vault-backed link suggestions.
+    pub fn set_suggestion_source(&mut self, source: Option<Arc<dyn SuggestionSource>>) {
+        self.suggestion_source = source;
     }
 
     /// `newLinkFormat` and `useMarkdownLinks`: the shape of the links a suggestion writes.
@@ -3179,9 +3248,7 @@ impl Editor {
         if let Some(edit) = self.title_edit.as_ref() {
             let range = edit.field.selection();
             if !range.is_empty() {
-                cx.write_to_clipboard(ClipboardItem::new_string(
-                    edit.field.text()[range].to_string(),
-                ));
+                self.write_plain_clipboard(edit.field.text()[range].to_string(), cx);
             }
             return;
         }
@@ -3190,8 +3257,25 @@ impl Editor {
         }
         let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
+            self.write_plain_clipboard(self.buf.clipboard_text(&ranges), cx);
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn write_plain_clipboard(&self, text: String, cx: &mut Context<Self>) {
+        let Some(clipboard) = web_sys::window().map(|window| window.navigator().clipboard()) else {
+            return;
+        };
+        let promise = clipboard.write_text(&text);
+        cx.spawn(async move |_, _| {
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        })
+        .detach();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_plain_clipboard(&self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
@@ -3210,15 +3294,21 @@ impl Editor {
         }
         let ranges = self.buf.copy_ranges();
         if ranges.iter().any(|r| !r.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(self.buf.clipboard_text(&ranges)));
+            self.write_plain_clipboard(self.buf.clipboard_text(&ranges), cx);
             let edits = ranges.into_iter().map(|r| (r, String::new())).collect();
             self.edit_all(edits, EditKind::Other, Some(window), cx);
         }
     }
 
     /// Paste at every cursor; a clipboard with one line per cursor gives each its own line.
+    #[cfg(not(target_arch = "wasm32"))]
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
         self.paste_clipboard(window, cx);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        self.paste_from_browser_clipboard(cx);
     }
 
     /// Ctrl+Shift+V: the clipboard's plain text, whatever else it holds.
@@ -3228,6 +3318,7 @@ impl Editor {
 
     /// Ctrl+V, and the context menu's Paste row. Files and images are saved as attachments and
     /// embedded (the workspace saves); anything else is pasted as plain text.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn paste_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let item = cx.read_from_clipboard();
         let text = item.as_ref().and_then(|item| item.text());
@@ -3238,11 +3329,15 @@ impl Editor {
             }
             return;
         }
-        let extra = crate::clipboard_extra::read();
-        if !extra.files.is_empty() {
+        let files = self
+            .clipboard_file_reader
+            .as_ref()
+            .map(|read| read())
+            .unwrap_or_default();
+        if !files.is_empty() {
             cx.emit(EditorEvent::Attachments(IncomingAttachments {
                 image: None,
-                paths: extra.files,
+                paths: files,
                 dropped_at: None,
             }));
             return;
@@ -3268,12 +3363,51 @@ impl Editor {
 
     /// Ctrl+Shift+V, and "Paste as plain text": the clipboard's `text/plain`, verbatim. A clipboard
     /// with only HTML pastes nothing, as in Obsidian.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn paste_plain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.paste_text(&text, window, cx);
         }
     }
 
+    #[cfg(target_arch = "wasm32")]
+    pub fn paste_plain(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.paste_from_browser_clipboard(cx);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn paste_from_browser_clipboard(&mut self, cx: &mut Context<Self>) {
+        let Some(clipboard) = web_sys::window().map(|window| window.navigator().clipboard()) else {
+            return;
+        };
+        let promise = clipboard.read_text();
+        cx.spawn(async move |this, cx| {
+            if let Ok(value) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                if let Some(text) = value.as_string() {
+                    this.update(cx, |editor, cx| editor.paste_text_without_window(&text, cx))
+                        .ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn paste_text_without_window(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.title_apply(cx, |field| field.insert(text)) {
+            return;
+        }
+        if let Some(field) = self.active_field() {
+            field.insert(text);
+            cx.notify();
+            return;
+        }
+        if self.buf.paste(text) {
+            self.after_edit(None, cx);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn paste_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         // Into the open field, which drops the newlines a row cannot hold.
         if self.title_apply(cx, |f| f.insert(text)) {
@@ -3617,30 +3751,29 @@ impl Editor {
         if !opening && self.suggest.is_none() {
             return;
         }
-        // One query, one cursor: a suggestion inserted at several would be several different links.
         if self.cursor_count() > 1 || self.property_field.is_some() {
             self.close_suggest(cx);
             return;
         }
-        let Some(state) = self.suggest_vault.clone() else {
+        let Some(source) = self.suggestion_source.clone() else {
             self.close_suggest(cx);
             return;
         };
         let cursor = self.cursor();
         let line = self.buf.line_text(cursor.line).to_string();
-        let Some(t) = suggest::trigger(&line, cursor.col) else {
+        let Some(trigger) = suggest::trigger(&line, cursor.col) else {
             self.update_slash(&line, cursor, cx);
             return;
         };
         self.slash_commands = None;
-        let items = self.offer(&state, &t);
+        let items = source.suggestions(&trigger, self.name.as_ref());
         if items.is_empty() {
             self.close_suggest(cx);
             return;
         }
         self.suggest = Some(SuggestState {
             line: cursor.line,
-            range: t.range.clone(),
+            range: trigger.range.clone(),
             items,
             selected: 0,
             slash: false,
@@ -3687,27 +3820,7 @@ impl Editor {
         cx.notify();
     }
 
-    /// The rows the vault offers for `t`, read under its locks.
-    fn offer(&self, state: &Arc<VaultState>, t: &suggest::Triggered<'_>) -> Vec<Suggestion> {
-        let vault = state.vault();
-        let cache = state.cache();
-        let show_unsupported = crate::fixed::SHOW_UNSUPPORTED_FILES;
-        // Only a `#^` query asks for a note's text, so this costs nothing on the common `[[`.
-        let texts = |path: &str| state.texts().get(path).map(|t| t.to_string());
-        suggest::suggestions(
-            t,
-            &suggest::Vault {
-                files: vault.files(),
-                cache: &cache,
-                source: self.name.as_ref(),
-                show_unsupported,
-                text: &texts,
-                excluded: &state.excluded(),
-            },
-        )
-    }
-
-    pub(crate) fn close_suggest(&mut self, cx: &mut Context<Self>) {
+    pub fn close_suggest(&mut self, cx: &mut Context<Self>) {
         // The next `/` asks again, for the pins and recent commands as they are then.
         self.slash_commands = None;
         if self.suggest.take().is_some() {
@@ -3742,7 +3855,7 @@ impl Editor {
         };
         if slash {
             return match accept {
-                Accept::Whole => self.accept_suggestion_at(ix, accept, window, cx),
+                Accept::Whole => self.accept_slash(ix, window, cx),
                 // Tab does nothing while the slash popup is up; Shift+Enter is a plain newline.
                 Accept::Inside => true,
                 Accept::Typed => {
@@ -3780,140 +3893,65 @@ impl Editor {
         true
     }
 
-    /// Writes the row at `ix` into the document and puts the cursor where the accept key leaves it.
-    /// The trigger is read from the line again so the text replaced is the text there now.
-    pub(crate) fn accept_suggestion_at(
+    /// Accept a host-provided Vault suggestion; slash commands remain local to the editor.
+    pub fn accept_suggestion_at(
         &mut self,
         ix: usize,
         accept: Accept,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.suggest.as_ref().is_some_and(|s| s.slash) {
+        if self.suggest.as_ref().is_some_and(|suggest| suggest.slash) {
             return self.accept_slash(ix, window, cx);
         }
-        let Some(state) = self.suggest_vault.clone() else {
+        let Some(source) = self.suggestion_source.clone() else {
             return false;
         };
-        let Some((item, at, end)) = self.suggest.as_ref().and_then(|s| {
-            let item = s.items.get(ix).map(|row| row.item.clone())?;
-            Some((item, s.line, s.range.end))
+        let Some((item, line_ix, end)) = self.suggest.as_ref().and_then(|state| {
+            Some((
+                state.items.get(ix)?.item.clone(),
+                state.line,
+                state.range.end,
+            ))
         }) else {
             return false;
         };
-        // A block with no id of its own cannot be linked until one is written; write it first.
-        let (item, own_note) = match item {
-            suggest::Item::Block {
-                path,
-                id: BlockId::New { end, placement },
-            } => match self.write_block_id(&state, &path, end, placement, cx) {
-                Some((id, own)) => (
-                    suggest::Item::Block {
-                        path,
-                        id: BlockId::Existing(id),
-                    },
-                    own,
-                ),
-                None => {
-                    self.close_suggest(cx);
-                    return false;
-                }
-            },
-            other => (other, None),
-        };
-        let line_start = self.buf.line_range(at).start;
-        let line = self.buf.line_text(at).to_string();
-        let Some(t) = suggest::trigger(&line, end) else {
+        let line_start = self.buf.line_range(line_ix).start;
+        let line = self.buf.line_text(line_ix).to_string();
+        let Some(trigger) = suggest::trigger(&line, end) else {
             self.close_suggest(cx);
             return false;
         };
-        let ins = {
-            let vault = state.vault();
-            let cache = state.cache();
-            let show_unsupported = crate::fixed::SHOW_UNSUPPORTED_FILES;
-            let texts = |path: &str| state.texts().get(path).map(|t| t.to_string());
-            suggest::insert(
-                &t,
-                &item,
-                accept,
-                &suggest::Vault {
-                    files: vault.files(),
-                    cache: &cache,
-                    source: self.name.as_ref(),
-                    show_unsupported,
-                    text: &texts,
-                    excluded: &state.excluded(),
-                },
-                &self.link_options,
-            )
+        let inserted = match source.insert(
+            &trigger,
+            &item,
+            accept,
+            self.name.as_ref(),
+            self.buf.text(),
+            self.link_options,
+            self.buf.crlf(),
+        ) {
+            Ok(inserted) => inserted,
+            Err(error) => {
+                self.close_suggest(cx);
+                cx.emit(EditorEvent::Reported(error.into()));
+                return false;
+            }
         };
-        let range = line_start + t.range.start..line_start + t.range.end + ins.consume;
-        let mut cursor = range.start + ins.cursor;
+        let range = line_start + trigger.range.start
+            ..line_start + trigger.range.end + inserted.text.consume;
+        let mut cursor = range.start + inserted.text.cursor;
         self.suggest = None;
-        // An id written into this very note is part of the same edit, so one undo takes it all back.
-        let mut edits = vec![(range.clone(), ins.text)];
-        if let Some(id_ins) = own_note {
-            if id_ins.range.start <= range.start {
-                let grew = id_ins.text.len() as isize - id_ins.range.len() as isize;
+        let mut edits = vec![(range.clone(), inserted.text.text)];
+        if let Some(extra) = inserted.own_note {
+            if extra.range.start <= range.start {
+                let grew = extra.text.len() as isize - extra.range.len() as isize;
                 cursor = (cursor as isize + grew).max(0) as usize;
             }
-            edits.push((id_ins.range, id_ins.text));
+            edits.push((extra.range, extra.text));
         }
-        // One undo step, and the cursor where the insertion asks for it: after the link for Enter,
-        // inside the brackets for Tab, where `after_edit` reopens the popup on what is left to type.
         self.edit_many(edits, cursor, None, window, cx);
         true
-    }
-
-    /// Writes an id onto the block a row points at, so the row can be linked to. Returns the id
-    /// and, when the block is in this note, the edit to fold into the buffer; `None` if it cannot write.
-    fn write_block_id(
-        &mut self,
-        state: &Arc<VaultState>,
-        path: &str,
-        end: usize,
-        placement: Placement,
-        cx: &mut Context<Self>,
-    ) -> Option<(String, Option<IdInsertion>)> {
-        let target = if path.is_empty() {
-            self.name.to_string()
-        } else {
-            path.to_string()
-        };
-        let own = target == self.name.as_ref();
-        // The note being edited is planned against the buffer, which is ahead of the disk.
-        let text = if own {
-            self.buf.text().to_string()
-        } else {
-            state.texts().get(&target)?.to_string()
-        };
-        let id = {
-            let cache = state.cache();
-            let taken = cache.file(&target).map(|m| m.blocks.clone())?;
-            blocks::new_id(self.id_seed(), &taken)
-        };
-        let nl = if self.buf.crlf() && own {
-            "\r\n"
-        } else {
-            newline_of(&text)
-        };
-        // A block an id cannot be written onto is refused rather than written to.
-        let Some(insertion) = blocks::plan_id(&text, end, placement, &id, nl) else {
-            cx.emit(EditorEvent::Reported(
-                format!("No id can be written onto that block in {target}").into(),
-            ));
-            return None;
-        };
-        if own {
-            return Some((id, Some(insertion)));
-        }
-        match state.write_block_id(&target, &text, &insertion) {
-            Ok(()) => Some((id, None)),
-            Err(err) => {
-                cx.emit(EditorEvent::Reported(err.into()));
-                None
-            }
-        }
     }
 
     /// The ATX heading the caret's line is, which is when `editor:rename-heading` is offered: not
@@ -3945,15 +3983,6 @@ impl Editor {
             .sum();
         let cursor = (at as isize + shift).max(0) as usize;
         self.edit_many(edits, cursor, None, window, cx);
-    }
-
-    /// A seed for a fresh block id; the clock is the only randomness there is.
-    fn id_seed(&self) -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0)
-            ^ (self.buf.head as u64).wrapping_mul(0x9e37_79b9)
     }
 
     /// Where the popup is drawn: under the start of the query, in the editor's own coordinates.
@@ -5136,7 +5165,8 @@ impl Editor {
             return;
         };
         let mut selection = self.buf.clipboard_text(&[self.buf.selection()]);
-        let mut keep = crate::file_menu::right_click_caret(&self.buf.selection(), at).is_none();
+        let selected = self.buf.selection();
+        let mut keep = !selected.is_empty() && selected.start <= at && at <= selected.end;
         // A misspelled word under the pointer is selected, the caret at its
         // end, and the menu leads with its corrections (Chromium's way).
         let spelling = self.misspelling_at(at, cx);
@@ -5810,6 +5840,8 @@ impl EntityInputHandler for Editor {
 
 impl Render for Editor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "browser-test")]
+        self.publish_browser_test_state();
         let theme = cx.global::<Theme>().clone();
         self.palette = Palette::from_theme(&theme);
         let base = theme.base_font_size;

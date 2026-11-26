@@ -2,8 +2,9 @@
 resolver = "2"
 members = [
     "apps/desktop",
-    "crates/core",
-    "crates/model",
+    "crates/app",
+    "crates/domain",
+    "crates/drive-web",
     "crates/vault",
     "crates/markdown",
     "crates/cache",
@@ -35,8 +36,8 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-core = { path = "crates/core" }
-model = { path = "crates/model" }
+app = { path = "crates/app" }
+domain = { path = "crates/domain" }
 vault = { path = "crates/vault" }
 markdown = { path = "crates/markdown" }
 cache = { path = "crates/cache" }

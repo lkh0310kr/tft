@@ -1,0 +1,55 @@
+[package]
+name = "app"
+description = "TFT application state and framework-independent use cases shared by all app targets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+[lib]
+name = "tft_app"
+
+[dependencies]
+domain.workspace = true
+serde_json.workspace = true
+gpui = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+export = { workspace = true, optional = true }
+markdown.workspace = true
+formats.workspace = true
+cache.workspace = true
+search.workspace = true
+text.workspace = true
+suggest.workspace = true
+canvas.workspace = true
+commands.workspace = true
+highlight.workspace = true
+paste.workspace = true
+pdf = { workspace = true, optional = true }
+math = { workspace = true, optional = true }
+mermaid = { workspace = true, optional = true }
+spell = { workspace = true, optional = true }
+vault = { workspace = true, optional = true }
+audio = { workspace = true, optional = true }
+image = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+lyon = { workspace = true, optional = true }
+web-time = { workspace = true, optional = true }
+
+[features]
+default = []
+pdf = ["dep:pdf"]
+math = ["dep:math"]
+mermaid = ["dep:mermaid"]
+browser-test = []
+gpui-ui = ["dep:gpui", "dep:anyhow", "dep:export", "dep:mermaid", "dep:math", "dep:pdf", "dep:spell", "dep:vault", "dep:audio", "dep:image", "dep:serde", "dep:lyon", "dep:web-time", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = ["Clipboard", "Navigator", "Window"] }
+
+[dev-dependencies]
+tempfile.workspace = true

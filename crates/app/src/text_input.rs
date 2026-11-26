@@ -60,6 +60,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-left", SelectWordLeft, ctx),
         KeyBinding::new("ctrl-shift-right", SelectWordRight, ctx),
         KeyBinding::new("ctrl-a", SelectAll, ctx),
+        KeyBinding::new("cmd-a", SelectAll, ctx),
         // Obsidian swallows Ctrl+E inside a text input: it neither moves the
         // caret to the end of the field nor toggles reading view (see
         // [[Specification#Ctrl+E inside a text input does nothing]]). Binding
@@ -73,6 +74,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", Copy, ctx),
         KeyBinding::new("ctrl-x", Cut, ctx),
         KeyBinding::new("ctrl-v", Paste, ctx),
+        KeyBinding::new("cmd-c", Copy, ctx),
+        KeyBinding::new("cmd-x", Cut, ctx),
+        KeyBinding::new("cmd-v", Paste, ctx),
         KeyBinding::new("ctrl-u", Clear, ctx),
         KeyBinding::new("enter", Submit, ctx),
         KeyBinding::new("escape", Cancel, ctx),

@@ -1,6 +1,6 @@
 //! Projects the local path-based vault into the shared node model.
 
-use tft_model::vault::{BackendObjectId, FileMeta, NodeKind, ScannedNode, VaultData};
+use tft_domain::vault::{BackendObjectId, FileMeta, NodeKind, ScannedNode, VaultData};
 
 use crate::Vault;
 

@@ -171,6 +171,8 @@ pub struct Shown {
     /// Which of its rendered links the pointer is on, as a view's
     /// [`crate::reading::view::HoverHost`] keeps it.
     pub hover_current: Rc<Cell<Option<(usize, usize)>>>,
+    /// Pressed rendered link kept across paint frames for fast clicks.
+    pub link_pressed: Rc<Cell<Option<(usize, usize)>>>,
     /// The pointer is over it, which keeps it (and those under it) up.
     pub over: bool,
     /// Its height inside the border as last painted: the editor a click
@@ -203,6 +205,7 @@ impl Shown {
             toggled: Rc::new(RefCell::new(toggled)),
             scroll: ScrollHandle::default(),
             hover_current: Rc::default(),
+            link_pressed: Rc::default(),
             over: false,
             height: Rc::new(Cell::new(0.)),
             editing: None,
@@ -384,6 +387,8 @@ pub fn render(
                 copied: None,
                 on_copy: Rc::new(|_, _| {}),
                 on_task: Rc::new(|_, _| {}),
+                on_link: handlers.on_link.clone(),
+                link_pressed: shown.link_pressed.clone(),
                 on_remove_item: None,
                 on_menu: None,
                 hover: Some(HoverHost {

@@ -10,6 +10,7 @@ use crate::query::{Compare, Field, Query};
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
 use std::ops::Range;
+use tft_cache::{all_tags, CachedMetadata};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
@@ -31,6 +32,53 @@ impl std::error::Error for SearchError {}
 pub struct TaskLine {
     pub range: Range<usize>,
     pub done: bool,
+}
+
+/// Metadata-derived inputs shared by the Desktop and Web search hosts.
+#[derive(Debug, Clone, Default)]
+pub struct SearchInputs {
+    pub tags: Vec<String>,
+    pub blocks: Vec<Range<usize>>,
+    pub sections: Vec<Range<usize>>,
+    pub tasks: Vec<TaskLine>,
+}
+
+pub fn inputs(meta: &CachedMetadata, text: &str) -> SearchInputs {
+    let tags = all_tags(meta)
+        .into_iter()
+        .map(|tag| tag.to_lowercase())
+        .collect();
+    let blocks = meta
+        .sections
+        .iter()
+        .map(|section| section.position.start.offset..section.position.end.offset)
+        .collect();
+    let mut sections = Vec::new();
+    let mut at = 0;
+    for heading in &meta.headings {
+        let start = heading.position.start.offset;
+        if start > at {
+            sections.push(at..start);
+        }
+        at = start;
+    }
+    sections.push(at..text.len());
+    let tasks = meta
+        .list_items
+        .iter()
+        .filter_map(|item| {
+            item.task.map(|marker| TaskLine {
+                range: item.position.start.offset..item.position.end.offset,
+                done: marker != ' ',
+            })
+        })
+        .collect();
+    SearchInputs {
+        tags,
+        blocks,
+        sections,
+        tasks,
+    }
 }
 
 /// One file as the matcher sees it. Ranges are byte ranges into `content`.

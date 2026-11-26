@@ -19,10 +19,11 @@ Native Rust/GPUI clone of Obsidian's desktop app, targeting byte-level vault com
 
 ```
 apps/desktop           GPUI app (bin): workspace shell, Files view, reading view, source editor
-apps/web                Leptos Drive web shell: tree, Markdown read/edit (separate workspace)
+apps/web                GPUI WebAssembly app shell backed by Google Drive
+apps/web-leptos         preserved Leptos implementation (separate workspace)
 assets                 icons and fonts shared by the desktop app and the future web app
-crates/core      shared wasm-safe logic: design tokens, FileTree, vault plans (no gpui/fs)
-crates/model     shared workspace state: tabs, groups, layout, view modes (no gpui/fs)
+crates/app       shared app state/use cases and wasm-safe services
+crates/domain    VaultData graph, storage identities and invariants
 crates/vault     folder scanning, .obsidian config
 crates/markdown  OFM primitives
 crates/cache     CachedMetadata, LinkResolver

@@ -11,5 +11,6 @@ publish.workspace = true
 name = "tft_search"
 
 [dependencies]
+cache.workspace = true
 regex.workspace = true
 serde_yaml.workspace = true

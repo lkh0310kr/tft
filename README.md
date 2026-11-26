@@ -45,11 +45,13 @@ cargo run --release -p desktop -- "/path/to/vault" --frame native
 or URI to the open window and raises it. `--control <socket>` exposes the running app on a local
 Unix-domain socket speaking newline-delimited JSON for tests and recordings.
 
-## Web shell (Google Drive)
+## Web apps (Google Drive)
 
-`apps/web` is a Leptos/WASM shell that reads a vault from Google Drive with the
-`drive.file` scope. It is a separate Cargo workspace so the host build never pulls
-in wasm-only crates.
+The active Web target is `apps/web`, a GPUI WebAssembly application. The previous
+Leptos shell is preserved at `apps/web-leptos` in its own Cargo workspace.
+GPUI Web build and browser checks are documented in [apps/web/README.md](apps/web/README.md).
+
+The setup notes below apply to the preserved Leptos deployment unless stated otherwise.
 
 ### First setup
 
@@ -120,9 +122,10 @@ real vault and asserts that writing it back changes no bytes.
 
 ```
 apps/desktop        GPUI application (package desktop; binary tft)
-apps/web            Leptos Google Drive web shell: tree, Markdown read/edit (separate workspace)
-crates/core         shared wasm-safe logic: design tokens, file tree, vault plans
-crates/model        shared workspace state: tabs, groups, layout, view modes
+apps/web            GPUI WebAssembly app shell backed by Google Drive
+apps/web-leptos     preserved Leptos implementation (separate workspace)
+crates/app          shared app state/use cases and wasm-safe services
+crates/domain       VaultData graph, storage identities and invariants
 crates/vault        vault scanning, file kinds, .obsidian reads/writes
 crates/markdown     CommonMark + GFM + Obsidian syntax, one spanned tree
 crates/cache        CachedMetadata and the link index/resolver

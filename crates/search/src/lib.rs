@@ -12,6 +12,6 @@ pub mod snippet;
 pub use collate::natural_cmp;
 pub use exclude::{ExcludeFilters, Offer};
 pub use fuzzy::{fuzzy_match, simple_search, FuzzyMatch};
-pub use matcher::{MatchSet, Search, SearchError, SearchFile, TaskLine};
+pub use matcher::{inputs, MatchSet, Search, SearchError, SearchFile, SearchInputs, TaskLine};
 pub use query::{parse, Compare, Field, Query};
 pub use snippet::{context_window, match_lines, MatchLine};

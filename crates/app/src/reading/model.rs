@@ -398,7 +398,7 @@ pub fn build_with(
 /// Builds one part of `text`: the section under a heading path (`#A#B`) or the block
 /// with an id (`#^id`), `None` if absent. A canvas card's `subpath` shows this, built
 /// at depth 0 so its markers are the note's own and its embeds nest as the note's do.
-pub(crate) fn build_section(
+pub fn build_section(
     source_path: &str,
     text: &str,
     subpath: &Subpath<'_>,

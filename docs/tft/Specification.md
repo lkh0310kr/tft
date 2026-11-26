@@ -24,14 +24,17 @@ and a probe disagree, the probe wins and this note is corrected.
    Obsidian uses; `crates/commands/data/commands.txt` is the inventory.
 4. **Clean room.** Behavior is implemented from the probe record and public documentation. No
    Obsidian code, CSS, or icons are copied.
-5. **No gpui outside `apps/desktop`.** Library crates are pure Rust and testable without a window.
+5. **No native platform APIs in shared crates.** GPUI app entry points live in `apps/desktop` and `apps/web`; `crates/app` and `crates/domain` remain window-free and testable without a platform runner.
 
 ## 2. Repository layout
 
 ```
-apps/desktop        GPUI application (package desktop; binary tft)
+apps/desktop        GPUI Desktop application (package desktop; binary tft)
+apps/web            GPUI WebAssembly application (Google Drive host)
+apps/web-leptos     preserved Leptos implementation
 assets              icons and fonts shared by desktop and the future web app
-crates/core         wasm-safe shared logic: design tokens, file tree, vault plans
+crates/app          shared application state/use cases and wasm-safe services
+crates/domain       canonical VaultData graph and domain identities/invariants
 crates/vault        vault scanning, file kinds, .obsidian reads/writes
 crates/markdown     CommonMark + GFM + Obsidian Markdown, one spanned tree
 crates/cache        CachedMetadata and the link index/resolver

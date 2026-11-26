@@ -1,24 +1,32 @@
 //! The HTTP client for remote images: a plain `GET` with no cookies or
 //! referrer, on a worker thread, never the UI thread.
 
+#[cfg(not(target_arch = "wasm32"))]
 use futures::future::BoxFuture;
+#[cfg(not(target_arch = "wasm32"))]
 use http_client::http::{HeaderValue, Request, Response};
+#[cfg(not(target_arch = "wasm32"))]
 use http_client::{AsyncBody, HttpClient, Url};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 /// What an image request accepts: Chromium's own list for `<img>`, which is
 /// what Obsidian's requests carry.
+#[cfg(not(target_arch = "wasm32"))]
 const ACCEPT: &str = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
 /// The largest body read. A remote image bigger than this is a failed load,
 /// drawn as its alt text, rather than an unbounded allocation.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_BODY: u64 = 64 * 1024 * 1024;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RemoteClient {
     agent: ureq::Agent,
     user_agent: HeaderValue,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RemoteClient {
     pub fn new() -> RemoteClient {
         let user_agent = format!("TFT/{}", env!("CARGO_PKG_VERSION"));
@@ -37,6 +45,7 @@ impl RemoteClient {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HttpClient for RemoteClient {
     fn user_agent(&self) -> Option<&HeaderValue> {
         Some(&self.user_agent)
@@ -68,6 +77,7 @@ impl HttpClient for RemoteClient {
 
 /// One `GET` of an `http:` or `https:` URL; anything else is refused, so a
 /// `file:` or `data:` destination can never reach the network layer here.
+#[cfg(not(target_arch = "wasm32"))]
 fn fetch(
     agent: &ureq::Agent,
     method: &http_client::http::Method,
@@ -102,6 +112,7 @@ pub struct Download {
 /// settings as an image load, and a status other than 2xx is a failure, as
 /// a 404 was for Obsidian 1.15.0 (the run stopped there). Run it off the UI
 /// thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn download(url: &str) -> anyhow::Result<Download> {
     if !is_remote(url) {
         anyhow::bail!("not an http(s) URL: {url}");
@@ -133,4 +144,9 @@ pub fn download(url: &str) -> anyhow::Result<Download> {
     })
 }
 
-pub use tft_core::remote::is_remote;
+#[cfg(target_arch = "wasm32")]
+pub fn download(_url: &str) -> anyhow::Result<Download> {
+    anyhow::bail!("attachment downloads are unavailable in the web editor host")
+}
+
+pub use tft_app::remote::is_remote;

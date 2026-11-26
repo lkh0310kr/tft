@@ -2,10 +2,118 @@
 //! menu frames and the panel obsidian's prompts and pickers sit in.
 
 use crate::assets::icon;
-use crate::theme::{Theme, FONT_UI_SMALL, ICON_SIZE};
+use crate::theme::{Theme, FONT_UI_SMALL, ICON_SIZE, TAB_CURVE};
 use gpui::{
     div, prelude::*, px, AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window,
 };
+
+/// The tab shell shared by the native workspace and the GPUI Web composition.
+/// The caller supplies tab actions and inner content; active/group colors and
+/// geometry remain one implementation.
+pub fn workspace_tab(
+    id: impl Into<ElementId>,
+    active: bool,
+    group_active: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .group("tab")
+        .flex()
+        .flex_row()
+        .h(px(34.))
+        .w(px(200.))
+        .flex_shrink_0()
+        .pt(px(1.))
+        .px(px(4.))
+        .pb(px(4.))
+        .rounded_t(px(TAB_CURVE))
+        .relative()
+        .when(!active, |d| d.mb(px(1.)))
+        .bg(if active {
+            theme.tokens.tab_background_active
+        } else {
+            theme.tokens.tab_container_background
+        })
+        .text_size(px(FONT_UI_SMALL))
+        .text_color(if active && group_active {
+            theme.tokens.tab_text_color_focused_active_current
+        } else if active {
+            theme.tokens.tab_text_color_focused_active
+        } else {
+            theme.tokens.tab_text_color_focused
+        })
+}
+
+/// Shared geometry and typography for the document header below a workspace tab strip.
+/// Desktop and Web provide their own navigation and view actions as children.
+pub fn workspace_view_header(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h(px(crate::theme::HEADER_HEIGHT))
+        .px(px(12.))
+        .gap(px(8.))
+        .text_size(px(FONT_UI_SMALL))
+        .text_color(theme.tokens.text_normal)
+}
+
+/// A compact GPUI button used by the shared Workspace shell.
+pub fn action_button(label: &'static str, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(label)
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .bg(theme.tokens.background_modifier_hover)
+        .text_size(px(13.))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.tokens.background_modifier_hover))
+        .child(label)
+}
+
+/// The base file-tree row used by the native Explorer and Web workspace.
+/// Callers attach their own navigation, rename and context-menu actions.
+pub fn file_tree_row(
+    id: impl Into<ElementId>,
+    depth: usize,
+    active: bool,
+    focused: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let t = &theme.tokens;
+    div()
+        .id(id)
+        .w_full()
+        .h(px(25.))
+        .mb(px(2.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .border_2()
+        .border_color(if focused {
+            t.background_modifier_border_focus
+        } else {
+            gpui::transparent_black()
+        })
+        .pl(px(6. + depth as f32 * 14.))
+        .pr(px(6.))
+        .rounded(px(8.))
+        .cursor_pointer()
+        .text_size(px(FONT_UI_SMALL))
+        .text_color(if active {
+            t.nav_item_color_active
+        } else {
+            t.nav_item_color
+        })
+        .when(active, |d| d.bg(t.nav_item_background_active))
+        .hover(|s| {
+            s.bg(t.nav_item_background_hover)
+                .text_color(t.nav_item_color_hover)
+        })
+        .relative()
+}
 
 /// The small label a button shows on hover.
 pub struct Tooltip {
@@ -367,7 +475,7 @@ pub fn button(
 }
 
 /// The keyboard focus ring drawn over a row.
-pub(crate) fn focus_ring(radius: f32, theme: &Theme) -> Div {
+pub fn focus_ring(radius: f32, theme: &Theme) -> Div {
     div()
         .absolute()
         .inset_0()
@@ -377,7 +485,7 @@ pub(crate) fn focus_ring(radius: f32, theme: &Theme) -> Div {
 }
 
 /// Obsidian's 34 by 19 settings toggle.
-pub(crate) fn toggle(id: (&'static str, usize), on: bool, theme: &Theme) -> Stateful<Div> {
+pub fn toggle(id: (&'static str, usize), on: bool, theme: &Theme) -> Stateful<Div> {
     div()
         .id(id)
         .flex_shrink_0()
@@ -403,7 +511,7 @@ pub(crate) fn toggle(id: (&'static str, usize), on: bool, theme: &Theme) -> Stat
 }
 
 /// A menu in Obsidian's shape.
-pub(crate) fn menu(id: &'static str, theme: &Theme) -> Stateful<Div> {
+pub fn menu(id: &'static str, theme: &Theme) -> Stateful<Div> {
     menu_panel(id, theme)
         .min_w(px(172.))
         .p(px(6.))
@@ -412,7 +520,7 @@ pub(crate) fn menu(id: &'static str, theme: &Theme) -> Stateful<Div> {
 }
 
 /// One `menu-item` with an optional icon or check.
-pub(crate) fn menu_item(
+pub fn menu_item(
     prefix: &'static str,
     ix: usize,
     icon_name: Option<&'static str>,

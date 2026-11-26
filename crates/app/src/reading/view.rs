@@ -18,9 +18,9 @@ use gpui::{
     Context, CursorStyle, DispatchPhase, DragMoveEvent, Element, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, HighlightStyle, Hitbox,
     HitboxBehavior, Hsla, InspectorElementId, InteractiveText, KeyBinding, LayoutId, ListAlignment,
-    ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Point,
-    SharedString, SharedUri, StrikethroughStyle, StyledText, Task, TextLayout, TextRun,
-    UnderlineStyle, Window, WindowTextSystem,
+    ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
+    Pixels, Point, SharedString, SharedUri, StrikethroughStyle, StyledText, Task, TextLayout,
+    TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -70,7 +70,7 @@ pub fn bind_keys(cx: &mut App) {
 
 /// The line height as a multiple of the base font size, and so the line an
 /// arrow key scrolls.
-pub(crate) const LINE_HEIGHT: f32 = 1.6;
+pub const LINE_HEIGHT: f32 = 1.6;
 
 /// Pixels a page key scrolls: the viewport less an eighth, capped at 40 px, as
 /// a browser does. A viewport of zero is unpainted and scrolls nothing.
@@ -355,7 +355,7 @@ fn describe_pos(pos: ReadingPos) -> Value {
 
 /// What the reader did over a run of text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SelectGesture {
+pub enum SelectGesture {
     /// Left button down: the anchor and the head go here.
     Press,
     /// Moved with the left button down: the head follows.
@@ -531,7 +531,7 @@ pub enum PropertyAction {
 
 /// Lets the properties block be edited: Live Preview passes the open field and a
 /// sink, the reading view only the pills' remove control.
-pub(crate) struct PropertiesHost {
+pub struct PropertiesHost {
     /// The field being typed into, when it belongs to this block.
     pub field: Option<Field>,
     /// The pill a Backspace selected: the first of two removing presses focuses
@@ -616,7 +616,7 @@ pub struct TableDragView {
 pub type TableHandler = Rc<dyn Fn(TableAction, &mut Window, &mut App)>;
 
 /// Lets a table's cells be edited: Live Preview passes the open cell and a sink.
-pub(crate) struct TableHost {
+pub struct TableHost {
     /// The open cell's bytes and the text in hand, not yet written to the document.
     pub cell: Option<(Range<usize>, Field)>,
     /// The row or column a handle press selected, and the drag in progress.
@@ -642,7 +642,7 @@ pub type HoverHandler = Rc<dyn Fn(Option<LinkHover>, &mut Window, &mut App)>;
 /// A host's hover reporting: the handler and the `(RichText::id, link index)` on
 /// the pointer, so only the text that reported a link reports leaving it.
 #[derive(Clone)]
-pub(crate) struct HoverHost {
+pub struct HoverHost {
     pub on_hover: HoverHandler,
     pub current: Rc<std::cell::Cell<Option<(usize, usize)>>>,
 }
@@ -659,13 +659,17 @@ pub type TaskHandler = Rc<dyn Fn(TaskMarker, &mut App)>;
 pub type CopyHandler = Rc<dyn Fn(usize, &mut App)>;
 
 /// The settings and affordances only the reading view has.
-pub(crate) struct ReadingHost {
+pub struct ReadingHost {
     /// `propertiesInDocument`: `Hidden` draws no properties block.
     pub properties: PropertiesInDocument,
     /// The code block whose copy button is showing its check.
     pub copied: Option<usize>,
     pub on_copy: CopyHandler,
     pub on_task: TaskHandler,
+    pub on_link: LinkHandler,
+    /// Pressed link shared across paint frames so a fast browser click can
+    /// resolve its release without waiting for another animation frame.
+    pub link_pressed: Rc<std::cell::Cell<Option<(usize, usize)>>>,
     /// A pill's remove control, handed [`PropertyAction::RemoveItem`] only; the
     /// rest stays read-only. `None` for a host that cannot write the note.
     pub on_remove_item: Option<PropertyHandler>,
@@ -743,11 +747,12 @@ pub struct ReadingView {
     dragging: bool,
     /// The link page preview last heard of, shared with every text (see [`HoverHost`]).
     hover_current: Rc<std::cell::Cell<Option<(usize, usize)>>>,
+    link_pressed: Rc<std::cell::Cell<Option<(usize, usize)>>>,
     /// Each run's selected range, by [`RichText::id`], derived from `selection` on every change.
     selected: Rc<HashMap<usize, Range<usize>>>,
     /// A note handed over in an editing mode, built only when something reads it
     /// (first render, fold sync, control socket).
-    pending: Option<(String, String, Arc<crate::workspace::VaultState>)>,
+    pending: Option<(String, String, Box<dyn FnOnce(&str, &str) -> Model>)>,
     /// The note `model` was built from, which a reload compares against.
     built_path: Option<String>,
 }
@@ -830,18 +835,20 @@ impl ReadingView {
             selection: None,
             dragging: false,
             hover_current: Rc::default(),
+            link_pressed: Rc::default(),
             selected: Rc::new(HashMap::new()),
             pending: None,
             built_path: None,
         }
     }
 
-    /// Hands the view a note without building it: built on first read, and another note drops it.
+    /// Hands the view a note without building it: built on first read. The host supplies
+    /// a builder so Vault-specific IO and configuration stay outside the shared view.
     pub fn set_note_later(
         &mut self,
         path: String,
         text: String,
-        state: Arc<crate::workspace::VaultState>,
+        build: impl FnOnce(&str, &str) -> Model + 'static,
         cx: &mut Context<Self>,
     ) {
         if !same_note(self.built_path.as_deref(), Some(&path)) {
@@ -850,15 +857,14 @@ impl ReadingView {
             self.built_path = None;
         }
         self.path = Some(path.clone());
-        self.pending = Some((path, text, state));
+        self.pending = Some((path, text, Box::new(build)));
         cx.notify();
     }
 
     /// Builds the note handed over by [`ReadingView::set_note_later`], if any.
     pub fn ensure_built(&mut self, cx: &mut Context<Self>) {
-        if let Some((path, text, state)) = self.pending.take() {
-            let model =
-                crate::reading::build_with(&path, &text, state.as_ref(), state.build_options());
+        if let Some((path, text, build)) = self.pending.take() {
+            let model = build(&path, &text);
             self.set_note(Some(path), model, cx);
         }
     }
@@ -1370,6 +1376,8 @@ impl ReadingView {
             copied: self.copied,
             on_copy,
             on_task,
+            on_link: on_link.clone(),
+            link_pressed: self.link_pressed.clone(),
             on_remove_item: Some(on_remove_item),
             on_menu: Some(on_menu),
             hover: Some(HoverHost {
@@ -1641,7 +1649,7 @@ impl BlockStyle {
 }
 
 /// Builds GPUI elements for model blocks, shared by the reading view and Live Preview.
-pub(crate) struct Renderer<'a> {
+pub struct Renderer<'a> {
     /// The metrics blocks are set in.
     style: BlockStyle,
     theme: &'a Theme,
@@ -1666,7 +1674,7 @@ pub(crate) struct Renderer<'a> {
 
 impl<'a> Renderer<'a> {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub fn new(
         theme: &'a Theme,
         text_system: Arc<WindowTextSystem>,
         available: f32,
@@ -1707,7 +1715,7 @@ impl<'a> Renderer<'a> {
     }
 
     /// The reading view's own settings and handlers.
-    pub(crate) fn with_reading_host(mut self, host: &'a ReadingHost) -> Renderer<'a> {
+    pub fn with_reading_host(mut self, host: &'a ReadingHost) -> Renderer<'a> {
         self.reading_host = Some(host);
         self
     }
@@ -1988,7 +1996,7 @@ impl<'a> Renderer<'a> {
         blocks.iter().map(|b| self.block(b, tight)).collect()
     }
 
-    pub(crate) fn block(&self, block: &RBlock, tight: bool) -> AnyElement {
+    pub fn block(&self, block: &RBlock, tight: bool) -> AnyElement {
         let t = self.theme;
         let base = t.base_font_size;
         let style = self.style;
@@ -3728,8 +3736,10 @@ impl<'a> Renderer<'a> {
         links: Vec<(Range<usize>, LinkTarget)>,
     ) -> AnyElement {
         let on_menu = self.reading_host.and_then(|h| h.on_menu.clone());
+        let on_link = self.reading_host.map(|h| h.on_link.clone());
+        let link_pressed = self.reading_host.map(|h| h.link_pressed.clone());
         let hover = self.reading_host.and_then(|h| h.hover.clone());
-        if (on_menu.is_none() && hover.is_none()) || links.is_empty() {
+        if (on_menu.is_none() && on_link.is_none() && hover.is_none()) || links.is_empty() {
             return child;
         }
         LinkMenu {
@@ -3738,6 +3748,8 @@ impl<'a> Renderer<'a> {
             text_id,
             links,
             on_menu,
+            on_link,
+            link_pressed,
             hover,
         }
         .into_any_element()
@@ -3952,6 +3964,8 @@ struct LinkMenu {
     text_id: usize,
     links: Vec<(Range<usize>, LinkTarget)>,
     on_menu: Option<MenuHandler>,
+    on_link: Option<LinkHandler>,
+    link_pressed: Option<Rc<std::cell::Cell<Option<(usize, usize)>>>>,
     hover: Option<HoverHost>,
 }
 
@@ -4048,6 +4062,65 @@ impl Element for LinkMenu {
                         (host.on_hover)(None, window, cx);
                     }
                     _ => {}
+                }
+            });
+        }
+        if let (Some(on_link), Some(pressed)) = (self.on_link.clone(), self.link_pressed.clone()) {
+            let (hitbox, layout, links, id, pressed) = (
+                hitbox.clone(),
+                layout.clone(),
+                links.clone(),
+                self.text_id,
+                pressed,
+            );
+            window.on_mouse_event({
+                let hitbox = hitbox.clone();
+                let layout = layout.clone();
+                let links = links.clone();
+                let pressed = pressed.clone();
+                move |event: &MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble
+                        || event.button != MouseButton::Left
+                        || !hitbox.is_hovered(window)
+                    {
+                        return;
+                    }
+                    let Some(index) = layout
+                        .index_for_position(event.position)
+                        .ok()
+                        .and_then(|at| links.iter().position(|(range, _)| range.contains(&at)))
+                    else {
+                        return;
+                    };
+                    pressed.set(Some((id, index)));
+                    // A link press belongs to navigation, not text selection.
+                    cx.stop_propagation();
+                }
+            });
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                    return;
+                }
+                let Some((pressed_id, pressed_index)) = pressed.get() else {
+                    return;
+                };
+                if pressed_id != id {
+                    return;
+                }
+                pressed.set(None);
+                cx.stop_propagation();
+                if !hitbox.is_hovered(window) {
+                    return;
+                }
+                let Some(released_index) = layout
+                    .index_for_position(event.position)
+                    .ok()
+                    .and_then(|at| links.iter().position(|(range, _)| range.contains(&at)))
+                else {
+                    return;
+                };
+                if pressed_index == released_index {
+                    on_link(links[released_index].1.clone(), window, cx);
                 }
             });
         }

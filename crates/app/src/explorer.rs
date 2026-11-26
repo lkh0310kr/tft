@@ -94,7 +94,7 @@ impl SortOrder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     /// Stable node identity when the row came from `VaultData`.
-    pub node: Option<tft_model::NodeId>,
+    pub node: Option<tft_domain::NodeId>,
     /// Collapse key; the path for the legacy path tree, `#id` for a conflict.
     pub key: String,
     /// Vault-relative path; empty for a conflicted node.
@@ -160,7 +160,7 @@ struct Folder {
 /// the vault itself.
 #[derive(Debug, Clone)]
 struct VaultEntry {
-    id: tft_model::NodeId,
+    id: tft_domain::NodeId,
     name: String,
     path: String,
     key: String,
@@ -235,11 +235,11 @@ impl FileTree {
         tree
     }
 
-    pub fn from_vault(data: &tft_model::VaultData) -> FileTree {
+    pub fn from_vault(data: &tft_domain::VaultData) -> FileTree {
         Self::from_vault_sorted(data, SortOrder::Alphabetical)
     }
 
-    pub fn from_vault_sorted(data: &tft_model::VaultData, sort: SortOrder) -> FileTree {
+    pub fn from_vault_sorted(data: &tft_domain::VaultData, sort: SortOrder) -> FileTree {
         let vault = data
             .children(data.root)
             .iter()
@@ -440,7 +440,7 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, sort: SortOrder, out: &m
     }
 }
 
-fn vault_entry(data: &tft_model::VaultData, id: tft_model::NodeId) -> Option<VaultEntry> {
+fn vault_entry(data: &tft_domain::VaultData, id: tft_domain::NodeId) -> Option<VaultEntry> {
     let node = data.node(id)?;
     let path = data.path(id).unwrap_or("").to_string();
     let key = if path.is_empty() {
@@ -449,8 +449,8 @@ fn vault_entry(data: &tft_model::VaultData, id: tft_model::NodeId) -> Option<Vau
         path.clone()
     };
     let (kind, mtime, ctime, is_folder) = match node.kind {
-        tft_model::NodeKind::Folder => (FileKind::Other, 0, 0, true),
-        tft_model::NodeKind::File(meta) => (meta.kind, meta.mtime, meta.ctime, false),
+        tft_domain::NodeKind::Folder => (FileKind::Other, 0, 0, true),
+        tft_domain::NodeKind::File(meta) => (meta.kind, meta.mtime, meta.ctime, false),
     };
     let children = data
         .children(id)
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn from_vault_keeps_empty_folders_and_marks_conflicts() {
-        use tft_model::vault::{BackendObjectId, FileMeta, NodeKind, VaultData};
+        use tft_domain::vault::{BackendObjectId, FileMeta, NodeKind, VaultData};
         let mut data = VaultData::new("test");
         data.upsert_object(
             BackendObjectId::Drive("empty".into()),

@@ -1891,16 +1891,16 @@ fn build(
         let (Some(meta), Some(text)) = (cache.file(path), texts.get(path)) else {
             return true;
         };
-        let (tags, blocks, sections, tasks) = inputs(meta, text);
+        let inputs = inputs(meta, text);
         search
             .matches(&SearchFile {
                 path,
                 content: text,
-                tags: &tags,
+                tags: &inputs.tags,
                 frontmatter: meta.frontmatter.as_ref(),
-                blocks: &blocks,
-                sections: &sections,
-                tasks: &tasks,
+                blocks: &inputs.blocks,
+                sections: &inputs.sections,
+                tasks: &inputs.tasks,
             })
             .is_some()
     };
@@ -2044,15 +2044,15 @@ fn build(
             let (Some(meta), Some(text)) = (cache.file(&node.id), texts.get(&node.id)) else {
                 continue;
             };
-            let (tags, blocks, sections, tasks) = inputs(meta, text);
+            let inputs = inputs(meta, text);
             let file = SearchFile {
                 path: &node.id,
                 content: text,
-                tags: &tags,
+                tags: &inputs.tags,
                 frontmatter: meta.frontmatter.as_ref(),
-                blocks: &blocks,
-                sections: &sections,
-                tasks: &tasks,
+                blocks: &inputs.blocks,
+                sections: &inputs.sections,
+                tasks: &inputs.tasks,
             };
             node.color = groups
                 .iter()

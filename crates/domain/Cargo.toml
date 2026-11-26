@@ -1,6 +1,6 @@
 [package]
-name = "model"
-description = "TFT's shared workspace model: tabs, groups, layout and view state, without UI or I/O"
+name = "domain"
+description = "TFT domain types and invariants for Markdown vault data"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 license.workspace = true
 publish.workspace = true
 [lib]
-name = "tft_model"
+name = "tft_domain"
 
 [dependencies]
 cache.workspace = true

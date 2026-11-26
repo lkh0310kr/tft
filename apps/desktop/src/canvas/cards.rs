@@ -73,6 +73,7 @@ pub struct Cards {
     canvas_path: Option<String>,
     on_link: Option<CardLinkHandler>,
     on_task: Option<CardTaskHandler>,
+    link_pressed: Rc<std::cell::Cell<Option<(usize, usize)>>>,
     entries: HashMap<String, Entry>,
     /// Counts `render` calls; entries remember the tick they were last seen.
     tick: u64,
@@ -590,6 +591,8 @@ impl Cards {
                     }
                 })
             },
+            on_link: on_link.clone(),
+            link_pressed: self.link_pressed.clone(),
             // A card has no path that writes a property back, so its pills
             // draw no remove control rather than a dead one.
             on_remove_item: None,

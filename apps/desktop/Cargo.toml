@@ -10,20 +10,29 @@ publish.workspace = true
 # Windows VERSIONINFO; a no-op elsewhere.
 build = "build.rs"
 
+[lib]
+name = "desktop"
+path = "src/lib.rs"
+
+[features]
+default = ["desktop-native"]
+desktop-native = ["dep:ureq", "dep:control", "dep:cli", "dep:notify"]
+
 [[bin]]
 name = "tft"
 path = "src/main.rs"
+required-features = ["desktop-native"]
 
 [dependencies]
-core.workspace = true
-model.workspace = true
+app = { workspace = true, features = ["gpui-ui"] }
+domain.workspace = true
 vault.workspace = true
 markdown.workspace = true
 highlight.workspace = true
 cache.workspace = true
 commands.workspace = true
-cli.workspace = true
-control.workspace = true
+cli = { workspace = true, optional = true }
+control = { workspace = true, optional = true }
 formats.workspace = true
 search.workspace = true
 suggest.workspace = true
@@ -46,20 +55,20 @@ indexmap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
-notify.workspace = true
+notify = { workspace = true, optional = true }
 regex.workspace = true
 serde_yaml.workspace = true
 chrono.workspace = true
 gpui.workspace = true
-gpui_platform.workspace = true
 http_client.workspace = true
-ureq.workspace = true
+ureq = { workspace = true, optional = true }
 futures.workspace = true
 # Already in the tree through gpui; a rendered PDF page is handed to gpui as
 # one of its `image` frames.
 image.workspace = true
 raw-window-handle.workspace = true
 smallvec.workspace = true
+web-time.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 x11rb.workspace = true
@@ -69,6 +78,15 @@ objc2.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gpui_platform.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Clipboard", "Navigator", "Window"] }
 
 [build-dependencies]
 embed-resource.workspace = true

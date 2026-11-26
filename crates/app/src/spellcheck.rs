@@ -44,6 +44,21 @@ pub struct Spelling {
 
 impl Global for Spelling {}
 
+impl Spelling {
+    /// A spellcheck-off global for hosts that do not load Desktop dictionaries.
+    pub fn disabled() -> Spelling {
+        Spelling {
+            enabled: false,
+            languages: Vec::new(),
+            speller: None,
+            missing: Vec::new(),
+            available: Vec::new(),
+            loading: false,
+            reload: false,
+        }
+    }
+}
+
 /// TFT's configuration folder, where the custom dictionary and the
 /// `dictionaries` folder live.
 fn config_dir() -> Option<PathBuf> {

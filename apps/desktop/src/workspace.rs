@@ -378,7 +378,7 @@ pub struct VaultState {
     vault: RwLock<Vault>,
     /// The same vault as a node graph; the desktop still reads `vault`, cache
     /// and texts by path while it moves over.
-    data: RwLock<tft_model::VaultData>,
+    data: RwLock<tft_app::VaultData>,
     cache: RwLock<MetadataCache>,
     /// Note text as indexed, for search and mentions.
     texts: RwLock<HashMap<String, Arc<String>>>,
@@ -474,7 +474,7 @@ impl VaultState {
             })
             .collect();
         let cache = MetadataCache::new(vault.link_resolver(), metas);
-        let mut data = tft_model::VaultData::new(vault.root().to_string_lossy());
+        let mut data = tft_app::VaultData::new(vault.root().to_string_lossy());
         vault.apply_snapshot(&mut data);
         let state = VaultState {
             root: vault.root().to_path_buf(),
@@ -597,7 +597,7 @@ impl VaultState {
         self.vault.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn data(&self) -> RwLockReadGuard<'_, tft_model::VaultData> {
+    pub fn data(&self) -> RwLockReadGuard<'_, tft_app::VaultData> {
         self.data.read().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -1025,7 +1025,7 @@ impl reading::EmbedSource for VaultState {
     }
 }
 
-pub use tft_model::ViewMode;
+pub use tft_app::ViewMode;
 
 /// What the main area paints: the mode asks for a view, the open file decides whether
 /// it can show one, and `Empty` stands in when it cannot.
@@ -1056,7 +1056,7 @@ impl MainView {
     }
 }
 
-use tft_model::LeftTab;
+use tft_app::{FileOperationRequest, LeftTab};
 
 /// How long a Notice stays: Obsidian fades its after a few seconds, exact duration unprobed.
 const NOTICE_LIFETIME: Duration = Duration::from_secs(5);
@@ -1205,16 +1205,7 @@ enum PendingOp {
 
 /// One place back and forward can land: the note and the state the view was left
 /// in, so back to a note read in Reading returns it in Reading.
-use tft_model::HistoryEntry;
-
-/// Puts `tab` right after the active one and returns its index.
-fn place_new_tab(tabs: &mut Vec<Tab>, active: usize, tab: Tab) -> usize {
-    let at = (active + 1).min(tabs.len());
-    tabs.insert(at, tab);
-    at
-}
-
-use tft_model::Tab;
+use tft_app::{place_new_tab, HistoryEntry, Tab};
 
 trait TabTitle {
     fn title(&self) -> SharedString;
@@ -1237,7 +1228,7 @@ enum ChooserPurpose {
     CanvasGroup,
 }
 
-use tft_model::SplitDirection;
+use tft_app::SplitDirection;
 
 /// The main area's shape: a tree of splits over the tab groups, the way
 /// `workspace.json`'s `main` records it. The root is always a split, even around a single group.
@@ -2792,7 +2783,7 @@ impl Workspace {
         let image_export = cx.new(ImageExport::new);
         let release_notes = cx.new(ReadingView::new);
         let reading = cx.new(ReadingView::new);
-        let editor = cx.new(|cx| Editor::new(window, cx));
+        let editor = cx.new(|cx| crate::new_editor(window, cx));
         let canvas = cx.new(CanvasView::new);
         let pdf = cx.new(PdfView::new);
         let graph = cx.new(GraphView::new);
@@ -2835,7 +2826,13 @@ impl Workspace {
                     ExplorerEvent::OpenInNewTab(path) => {
                         this.open_link_in_new_tab(path.clone(), None, cx)
                     }
-                    ExplorerEvent::NewNote { folder } => this.new_note(folder, window, cx),
+                    ExplorerEvent::NewNote { folder } => this.dispatch_file_operation(
+                        FileOperationRequest::CreateNote {
+                            parent: folder.clone(),
+                        },
+                        window,
+                        cx,
+                    ),
                     ExplorerEvent::NewFolder { parent } => {
                         this.start_new_folder(parent, window, cx)
                     }
@@ -3428,7 +3425,9 @@ impl Workspace {
         let build_options = state.build_options();
         editor.update(cx, |e, cx| {
             e.set_vault(Some(embed_source), build_options, cx);
-            e.set_suggest_vault(state.clone());
+            e.set_suggestion_source(Some(Arc::new(
+                crate::suggestion_source::DesktopSuggestionSource::new(state.clone()),
+            )));
         });
     }
 
@@ -5179,8 +5178,23 @@ impl Workspace {
                     // to reading, a fold sync or a state dump -- not on every open.
                     let build_ms = if self.mode.is_editing() && !debug_status() {
                         let (path, text, state) = (path.to_string(), text.clone(), state.clone());
-                        self.reading
-                            .update(cx, |r, cx| r.set_note_later(path, text, state, cx));
+                        self.reading.update(cx, |r, cx| {
+                            let build_options = state.build_options();
+                            let state = state.clone();
+                            r.set_note_later(
+                                path,
+                                text,
+                                move |path, text| {
+                                    crate::reading::build_with(
+                                        path,
+                                        text,
+                                        state.as_ref(),
+                                        build_options,
+                                    )
+                                },
+                                cx,
+                            )
+                        });
                         0.0
                     } else {
                         let started = Instant::now();
@@ -5828,7 +5842,7 @@ impl Workspace {
         let Ok(text) = std::fs::read_to_string(state.vault().absolute(&path)) else {
             return;
         };
-        let editor = cx.new(|cx| Editor::new(window, cx));
+        let editor = cx.new(|cx| crate::new_editor(window, cx));
         Self::give_editor_the_vault(&editor, &state, cx);
         Self::configure_editor(&editor, &state, cx);
         editor.update(cx, |e, cx| {
@@ -6459,6 +6473,17 @@ impl Workspace {
 
     /// Creates `Untitled.md` (or the next free number), opens it for editing and asks
     /// for its name, as Ctrl+N does.
+    fn dispatch_file_operation(
+        &mut self,
+        request: FileOperationRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match request {
+            FileOperationRequest::CreateNote { parent } => self.new_note(&parent, window, cx),
+        }
+    }
+
     fn new_note(&mut self, folder: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
@@ -7531,14 +7556,7 @@ impl Workspace {
         };
         // Obsidian's view header: 40 px, 12 px side padding, history arrows at 40 %
         // when unusable, the title in the small UI size.
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(HEADER_HEIGHT))
-            .px(px(12.))
-            .gap(px(8.))
-            .text_size(px(FONT_UI_SMALL))
+        crate::ui::workspace_view_header(theme)
             .child(
                 div()
                     .flex()
@@ -8428,7 +8446,7 @@ impl Workspace {
 
     /// A group of its own, with an editor and reading view like the others', not yet in the layout.
     fn new_group(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) -> u64 {
-        let editor = cx.new(|cx| Editor::new(window, cx));
+        let editor = cx.new(|cx| crate::new_editor(window, cx));
         let reading = cx.new(ReadingView::new);
         let canvas = cx.new(CanvasView::new);
         let pdf = cx.new(PdfView::new);
@@ -10163,175 +10181,147 @@ impl Workspace {
                         // Obsidian's tab: 34 px tall, 200 px wide, active in the content
                         // colour, its top corners as round as its feet, close button a
                         // 20 px disc. The inner box, not the tab, takes the hover wash.
-                        crate::hover_preview::hover_row(div().id(("tab", ix)), preview)
-                            .group("tab")
-                            .flex()
-                            .flex_row()
-                            .h(px(34.))
-                            .w(px(200.))
-                            .flex_shrink_0()
-                            .pt(px(1.))
-                            .px(px(4.))
-                            .pb(px(4.))
-                            .rounded_t(px(TAB_CURVE))
-                            .relative()
-                            .when(!active, |d| d.mb(px(1.)))
-                            // The divider on an inactive tab's right edge, as Obsidian's
-                            // `::after`: a 1 px line astride the edge, parting the strip from
-                            // the new-tab button after the last tab. Deferred so the next tab's
-                            // opaque background cannot clip its half.
-                            .when(divider, |d| {
-                                d.child(deferred(
-                                    div()
-                                        .absolute()
-                                        .right(px(-0.5))
-                                        .top(px(8.))
-                                        .w(px(1.))
-                                        .h(px(15.))
-                                        .bg(theme.tokens.tab_divider_color),
-                                ))
-                            })
-                            // The active tab's feet: concave curves carrying its bottom
-                            // corners into the header, painted late so a hover wash stays underneath.
-                            .when(active, |d| {
-                                d.child(deferred(tab_foot(true, theme)))
-                                    .child(deferred(tab_foot(false, theme)))
-                            })
-                            .cursor_pointer()
-                            .text_size(px(FONT_UI_SMALL))
-                            // `--tab-background-active` for the active tab, the strip colour
-                            // behind the rest; the title colour varies for the active tab of
-                            // the active group, of another group, and an inactive tab, which
-                            // Obsidian keeps muted.
-                            .bg(if active {
-                                theme.tokens.tab_background_active
-                            } else {
-                                theme.tokens.tab_container_background
-                            })
-                            .text_color(if active && group_active {
-                                theme.tokens.tab_text_color_focused_active_current
-                            } else if active {
-                                theme.tokens.tab_text_color_focused_active
-                            } else {
-                                theme.tokens.tab_text_color_focused
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_group(group, cx);
-                                this.activate_tab(ix, cx)
-                            }))
-                            // Picking the tab up: the ghost is its title, and the workspace
-                            // shows every group's zones.
-                            .on_drag(drag, move |drag, grab, window, cx| {
-                                let picked = drag.clone();
-                                this.update(cx, |w, cx| w.begin_tab_drag(picked, cx)).ok();
-                                let title = drag.title.clone();
-                                let source = window.window_handle();
-                                cx.new(|_| TabDragPreview {
-                                    title,
-                                    grab,
-                                    source,
-                                })
-                            })
-                            // Where the tab is, for the strip's drop bar; a dropped tab lands
-                            // there, else in front of it.
-                            .on_drag_move(cx.listener(
-                                move |this, e: &DragMoveEvent<TabDrag>, _, _| {
-                                    if this.dragging_tab {
-                                        this.tab_bounds.insert((group, ix), e.bounds);
-                                    }
-                                },
-                            ))
-                            .when(self.dragging_tab, |d| {
-                                d.child(measure_for_drag(
-                                    &self.drag_bounds,
-                                    DragPart::Tab(group, ix),
-                                ))
-                            })
-                            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                                this.drop_tab_at_bar(drag, group, Some(ix), cx)
-                            }))
-                            .on_mouse_down(
-                                gpui::MouseButton::Middle,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.activate_group(group, cx);
-                                    this.close_tab(ix, cx)
-                                }),
-                            )
-                            .on_mouse_down(
-                                gpui::MouseButton::Right,
-                                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    this.open_tab_menu(group, ix, e.position, cx)
-                                }),
-                            )
-                            // The inner box: title and close button, padded `0 3px 0 6px`,
-                            // washed on hover when the tab is not active.
-                            .child(
+                        crate::hover_preview::hover_row(
+                            crate::ui::workspace_tab(("tab", ix), active, group_active, theme),
+                            preview,
+                        )
+                        // The divider on an inactive tab's right edge, as Obsidian's
+                        // `::after`: a 1 px line astride the edge, parting the strip from
+                        // the new-tab button after the last tab. Deferred so the next tab's
+                        // opaque background cannot clip its half.
+                        .when(divider, |d| {
+                            d.child(deferred(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .h_full()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(2.))
-                                    .pl(px(6.))
-                                    .pr(px(3.))
-                                    .rounded(px(4.))
-                                    .when(!active, |d| {
-                                        d.group_hover("tab", |s| {
-                                            s.bg(theme.tokens.tab_inner_background_hover)
-                                        })
+                                    .absolute()
+                                    .right(px(-0.5))
+                                    .top(px(8.))
+                                    .w(px(1.))
+                                    .h(px(15.))
+                                    .bg(theme.tokens.tab_divider_color),
+                            ))
+                        })
+                        // The active tab's feet: concave curves carrying its bottom
+                        // corners into the header, painted late so a hover wash stays underneath.
+                        .when(active, |d| {
+                            d.child(deferred(tab_foot(true, theme)))
+                                .child(deferred(tab_foot(false, theme)))
+                        })
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.activate_group(group, cx);
+                            this.activate_tab(ix, cx)
+                        }))
+                        // Picking the tab up: the ghost is its title, and the workspace
+                        // shows every group's zones.
+                        .on_drag(drag, move |drag, grab, window, cx| {
+                            let picked = drag.clone();
+                            this.update(cx, |w, cx| w.begin_tab_drag(picked, cx)).ok();
+                            let title = drag.title.clone();
+                            let source = window.window_handle();
+                            cx.new(|_| TabDragPreview {
+                                title,
+                                grab,
+                                source,
+                            })
+                        })
+                        // Where the tab is, for the strip's drop bar; a dropped tab lands
+                        // there, else in front of it.
+                        .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, _| {
+                            if this.dragging_tab {
+                                this.tab_bounds.insert((group, ix), e.bounds);
+                            }
+                        }))
+                        .when(self.dragging_tab, |d| {
+                            d.child(measure_for_drag(
+                                &self.drag_bounds,
+                                DragPart::Tab(group, ix),
+                            ))
+                        })
+                        .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                            this.drop_tab_at_bar(drag, group, Some(ix), cx)
+                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Middle,
+                            cx.listener(move |this, _, _, cx| {
+                                this.activate_group(group, cx);
+                                this.close_tab(ix, cx)
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_tab_menu(group, ix, e.position, cx)
+                            }),
+                        )
+                        // The inner box: title and close button, padded `0 3px 0 6px`,
+                        // washed on hover when the tab is not active.
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.))
+                                .pl(px(6.))
+                                .pr(px(3.))
+                                .rounded(px(4.))
+                                .when(!active, |d| {
+                                    d.group_hover("tab", |s| {
+                                        s.bg(theme.tokens.tab_inner_background_hover)
                                     })
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .whitespace_nowrap()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .child(title),
-                                    )
-                                    // The close button: no wash of its own, its cross
-                                    // brightens from muted to normal under the pointer.
-                                    .child(
-                                        div()
-                                            .id(("tab-close", ix))
-                                            .group("tab-close")
-                                            .flex_shrink_0()
-                                            .w(px(20.))
-                                            .h(px(20.))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(8.))
-                                            // A pinned tab shows its pin in the close button's
-                                            // place; a click unpins.
-                                            .when(!active && !pinned, |d| {
-                                                d.invisible().group_hover("tab", |s| s.visible())
-                                            })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                this.activate_group(group, cx);
-                                                if pinned {
-                                                    this.activate_tab(ix, cx);
-                                                    this.toggle_pin(cx);
-                                                } else {
-                                                    this.close_tab(ix, cx);
-                                                }
-                                            }))
-                                            .child(
-                                                icon(
-                                                    if pinned { "pin" } else { "x" },
-                                                    14.,
-                                                    theme.tokens.tab_text_color_focused_active,
-                                                )
-                                                .group_hover("tab-close", |s| {
-                                                    s.text_color(theme.tokens.text_normal)
-                                                }),
-                                            ),
-                                    ),
-                            )
+                                })
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(title),
+                                )
+                                // The close button: no wash of its own, its cross
+                                // brightens from muted to normal under the pointer.
+                                .child(
+                                    div()
+                                        .id(("tab-close", ix))
+                                        .group("tab-close")
+                                        .flex_shrink_0()
+                                        .w(px(20.))
+                                        .h(px(20.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(8.))
+                                        // A pinned tab shows its pin in the close button's
+                                        // place; a click unpins.
+                                        .when(!active && !pinned, |d| {
+                                            d.invisible().group_hover("tab", |s| s.visible())
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.activate_group(group, cx);
+                                            if pinned {
+                                                this.activate_tab(ix, cx);
+                                                this.toggle_pin(cx);
+                                            } else {
+                                                this.close_tab(ix, cx);
+                                            }
+                                        }))
+                                        .child(
+                                            icon(
+                                                if pinned { "pin" } else { "x" },
+                                                14.,
+                                                theme.tokens.tab_text_color_focused_active,
+                                            )
+                                            .group_hover("tab-close", |s| {
+                                                s.text_color(theme.tokens.text_normal)
+                                            }),
+                                        ),
+                                ),
+                        )
                     }))
                     .child(
                         div()

@@ -506,13 +506,15 @@ impl CanvasView {
             .and_then(|n| n.text.clone())
             .unwrap_or_default();
         let name: SharedString = self.path.clone().unwrap_or_default().into();
-        let editor = cx.new(|cx| Editor::new(window, cx));
+        let editor = cx.new(|cx| crate::new_editor(window, cx));
         if let Some(state) = self.state.clone() {
             let embed_source: Arc<dyn crate::reading::EmbedSource + Send + Sync> = state.clone();
             let build_options = state.build_options();
             editor.update(cx, |e, cx| {
                 e.set_vault(Some(embed_source), build_options, cx);
-                e.set_suggest_vault(state.clone());
+                e.set_suggestion_source(Some(Arc::new(
+                    crate::suggestion_source::DesktopSuggestionSource::new(state.clone()),
+                )));
             });
         }
         editor.update(cx, |e, cx| {

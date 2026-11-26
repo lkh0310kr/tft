@@ -144,6 +144,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "app"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "audio",
+ "cache",
+ "canvas",
+ "commands",
+ "domain",
+ "export",
+ "formats",
+ "gpui",
+ "highlight",
+ "image",
+ "js-sys",
+ "lyon",
+ "markdown",
+ "math",
+ "mermaid",
+ "paste 0.7.0",
+ "pdf",
+ "search",
+ "serde",
+ "serde_json",
+ "spell",
+ "suggest",
+ "tempfile",
+ "text",
+ "vault",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
 name = "ar_archive_writer"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1173,26 +1209,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core"
-version = "0.7.0"
-dependencies = [
- "cache",
- "canvas",
- "commands",
- "formats",
- "highlight",
- "markdown",
- "math",
- "mermaid",
- "model",
- "paste 0.7.0",
- "pdf",
- "search",
- "suggest",
- "text",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1560,6 +1576,7 @@ version = "0.7.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "app",
  "async-channel 2.5.0",
  "audio",
  "cache",
@@ -1568,7 +1585,7 @@ dependencies = [
  "cli",
  "commands",
  "control",
- "core",
+ "domain",
  "embed-resource",
  "export",
  "formats",
@@ -1579,11 +1596,11 @@ dependencies = [
  "http_client",
  "image",
  "indexmap",
+ "js-sys",
  "lyon",
  "markdown",
  "math",
  "mermaid",
- "model",
  "notify",
  "objc2",
  "paste 0.7.0",
@@ -1602,6 +1619,10 @@ dependencies = [
  "text",
  "ureq",
  "vault",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
  "windows 0.61.3",
  "x11rb",
 ]
@@ -1697,10 +1718,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain"
+version = "0.7.0"
+dependencies = [
+ "cache",
+ "formats",
+ "serde_json",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+
+[[package]]
+name = "drive-web"
+version = "0.7.0"
+dependencies = [
+ "app",
+ "domain",
+ "formats",
+ "futures",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
 
 [[package]]
 name = "dtor"
@@ -4002,15 +4047,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "model"
-version = "0.7.0"
-dependencies = [
- "cache",
- "formats",
- "serde_json",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5828,6 +5864,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 name = "search"
 version = "0.7.0"
 dependencies = [
+ "cache",
  "regex",
  "serde_yaml",
 ]
@@ -7378,11 +7415,11 @@ name = "vault"
 version = "0.7.0"
 dependencies = [
  "cache",
+ "domain",
  "formats",
  "indexmap",
  "libc",
  "markdown",
- "model",
  "serde",
  "serde_json",
  "tempfile",
