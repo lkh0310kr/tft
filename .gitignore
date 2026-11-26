@@ -31,5 +31,6 @@ Untitled [0-9]*.base
 
 # Claude Code's local state: agent worktrees and per-machine settings.
 /.claude/
-
+.serena
+.workspace
 
