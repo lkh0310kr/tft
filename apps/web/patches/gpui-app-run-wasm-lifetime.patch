@@ -1,0 +1,17 @@
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index a9255898da..a87facc3a5 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -188,6 +188,12 @@ impl Application {
+             let cx = &mut *this.borrow_mut();
+             on_finish_launching(cx);
+         }));
++
++        // On the web, Platform::run schedules startup asynchronously and
++        // returns to JavaScript immediately. Keep AppCell alive for the page
++        // lifetime so browser callbacks retained by its windows remain valid.
++        #[cfg(target_family = "wasm")]
++        std::mem::forget(self);
+     }
+ 
+     /// Register a handler to be invoked when the platform instructs the application

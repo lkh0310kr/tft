@@ -1,114 +1,61 @@
-# TFT web — Phase 1/2
+# TFT GPUI Web application
 
-Leptos web shell over Google Drive. It signs in with `drive.file`, indexes a
-picked folder recursively, shows the file tree, renders Markdown, searches
-file names, edits a note in Source mode, and saves it back to Drive.
+The normal WASM build mounts `DriveApp` from this Web app. It collects public
+Google OAuth and Picker configuration, starts Google sign-in and folder picking
+from direct user clicks, indexes the chosen Drive Vault into `VaultData`, loads
+Markdown source, and exposes a Save to Drive action. The editor pane uses
+the local `WebWorkspace`, production `Editor`, shared `Theme`,
+`FileTree`, and `WorkspaceModel`.
 
-The Phase 0 diagnostics (list/read/write) are still in the Drive adapter; the
-UI now focuses on the read-only shell and source editing. If Picker still
-rejects the API key, paste a Drive folder ID into the fallback field.
+The `browser-test` feature mounts an in-memory fixture instead of making Google
+requests. `test_drive_shell.py` verifies the normal app screen, the production
+GPUI `TextInput`, browser-local config persistence, reload behavior and console
+errors. `test_drive_flow.py` stubs GIS, Picker, and Drive REST at the browser
+network boundary and exercises sign-in, folder selection, metadata/list/media
+reads, Markdown editing, and the Drive upload PATCH including its exact source
+body. `test_browser.py` verifies shared workspace and text editing actions,
+including reading preview/source switching and closing the active shared-model
+tab.
+The flow test does not use Google credentials or write a real Drive file; those
+checks still require a configured OAuth client, Picker API key, and test Vault.
 
-`drive.file` only grants a manually entered folder if that folder was already
-selected with the Picker (or created by the app) under the same grant. For an
-arbitrary existing vault, the Picker/API-key path must work first.
+The pinned GPUI revision has a Web application lifetime bug: `Application::run`
+returns while `WebPlatform::run` is still awaiting startup, then releases the
+last strong `AppCell` reference. RAF/ResizeObserver/input callbacks subsequently
+invoke dropped closures. The WASM-only patch is recorded in
+`patches/gpui-app-run-wasm-lifetime.patch`. `build-web.sh` and `check-wasm.sh`
+verify the exact pinned checkout and apply that patch idempotently before use.
+This remains a local dependency patch; production adoption still needs a
+maintained GPUI revision or fork.
 
-**Create test vault** creates an app-owned `TFT Test Vault` with a root note
-and a `Notes/Idea.md`, then indexes it. This exercises the tree, reading and
-editing without Picker or an API key, and is the fastest way to test the shell
-while the Picker key is being sorted out.
+## Build and browser checks
 
-## Setup
-
-1. Create a Google Cloud project and enable the **Google Drive API** and
-   **Google Picker API**.
-2. Configure the **OAuth consent screen** (External), add
-   `https://www.googleapis.com/auth/drive.file` under **Data Access**, and add
-   your Google account as a **Test user**. `drive.file` is not a sensitive
-   scope, so local Testing needs no verification.
-3. Create an **OAuth client ID → Web application**.
-4. Add `http://127.0.0.1:8080` to **Authorized JavaScript origins**.
-5. **API key is optional for the current Picker**: it authenticates with the
-   OAuth token. Leave `apiKey` empty first. If your project still asks for a
-   developer key, create one and restrict it to `http://127.0.0.1:8080/*` and the
-   Picker/Drive APIs.
-6. Fill `clientId` in `config.js` (empty values still load the UI).
-7. `cargo install trunk --locked` (once), then `trunk serve` in this folder.
-8. Open `http://127.0.0.1:8080` and run steps 1–5; the Phase 0 line shows
-   PASS for list/read/write.
-
-Both values are public OAuth/API identifiers; the API key should be restricted
-to the local origin and the Picker/Drive APIs.
-
-Rendered note HTML is sanitized in the browser before insertion: scripts,
-frames, forms and `on*` attributes are removed. The deployed build carries no
-API key, the OAuth token lives only in memory, and the vault stays in Drive.
-
-### Where each value comes from
-
-- **Client ID**: Google Cloud Console → **APIs & Services → Credentials** →
-  **Create credentials → OAuth client ID → Web application**. Add
-  `http://127.0.0.1:8080` as an authorized JavaScript origin. The same dialog
-  shows a **client secret**; the browser token flow does not use it, so never
-  put it in `config.js` or any frontend file.
-- **API key is optional**: the Picker authenticates with the OAuth token, so
-  leave `apiKey` empty unless you specifically need a developer key. If you do,
-  create one on the same **Credentials** page and set **Application
-  restrictions → HTTP referrers** to `http://127.0.0.1:8080/*`, then **API
-  restrictions** to Google Drive API and Google Picker API.
-- Enable **Google Drive API** and **Google Picker API** in **APIs & Services →
-  Library** before creating either credential.
-
-A `403 API key not valid` means the key restriction or enabled APIs do not match
-the page origin; `access_denied` means the Google account is not a test user on
-the OAuth consent screen.
-
-For Picker's `The API developer key is invalid`: **blank `apiKey` in
-`config.js` first**. The current Picker works with `setOAuthToken` alone, and
-`setDeveloperKey` is only added when `apiKey` is non-empty. If a key is truly
-required, it must come from the same project, have **Google Picker API** and
-**Google Drive API** in its API restrictions, and use HTTP-referrer (not IP)
-restrictions: `http://127.0.0.1:8080/*`.
-
-## UI direction
-
-The target is not a looser web clone: inside the browser viewport the shell must
-match the desktop's tokens, metrics and behavior (sidebar, tab strip, reading
-view, source/Live Preview editor, menus). Browser chrome outside the viewport is
-the only accepted difference. `tft_core::design` is the token source; the DOM
-widgets are a second implementation of the same specs.
-
-Current Step: token-driven light/dark shell, Files/Search docks, sortable tree,
-horizontal tabs, Markdown read with image embeds and sanitized raw HTML,
-PDF/image/audio/video viewers, Source-mode edit with save/autosave-on-blur,
-full-text search over indexed notes, Settings, Quick switcher (Ctrl+O),
-new/rename/delete, file context menu, last-vault restore, and an app-owned test
-vault.
-
-## Deploy
-
-```powershell
-.\deploy.ps1
-.\deploy.ps1 -WithApiKey   # only for a key restricted to the Vercel origin
+```sh
+rustup target add wasm32-unknown-unknown
+apps/web/check-wasm.sh
+apps/web/build-web.sh
+apps/web/serve-web.sh 8088
+TRUNK_BIN=/path/to/trunk python3 apps/web/tests/test_browser.py
+TRUNK_BIN=/path/to/trunk python3 apps/web/tests/test_drive_shell.py
+TRUNK_BIN=/path/to/trunk python3 apps/web/tests/test_drive_flow.py
 ```
 
-The script builds with Trunk, copies the security headers, blanks the API key
-in the public bundle by default, and deploys `dist` to `tft-web` production.
+All repository-owned Web builds go through `build-web.sh`; it applies the
+revision-checked GPUI patch and sets the required WASM bootstrap environment.
+`serve-web.sh` builds and serves the same `dist` bundle. Set `TRUNK_BIN` only
+when Trunk is not on `PATH`.
 
-The static deployment carries only the public OAuth client ID. The API key is
-left empty when Picker uses the OAuth token; if a restricted key is needed, add
-its Vercel origin to the key's HTTP-referrer list. The browser never receives a
-client secret.
+The test script builds with `browser-test`, serves the resulting bundle and
+runs Chrome/Playwright checks for the shared workspace, file-to-tab flow,
+buffer preservation across tab switches, Korean glyphs, double-click and drag
+selection, Cmd/Option cursor movement, source selection, clipboard copy/paste,
+undo/redo, ASCII typing, synthetic Hangul composition and page/console errors.
+It saves `/tmp/tft-shared-editor.png`. The composition case sends synthetic
+browser events; it does not validate a real Korean IME. Physical iOS Safari/PWA
+testing remains outstanding.
 
-Production origin: `https://tft-web-sage.vercel.app`. Add it to the OAuth
-client's **Authorized JavaScript origins** (and to the API key referrers if one
-is used). Vercel stores no vault data; files stay in the user's Drive.
-
-## What it answers
-
-- Does `drive.file` + Picker let the app list the picked folder's children?
-- Can it read a Markdown file with `files.get?alt=media` from the browser?
-- Can it create a file in that folder and read it back?
-- Does the Drive API allow these from a Vercel-style static origin?
-
-If folder children are not listed, the fallback is an app-created vault folder
-(or a broader scope), which changes the Phase 1 plan.
+`RUSTC_BOOTSTRAP=1` is needed because this GPUI dependency graph uses a nightly
+feature in `wasm_thread`. Drive credentials are entered in the GPUI setup
+screen and saved in the current browser's local storage. The OAuth JavaScript
+origin must be allowed in Google Cloud, with Drive API and Picker API enabled.
+To build and serve the normal app, run `apps/web/serve-web.sh 8088`.

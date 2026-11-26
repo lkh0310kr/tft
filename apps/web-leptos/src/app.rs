@@ -4,17 +4,17 @@ use crate::drive::{self, IndexedFile};
 use leptos::ev;
 use leptos::prelude::*;
 use std::collections::HashSet;
-use tft_core::explorer::{FileTree, SortOrder};
-use tft_core::formats::paths::folder_of;
-use tft_core::formats::FileKind;
-use tft_core::markdown::html::percent_decode;
-use tft_core::search::{fuzzy_match, Search, SearchFile};
-use tft_model::{LeftTab, NodeId, Tab, VaultData, ViewMode, WorkspaceModel};
+use tft_app::explorer::{FileTree, SortOrder};
+use tft_app::formats::paths::folder_of;
+use tft_app::formats::FileKind;
+use tft_app::markdown::html::percent_decode;
+use tft_app::search::{fuzzy_match, Search, SearchFile};
+use tft_app::{LeftTab, NodeId, Tab, VaultData, ViewMode, WorkspaceModel};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
 fn render_markdown(text: &str) -> String {
-    tft_core::markdown::render_html(&tft_core::markdown::parse(text))
+    tft_app::markdown::render_html(&tft_app::markdown::parse(text))
 }
 
 fn image_srcs(html: &str) -> Vec<String> {
@@ -100,9 +100,9 @@ async fn render_note_html(note: &str, text: &str, entries: &[IndexedFile]) -> St
 
 fn token_css(dark: bool) -> String {
     let t = if dark {
-        tft_core::design::dark()
+        tft_app::design::dark()
     } else {
-        tft_core::design::light()
+        tft_app::design::light()
     };
     format!(
         ":root{{color-scheme:{}}}{}",

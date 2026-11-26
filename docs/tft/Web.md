@@ -2,7 +2,10 @@
 tags:
   - tft/meta
 ---
-# Web
+# Legacy Leptos Web implementation
+
+This page describes the preserved Leptos shell at `apps/web-leptos`. The active
+GPUI Web implementation and its phases are tracked in [[Web-Rebuild]].
 
 The web app is a second shell over the same Rust core; it is not a reduced
 product. Inside the browser viewport it must match the desktop's tokens, metrics
@@ -42,9 +45,8 @@ difference.
 3. Canvas, graph, PDF, exports, offline cache.
 4. Vercel production, custom domain, OAuth origins, performance pass.
 
-The shared core stays framework-neutral. `apps/web` owns Leptos and the Drive
-adapter; no desktop feature is reimplemented in a second parser or editor model.
-The rebuild plan and its acceptance gates are in [[Web-Rebuild]].
+The shared application and domain crates stay framework-neutral. This legacy
+Leptos app is retained for reference; it is not the active GPUI Web renderer.
 
 ## Security
 
