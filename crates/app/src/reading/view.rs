@@ -20,8 +20,8 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId, InteractiveText, KeyBinding,
     LayoutId, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, Pixels, Point, SharedString, SharedUri, StrikethroughStyle, StyledText,
-    Task, TextLayout, TextRun, UnderlineStyle, Window, WindowTextSystem,
+    MouseUpEvent, ObjectFit, Pixels, Point, SharedString, SharedUri, StrikethroughStyle,
+    StyledText, Task, TextLayout, TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -563,8 +563,11 @@ pub type PropertyHandler = Rc<dyn Fn(PropertyAction, &mut Window, &mut App)>;
 /// Something the reader did to a table cell; only Live Preview turns these into edits.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableAction {
-    /// Start typing in the cell standing for these bytes.
-    Edit { span: Range<usize> },
+    /// Start typing in the cell standing for these bytes, at a rendered-text byte offset.
+    Edit {
+        span: Range<usize>,
+        cursor: Option<usize>,
+    },
     /// A press on a handle selects that line; `table` is named by its first cell's start.
     Select {
         table: usize,
@@ -1822,14 +1825,17 @@ impl<'a> Renderer<'a> {
 
     /// Column widths from content widths: padding added, slack shared when the note is narrow.
     fn fit_columns(&self, max: &[f32], min: &[f32]) -> Vec<f32> {
-        // Two pixels of slack: the wrapper measures advances slightly differently.
+        // Give short and empty columns enough room to edit comfortably. Two
+        // extra pixels account for the wrapper measuring advances slightly differently.
+        const MIN_COLUMN_WIDTH: f32 = 120.;
+        let minimum_content = MIN_COLUMN_WIDTH - 2. - TABLE_CELL_PADDING;
         let max: Vec<f32> = max
             .iter()
-            .map(|m| m.ceil() + 2. + TABLE_CELL_PADDING)
+            .map(|m| m.max(minimum_content).ceil() + 2. + TABLE_CELL_PADDING)
             .collect();
         let min: Vec<f32> = min
             .iter()
-            .map(|m| m.max(8.).ceil() + 2. + TABLE_CELL_PADDING)
+            .map(|m| m.max(minimum_content).ceil() + 2. + TABLE_CELL_PADDING)
             .collect();
         let sum_max: f32 = max.iter().sum();
         let sum_min: f32 = min.iter().sum();
@@ -2347,8 +2353,14 @@ impl<'a> Renderer<'a> {
                         .flex_shrink_0()
                         .px_2()
                         .py_1()
+                        .when(editing.is_some(), |d| d.min_h(px(font_size + 8.)))
                         // A line between columns only: the table's border is the last column's edge.
-                        .when(ix != last_col, |d| d.border_r_1())
+                        .when(
+                            ix != last_col
+                                && !selected
+                                    .is_some_and(|s| s.axis == TableAxis::Col && s.index == ix),
+                            |d| d.border_r_1(),
+                        )
                         .border_color(t.tokens.table_border_color)
                         .when(head, |d| {
                             d.font_weight(FontWeight::SEMIBOLD)
@@ -2360,8 +2372,65 @@ impl<'a> Renderer<'a> {
                             _ => d,
                         })
                         .map(|d| match editing {
-                            Some(field) => d.child(self.property_field(field, false, true)),
-                            None => d.child(self.rich(text)),
+                            Some(field) => {
+                                let drawn = d.child(self.property_field(field, false, true));
+                                match (host, span.clone()) {
+                                    (Some(host), Some(span)) => {
+                                        let value = RichText {
+                                            id: text.id,
+                                            text: field.text.clone(),
+                                            runs: Vec::new(),
+                                            links: Vec::new(),
+                                        };
+                                        let on_action = host.on_action.clone();
+                                        drawn.child(
+                                            div()
+                                                .absolute()
+                                                .left(px(8.))
+                                                .top(px(4.))
+                                                .opacity(0.)
+                                                .child(self.rich_at_with_table_click(
+                                                    &value,
+                                                    font_size,
+                                                    Some(Rc::new(move |cursor, window, cx| {
+                                                        on_action(
+                                                            TableAction::Edit {
+                                                                span: span.clone(),
+                                                                cursor: Some(cursor),
+                                                            },
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    })),
+                                                )),
+                                        )
+                                    }
+                                    _ => drawn,
+                                }
+                            }
+                            None => {
+                                let content = match (host, span.clone()) {
+                                    (Some(host), Some(span)) => {
+                                        let on_action = host.on_action.clone();
+                                        self.rich_at_with_table_click(
+                                            text,
+                                            font_size,
+                                            Some(Rc::new(move |cursor, window, cx| {
+                                                on_action(
+                                                    TableAction::Edit {
+                                                        span: span.clone(),
+                                                        cursor: Some(cursor),
+                                                    },
+                                                    window,
+                                                    cx,
+                                                );
+                                            })),
+                                        )
+                                    }
+                                    _ => self.rich(text),
+                                };
+                                d.child(content)
+                            }
                         });
                     if handles {
                         let id = table_id.unwrap_or(0);
@@ -2377,10 +2446,10 @@ impl<'a> Renderer<'a> {
                                 tint.a = 0.15;
                                 let mut over = div()
                                     .absolute()
-                                    .top(px(-1.))
-                                    .left(px(-1.))
-                                    .right(px(-1.))
-                                    .bottom(px(-1.))
+                                    .top(px(0.))
+                                    .left(px(0.))
+                                    .right(px(0.))
+                                    .bottom(px(0.))
                                     .bg(tint)
                                     .border_color(accent);
                                 over = match sel.axis {
@@ -2564,7 +2633,14 @@ impl<'a> Renderer<'a> {
                             drawn
                                 .cursor_text()
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    on_action(TableAction::Edit { span: span.clone() }, window, cx);
+                                    on_action(
+                                        TableAction::Edit {
+                                            span: span.clone(),
+                                            cursor: None,
+                                        },
+                                        window,
+                                        cx,
+                                    );
                                 })
                                 .into_any_element()
                         }
@@ -3134,34 +3210,69 @@ impl<'a> Renderer<'a> {
     /// The caret-bearing field a row shows while it is being typed into.
     fn property_field(&self, field: &Field, wide: bool, table_cell: bool) -> AnyElement {
         let t = self.theme;
-        let before = &field.text[..field.cursor];
-        let after = &field.text[field.cursor..];
+        let (before, selected, after) = if let Some(range) = &field.selection {
+            (
+                &field.text[..range.start],
+                Some(&field.text[range.clone()]),
+                &field.text[range.end..],
+            )
+        } else {
+            (
+                &field.text[..field.cursor],
+                None,
+                &field.text[field.cursor..],
+            )
+        };
         div()
             .flex()
             .flex_row()
             .items_center()
             .when(wide, |d| d.flex_1())
             .when(table_cell, |d| {
-                d.w_full()
-                    .flex_1()
-                    .border_1()
-                    .border_color(t.tokens.interactive_accent)
-                    .rounded(px(4.))
-                    .bg(t.tokens.background_primary)
+                // The cell keeps its normal padding and height. Overlay the
+                // input across that entire box so entering edit mode cannot
+                // shrink the clickable cell or inset the focus border.
+                d.absolute()
+                    .top(px(0.))
+                    .left(px(0.))
+                    .right(px(0.))
+                    .bottom(px(0.))
+                    .w_full()
+                    .h_full()
             })
             .min_w_0()
             .px_1()
             .rounded_sm()
             .bg(t.tokens.background_modifier_hover)
             .child(SharedString::from(before.to_string()))
-            .child(
-                div()
-                    .w(px(1.))
-                    .h(px(t.base_font_size))
-                    .bg(t.tokens.interactive_accent)
-                    .flex_shrink_0(),
-            )
+            .when_some(selected, |d, selected| {
+                d.child(
+                    div()
+                        .bg(t.tokens.interactive_accent)
+                        .child(SharedString::from(selected.to_string())),
+                )
+            })
+            .when(field.selection.is_none(), |d| {
+                d.child(
+                    div()
+                        .w(px(1.))
+                        .h(px(t.base_font_size))
+                        .bg(t.tokens.interactive_accent)
+                        .flex_shrink_0(),
+                )
+            })
             .child(SharedString::from(after.to_string()))
+            .when(table_cell, |d| {
+                d.border_1()
+                    .border_color(t.tokens.interactive_accent)
+                    .rounded(px(4.))
+                    // Border consumes 1 px on each side; compensate so the
+                    // text starts at exactly the same point as the plain cell.
+                    .pl(px(7.))
+                    .pr(px(7.))
+                    .pt(px(3.))
+                    .pb(px(3.))
+            })
             .into_any_element()
     }
 
@@ -3596,6 +3707,15 @@ impl<'a> Renderer<'a> {
     /// differently sized runs (`<sup>`, `<sub>`, `<small>`, footnote references)
     /// typeset over placeholders.
     pub(crate) fn rich_at(&self, text: &RichText, size: f32) -> AnyElement {
+        self.rich_at_with_table_click(text, size, None)
+    }
+
+    fn rich_at_with_table_click(
+        &self,
+        text: &RichText,
+        size: f32,
+        table_click: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    ) -> AnyElement {
         // Each `$x$` run in text style; an unparsable one stays its source in error red.
         let formulas: Vec<(Range<usize>, Arc<tft_math::Formula>)> = text
             .runs
@@ -3619,7 +3739,13 @@ impl<'a> Renderer<'a> {
         if formulas.is_empty() && scripts.is_empty() {
             let (interactive, layout) =
                 self.interactive_with_layout(text, &text.text, &text.runs, &text.links, None);
-            let element = self.selectable(interactive.into_any_element(), text, &layout, None);
+            let interactive = self.table_click_element(
+                interactive.into_any_element(),
+                &layout,
+                table_click,
+                None,
+            );
+            let element = self.selectable(interactive, text, &layout, None);
             return self.with_link_menu(element, layout, text.id, text.links.clone());
         }
         let t = self.theme;
@@ -3702,8 +3828,14 @@ impl<'a> Renderer<'a> {
             .collect();
         let (interactive, layout) =
             self.interactive_with_layout(text, &shaped, &runs, &links, Some(&remap));
-        let overlay = Overlay::new(
+        let interactive = self.table_click_element(
             interactive.into_any_element(),
+            &layout,
+            table_click,
+            Some(remap.clone()),
+        );
+        let overlay = Overlay::new(
+            interactive,
             layout.clone(),
             inlines,
             em,
@@ -3713,6 +3845,31 @@ impl<'a> Renderer<'a> {
         .into_any_element();
         let element = self.selectable(overlay, text, &layout, Some(remap));
         self.with_link_menu(element, layout, text.id, links)
+    }
+
+    fn table_click_element(
+        &self,
+        element: AnyElement,
+        layout: &TextLayout,
+        handler: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+        remap: Option<Rc<Remap>>,
+    ) -> AnyElement {
+        let Some(handler) = handler else {
+            return element;
+        };
+        let layout = layout.clone();
+        div()
+            .child(element)
+            .on_mouse_down(
+                MouseButton::Left,
+                move |event: &MouseDownEvent, window, cx| {
+                    let shaped = index_at(&layout, event.position);
+                    let cursor = remap.as_ref().map_or(shaped, |r| r.to_model(shaped));
+                    cx.stop_propagation();
+                    handler(cursor, window, cx);
+                },
+            )
+            .into_any_element()
     }
 
     fn measure_styled(&self, text: &str, size: f32, s: InlineStyle) -> f32 {

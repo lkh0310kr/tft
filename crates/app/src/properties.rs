@@ -298,6 +298,8 @@ pub struct Field {
     pub text: String,
     /// Byte offset of the caret in `text`.
     pub cursor: usize,
+    /// Selection range; `cursor` is the active end of the selection.
+    pub selection: Option<std::ops::Range<usize>>,
     /// The text the field opened with. A value nobody typed into writes
     /// nothing: re-reading it would serialize the value again, and
     /// `aliases: [One, "Two, with comma"]` does not survive that round trip.
@@ -317,6 +319,7 @@ impl Field {
             was: text.clone(),
             text,
             cursor,
+            selection: None,
             list: None,
         }
     }
@@ -331,6 +334,7 @@ impl Field {
     pub fn insert(&mut self, s: &str) {
         // A newline would break the row; property fields are single line.
         let clean: String = s.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+        self.delete_selection();
         self.text.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
     }
@@ -346,6 +350,10 @@ impl Field {
     /// See [`pill_step`] for the gesture itself.
     #[must_use]
     pub fn backspace(&mut self, selected: Option<usize>) -> PillStep {
+        if self.selection.is_some() {
+            self.delete_selection();
+            return PillStep::Text;
+        }
         match pill_step(self, selected) {
             PillStep::Text => {
                 if let Some(prev) = self.prev_boundary() {
@@ -359,6 +367,10 @@ impl Field {
     }
 
     pub fn delete(&mut self) {
+        if self.selection.is_some() {
+            self.delete_selection();
+            return;
+        }
         if let Some(next) = self.next_boundary() {
             self.text.replace_range(self.cursor..next, "");
         }
@@ -366,28 +378,129 @@ impl Field {
 
     /// Deletes from the start of this single-line field to its caret.
     pub fn delete_to_start(&mut self) {
+        self.selection = None;
         self.text.replace_range(0..self.cursor, "");
         self.cursor = 0;
     }
 
     pub fn left(&mut self) {
+        if let Some(range) = self.selection.take() {
+            self.cursor = range.start;
+            return;
+        }
         if let Some(prev) = self.prev_boundary() {
             self.cursor = prev;
         }
     }
 
     pub fn right(&mut self) {
+        if let Some(range) = self.selection.take() {
+            self.cursor = range.end;
+            return;
+        }
         if let Some(next) = self.next_boundary() {
             self.cursor = next;
         }
     }
 
     pub fn home(&mut self) {
+        self.selection = None;
         self.cursor = 0;
     }
 
     pub fn end(&mut self) {
+        self.selection = None;
         self.cursor = self.text.len();
+    }
+
+    pub fn select_all(&mut self) {
+        self.cursor = self.text.len();
+        self.selection = (!self.text.is_empty()).then_some(0..self.text.len());
+    }
+
+    pub fn move_word(&mut self, right: bool, extend: bool) {
+        let anchor = self
+            .selection
+            .as_ref()
+            .map(|range| {
+                if self.cursor == range.start {
+                    range.end
+                } else {
+                    range.start
+                }
+            })
+            .unwrap_or(self.cursor);
+        let from = if !extend && self.selection.is_some() {
+            if right {
+                self.selection.as_ref().unwrap().end
+            } else {
+                self.selection.as_ref().unwrap().start
+            }
+        } else {
+            self.cursor
+        };
+        let target = self.word_boundary(from, right);
+        if extend {
+            let start = anchor.min(target);
+            let end = anchor.max(target);
+            self.selection = (start != end).then_some(start..end);
+        } else {
+            self.selection = None;
+        }
+        self.cursor = target;
+    }
+
+    pub fn delete_word(&mut self, right: bool) {
+        if self.selection.is_some() {
+            self.delete_selection();
+            return;
+        }
+        let target = self.word_boundary(self.cursor, right);
+        let range = self.cursor.min(target)..self.cursor.max(target);
+        self.text.replace_range(range.clone(), "");
+        self.cursor = range.start;
+    }
+
+    fn word_boundary(&self, from: usize, right: bool) -> usize {
+        let chars: Vec<(usize, char)> = self.text.char_indices().collect();
+        if right {
+            let mut i = chars.partition_point(|(at, _)| *at < from);
+            while i < chars.len() && chars[i].1.is_whitespace() {
+                i += 1;
+            }
+            if i < chars.len() {
+                let word = chars[i].1.is_alphanumeric() || chars[i].1 == '_';
+                while i < chars.len()
+                    && !chars[i].1.is_whitespace()
+                    && ((chars[i].1.is_alphanumeric() || chars[i].1 == '_') == word)
+                {
+                    i += 1;
+                }
+            }
+            chars.get(i).map(|(at, _)| *at).unwrap_or(self.text.len())
+        } else {
+            let mut i = chars.partition_point(|(at, _)| *at < from);
+            while i > 0 && chars[i - 1].1.is_whitespace() {
+                i -= 1;
+            }
+            if i > 0 {
+                let word = chars[i - 1].1.is_alphanumeric() || chars[i - 1].1 == '_';
+                while i > 0
+                    && !chars[i - 1].1.is_whitespace()
+                    && ((chars[i - 1].1.is_alphanumeric() || chars[i - 1].1 == '_') == word)
+                {
+                    i -= 1;
+                }
+            }
+            chars.get(i).map(|(at, _)| *at).unwrap_or(0)
+        }
+    }
+
+    fn delete_selection(&mut self) {
+        if let Some(range) = self.selection.take() {
+            self.text.replace_range(range.clone(), "");
+            self.cursor = range.start;
+        }
     }
 
     fn prev_boundary(&self) -> Option<usize> {
@@ -435,6 +548,7 @@ impl Field {
             was: text.clone(),
             text,
             cursor,
+            selection: None,
             list: Some(ListEdit { items, index }),
         }
     }

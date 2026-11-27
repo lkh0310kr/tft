@@ -2,6 +2,7 @@
 //! a drawing list of paths and anchored text runs. Results are cached.
 
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex, OnceLock};
 
 mod fonts;
@@ -14,6 +15,12 @@ use limu::scene::{Align, Canvas, Path, Pen, Point, Run, Step, TextPaint};
 
 /// The size text is set at in a diagram with no size of its own: Pele's 16.
 pub const FONT_SIZE: f64 = 16.0;
+
+/// Keep hostile or accidental fences from consuming unbounded parser/layout
+/// work before the UI can show a useful error.
+const MAX_SOURCE_BYTES: usize = 256 * 1024;
+const MAX_ITEMS: usize = 20_000;
+const MAX_DIMENSION: f64 = 100_000.0;
 
 /// A colour, straight (not premultiplied) alpha.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -296,6 +303,15 @@ pub fn is_mermaid(language: Option<&str>) -> bool {
 /// Lays out `source` for a note that gives it `max_width` pixels and draws
 /// it in `theme`. Cached on all three.
 pub fn render(source: &str, max_width: f64, theme: &Theme) -> Result {
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(MermaidError {
+            message: format!(
+                "Mermaid diagram is too large ({} bytes; limit is {}).",
+                source.len(),
+                MAX_SOURCE_BYTES
+            ),
+        });
+    }
     // A width is a layout input only through which side of a breakpoint or
     // a diagram's natural width it falls on; whole pixels are plenty.
     let width = if max_width.is_finite() {
@@ -310,7 +326,14 @@ pub fn render(source: &str, max_width: f64, theme: &Theme) -> Result {
     if let Some(hit) = cache.lock().unwrap().get(&key) {
         return hit.clone();
     }
-    let out = render_uncached(source, width, theme);
+    // limu is an in-process parser/layout engine. Keep a malformed or
+    // unsupported diagram from unwinding through GPUI and terminating TFT.
+    let out = match catch_unwind(AssertUnwindSafe(|| render_uncached(source, width, theme))) {
+        Ok(result) => result,
+        Err(payload) => Err(MermaidError {
+            message: format!("Mermaid renderer failed safely: {}", panic_message(payload)),
+        }),
+    };
     let mut map = cache.lock().unwrap();
     if map.len() > 512 {
         map.clear();
@@ -336,6 +359,18 @@ fn render_uncached(source: &str, max_width: f64, theme: &Theme) -> Result {
     let scene = scene.map_err(|e| MermaidError {
         message: e.to_string(),
     })?;
+    if !scene.width.is_finite()
+        || !scene.height.is_finite()
+        || scene.width < 0.0
+        || scene.height < 0.0
+        || scene.width > MAX_DIMENSION
+        || scene.height > MAX_DIMENSION
+        || scene.items.len() > MAX_ITEMS
+    {
+        return Err(MermaidError {
+            message: "Mermaid diagram exceeds the safe layout limits.".to_string(),
+        });
+    }
     let look = Look::new(theme.limu());
     let mut list = List::default();
     limu::scene::draw(&scene, &look, &mut list);
@@ -345,6 +380,16 @@ fn render_uncached(source: &str, max_width: f64, theme: &Theme) -> Result {
         height: scene.height,
         shapes: list.shapes,
     }))
+}
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "unexpected parser failure".to_string()
+    }
 }
 
 /// A limu canvas that records what it is asked to draw.

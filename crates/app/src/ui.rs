@@ -2,9 +2,9 @@
 //! menu frames, prompts and pickers.
 
 use crate::assets::icon;
-use crate::theme::{FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE, Theme};
+use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
 use gpui::{
-    AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window, div, prelude::*, px,
+    div, prelude::*, px, AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window,
 };
 
 /// The tab shell shared by the native workspace and the GPUI Web composition.
@@ -437,13 +437,10 @@ pub fn palette_panel(id: impl Into<ElementId>, width: f32, theme: &Theme) -> Sta
     modal_panel(id, width, theme).overflow_hidden()
 }
 
-/// Search field slot and divider shared by both palettes.
-pub fn palette_search_slot(theme: &Theme) -> Div {
-    div()
-        .w_full()
-        .p(px(8.))
-        .border_b_1()
-        .border_color(theme.tokens.background_modifier_border)
+/// Search field slot shared by both palettes: the field sits flat on the
+/// panel, with no divider under it.
+pub fn palette_search_slot(_theme: &Theme) -> Div {
+    div().w_full().px(px(6.)).py(px(4.))
 }
 
 /// Inset list region shared by both palettes.
@@ -470,39 +467,6 @@ pub fn palette_result_row(
         .cursor_pointer()
         .when(selected, |d| d.bg(theme.tokens.background_modifier_hover))
         .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-}
-
-/// Bottom action bar shared by both palettes. Labels are hints; owners keep
-/// action behavior in their own view model.
-pub fn palette_footer(
-    primary: &'static str,
-    primary_key: &'static str,
-    secondary: &'static str,
-    secondary_key: &'static str,
-    theme: &Theme,
-) -> Div {
-    let hint = |label: &'static str, key: &'static str| {
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.))
-            .child(div().text_color(theme.tokens.text_normal).child(label))
-            .child(div().text_color(theme.tokens.text_muted).child(key))
-    };
-    div()
-        .w_full()
-        .h(px(36.))
-        .px(px(10.))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .border_t_1()
-        .border_color(theme.tokens.background_modifier_border)
-        .text_size(px(12.))
-        .child(hint(primary, primary_key))
-        .child(hint(secondary, secondary_key))
 }
 
 /// A dialog's panel: the secondary background in a border-coloured frame,

@@ -10,24 +10,24 @@ use crate::math::SpaceWidths;
 use crate::preview::{self, DisplayLine, Piece};
 use crate::properties::{self, Field, Part, PillStep, Target};
 use crate::reading::model::{
-    BuildOptions, EmbedSource, InlineStyle, LinkTarget, RBlock, Script, Widget, build_widgets,
+    build_widgets, BuildOptions, EmbedSource, InlineStyle, LinkTarget, RBlock, Script, Widget,
 };
 use crate::reading::view::{LinkHandler, Renderer, ToggleHandler};
 use crate::reading::view::{PropertiesHost, PropertyAction};
 use crate::reading::view::{TableAction, TableAxis, TableDragView, TableHost, TableSelect};
-use crate::rtl::{RtlRows, rtl_row_origin, rtl_rows};
+use crate::rtl::{rtl_row_origin, rtl_rows, RtlRows};
 use crate::suggest::{Anchor, SuggestState};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
 use gpui::{
-    AnyElement, App, AvailableSpace, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase,
-    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
-    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
-    InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle,
-    Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle,
-    Window, WindowTextSystem, WrappedLine, actions, div, fill, point, prelude::*, px, relative,
-    size,
+    actions, div, fill, point, prelude::*, px, relative, size, AnyElement, App, AvailableSpace,
+    Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font,
+    FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
+    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Style, Subscription, Task,
+    TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WindowTextSystem,
+    WrappedLine,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -36,13 +36,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tft_formats::config::PropertyTypes;
 use tft_formats::properties::{self as props, PropertiesInDocument};
-use tft_markdown::highlight::{HighlightKind, HighlightSpan, flatten, highlight_lines};
+use tft_markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
 use tft_markdown::{Block, BlockKind, Document};
 use tft_suggest::{self as suggest, Accept, Item as SuggestionItem, Suggestion, Triggered};
 use tft_text::table::{self, TableCommand};
 use tft_text::{
-    BlockInsert, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax, Sel, TextBuffer, autopair,
-    find, shifted, wrap,
+    autopair, find, shifted, wrap, BlockInsert, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax,
+    Sel, TextBuffer,
 };
 use web_time::Instant;
 
@@ -1193,7 +1193,8 @@ impl Editor {
 
     /// Whether `cmd` would do anything at the cursor; the palette lists a table command only then.
     pub fn table_command_applies(&self, cmd: TableCommand) -> bool {
-        self.buf.table_command_applies(cmd)
+        self.table_command_target(cmd)
+            .is_some_and(|at| table::applies(&at, cmd))
     }
 
     /// Runs one of Obsidian's table commands at the cursor, rewriting the whole table.
@@ -1203,12 +1204,97 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.commit_table_field(Some(window), cx, None);
-        if !self.buf.table_command(cmd) {
+        let selected = self.table_select.filter(|s| match s.axis {
+            TableAxis::Row => matches!(
+                cmd,
+                TableCommand::RowBefore
+                    | TableCommand::RowAfter
+                    | TableCommand::RowUp
+                    | TableCommand::RowDown
+                    | TableCommand::RowCopy
+                    | TableCommand::RowDelete
+            ),
+            TableAxis::Col => matches!(
+                cmd,
+                TableCommand::ColBefore
+                    | TableCommand::ColAfter
+                    | TableCommand::ColLeft
+                    | TableCommand::ColRight
+                    | TableCommand::ColCopy
+                    | TableCommand::ColDelete
+                    | TableCommand::AlignLeft
+                    | TableCommand::AlignCenter
+                    | TableCommand::AlignRight
+            ),
+        });
+        let keep = selected.map(|s| s.table..s.table);
+        let moved = self.commit_table_field(Some(window), cx, keep);
+        let at = if let Some(selected) = selected {
+            let offset = moved.map_or(selected.table, |range| range.start);
+            table::table_at(self.buf.text(), offset).map(|mut at| {
+                match selected.axis {
+                    TableAxis::Row => at.row = selected.index.min(at.table.rows.len() - 1),
+                    TableAxis::Col => at.col = selected.index.min(at.table.columns() - 1),
+                }
+                at
+            })
+        } else {
+            table::table_at(self.buf.text(), self.buf.head)
+        };
+        let changed = if let Some(at) = at {
+            if let Some(edit) = table::apply(&at, cmd) {
+                self.edit(at.span, &edit.text, EditKind::Other, Some(window), cx);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !changed {
             return false;
         }
-        self.after_edit(Some(window), cx);
+        self.table_select = None;
+        self.table_drag = None;
         true
+    }
+
+    fn table_command_target(&self, cmd: TableCommand) -> Option<table::TableAt> {
+        let Some(selected) = self.table_select else {
+            return table::table_at(self.buf.text(), self.buf.head);
+        };
+        let row_command = matches!(
+            cmd,
+            TableCommand::RowBefore
+                | TableCommand::RowAfter
+                | TableCommand::RowUp
+                | TableCommand::RowDown
+                | TableCommand::RowCopy
+                | TableCommand::RowDelete
+        );
+        let col_command = matches!(
+            cmd,
+            TableCommand::ColBefore
+                | TableCommand::ColAfter
+                | TableCommand::ColLeft
+                | TableCommand::ColRight
+                | TableCommand::ColCopy
+                | TableCommand::ColDelete
+                | TableCommand::AlignLeft
+                | TableCommand::AlignCenter
+                | TableCommand::AlignRight
+        );
+        let matches_selection = (row_command && selected.axis == TableAxis::Row)
+            || (col_command && selected.axis == TableAxis::Col);
+        if !matches_selection {
+            return table::table_at(self.buf.text(), self.buf.head);
+        }
+        let mut at = table::table_at(self.buf.text(), selected.table)?;
+        match selected.axis {
+            TableAxis::Row => at.row = selected.index.min(at.table.rows.len() - 1),
+            TableAxis::Col => at.col = selected.index.min(at.table.columns() - 1),
+        }
+        Some(at)
     }
 
     /// `editor:insert-table`: an empty two-by-two table after the cursor's line.
@@ -1428,7 +1514,7 @@ impl Editor {
         else {
             return;
         };
-        self.table_action(TableAction::Edit { span }, window, cx);
+        self.table_action(TableAction::Edit { span, cursor: None }, window, cx);
     }
 
     /// One step of the self-driving stress run: types, breaks lines, pages and jumps, only faster.
@@ -2042,7 +2128,7 @@ impl Editor {
 
     /// Whether `line` runs right to left: its first strong character, else the line above's, else setting.
     fn line_is_rtl(&self, line: usize) -> bool {
-        use tft_text::bidi::{Direction, line_direction};
+        use tft_text::bidi::{line_direction, Direction};
         if line >= self.line_count() {
             return false;
         }
@@ -2610,7 +2696,11 @@ impl Editor {
             let left = left != this.line_is_rtl(this.buf.cursor_at(s.head).line);
             let target = if !select && !s.is_empty() {
                 // A plain arrow collapses the selection to its edge.
-                if left { sel.start } else { sel.end }
+                if left {
+                    sel.start
+                } else {
+                    sel.end
+                }
             } else if left {
                 this.buf.prev_char_boundary(s.head)
             } else {
@@ -2909,6 +2999,11 @@ impl Editor {
         if self.title_apply(cx, |f| f.step_word(false, false)) {
             return;
         }
+        if let Some(field) = self.active_field() {
+            field.move_word(false, false);
+            cx.notify();
+            return;
+        }
         self.move_each(false, window, cx, |this, _, s| {
             (this.buf.word_left(s.head), None)
         });
@@ -2916,6 +3011,11 @@ impl Editor {
 
     fn move_word_right(&mut self, _: &MoveWordRight, window: &mut Window, cx: &mut Context<Self>) {
         if self.title_apply(cx, |f| f.step_word(true, false)) {
+            return;
+        }
+        if let Some(field) = self.active_field() {
+            field.move_word(true, false);
+            cx.notify();
             return;
         }
         self.move_each(false, window, cx, |this, _, s| {
@@ -2932,6 +3032,11 @@ impl Editor {
         if self.title_apply(cx, |f| f.step_word(false, true)) {
             return;
         }
+        if let Some(field) = self.active_field() {
+            field.move_word(false, true);
+            cx.notify();
+            return;
+        }
         self.move_each(true, window, cx, |this, _, s| {
             (this.buf.word_left(s.head), None)
         });
@@ -2944,6 +3049,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         if self.title_apply(cx, |f| f.step_word(true, true)) {
+            return;
+        }
+        if let Some(field) = self.active_field() {
+            field.move_word(true, true);
+            cx.notify();
             return;
         }
         self.move_each(true, window, cx, |this, _, s| {
@@ -3063,9 +3173,10 @@ impl Editor {
         if self.title_apply(cx, |f| f.select_all()) {
             return;
         }
-        // An open field has a caret and no selection, so Ctrl+A must not select the document
-        // behind it, which the next Ctrl+X would delete.
-        if self.field_kind().is_some() {
+        // Select inside an open property/table field, never the document behind it.
+        if let Some(field) = self.active_field() {
+            field.select_all();
+            cx.notify();
             return;
         }
         self.buf.select_all();
@@ -3086,6 +3197,9 @@ impl Editor {
         if let Some(f) = self.active_field() {
             let _ = f.backspace(None);
             cx.notify();
+            return;
+        }
+        if self.delete_table_selection(window, cx) {
             return;
         }
         let kind = if self.selection().is_empty() {
@@ -3112,12 +3226,33 @@ impl Editor {
             cx.notify();
             return;
         }
+        if self.delete_table_selection(window, cx) {
+            return;
+        }
         let kind = if self.selection().is_empty() {
             EditKind::Delete
         } else {
             EditKind::Other
         };
         self.delete_all(|buf, at| at..buf.next_char_boundary(at), kind, window, cx);
+    }
+
+    /// Backspace/Delete remove the selected table line, rather than text at
+    /// the document caret. A failed last-row/last-column delete keeps the
+    /// selection and does not fall through to deleting unrelated text.
+    fn delete_table_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(selected) = self.table_select else {
+            return false;
+        };
+        self.table_command(
+            match selected.axis {
+                TableAxis::Row => TableCommand::RowDelete,
+                TableAxis::Col => TableCommand::ColDelete,
+            },
+            window,
+            cx,
+        );
+        true
     }
 
     fn delete_to_line_start(
@@ -3154,6 +3289,11 @@ impl Editor {
         if self.title_apply(cx, |f| f.delete_word_back()) {
             return;
         }
+        if let Some(field) = self.active_field() {
+            field.delete_word(false);
+            cx.notify();
+            return;
+        }
         self.delete_all(|buf, at| buf.word_left(at)..at, EditKind::Other, window, cx);
     }
 
@@ -3163,6 +3303,11 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(field) = self.active_field() {
+            field.delete_word(true);
+            cx.notify();
+            return;
+        }
         self.delete_all(
             |buf, at| at..buf.word_right(at),
             EditKind::Other,
@@ -4672,8 +4817,8 @@ impl Editor {
     /// A click on a table cell: commit whatever field was open, then take
     /// this cell's text into a new one.
     fn table_action(&mut self, action: TableAction, window: &mut Window, cx: &mut Context<Self>) {
-        let span = match action {
-            TableAction::Edit { span } => span,
+        let (span, cursor) = match action {
+            TableAction::Edit { span, cursor } => (span, cursor),
             // A press on a handle selects its line. The open cell is written
             // first so the bytes the move works on are current.
             TableAction::Select { table, axis, index } => {
@@ -4716,7 +4861,7 @@ impl Editor {
         let span = self
             .commit_table_field(Some(window), cx, Some(span.clone()))
             .unwrap_or(span);
-        self.open_cell(span, cx);
+        self.open_cell_at(span, cursor, cx);
     }
 
     /// Drops the row or column `from` of the table starting at `table` into
@@ -4816,6 +4961,10 @@ impl Editor {
     /// (the `inline-title-and-table-entry` probe of 2026-11-08). The cell
     /// then opens on its padded bytes.
     fn open_cell(&mut self, span: Range<usize>, cx: &mut Context<Self>) {
+        self.open_cell_at(span, None, cx);
+    }
+
+    fn open_cell_at(&mut self, span: Range<usize>, cursor: Option<usize>, cx: &mut Context<Self>) {
         let span = self.repad_table_at(span, cx);
         let Some(was) = self.buf.text().get(span.clone()).map(str::to_string) else {
             return;
@@ -4826,11 +4975,15 @@ impl Editor {
         self.buf.collapse_cursors();
         self.buf.head = span.start;
         self.buf.anchor = span.start;
-        self.table_field = Some(CellEdit {
-            span,
-            field: Field::new(Target::New, Part::Value, was.clone()),
-            was,
-        });
+        let mut field = Field::new(Target::New, Part::Value, was.clone());
+        if let Some(mut cursor) = cursor {
+            cursor = cursor.min(was.len());
+            while !was.is_char_boundary(cursor) {
+                cursor -= 1;
+            }
+            field.cursor = cursor;
+        }
+        self.table_field = Some(CellEdit { span, field, was });
         cx.notify();
     }
 
@@ -5328,15 +5481,11 @@ impl Editor {
         self.buf.marked = None;
         if !event.modifiers.alt && !event.modifiers.shift {
             let line = self.buf.cursor_at(at).line;
-            if let Some(marker) = self
-                .highlights
-                .get(line)
-                .and_then(|spans| {
-                    spans
-                        .iter()
-                        .find(|span| span.kind == HighlightKind::ThematicBreak)
-                })
-            {
+            if let Some(marker) = self.highlights.get(line).and_then(|spans| {
+                spans
+                    .iter()
+                    .find(|span| span.kind == HighlightKind::ThematicBreak)
+            }) {
                 let start = self.buf.line_starts()[line] + marker.range.start;
                 let end = self.buf.line_starts()[line] + marker.range.end;
                 self.buf.collapse_cursors();
@@ -8029,7 +8178,10 @@ mod tests {
         let mut at = 0;
         for run in &clipped {
             at += run.len;
-            assert!(text.is_char_boundary(at), "a run ended inside a glyph at {at}");
+            assert!(
+                text.is_char_boundary(at),
+                "a run ended inside a glyph at {at}"
+            );
         }
         assert_eq!(at, text.len());
     }
@@ -8275,7 +8427,7 @@ mod tests {
 
     #[test]
     fn the_editor_reserves_the_reading_views_header_above_line_zero() {
-        use crate::reading::view::{HEADER_TOP, header_height};
+        use crate::reading::view::{header_height, HEADER_TOP};
         // The reading view's header row and the editor's lead above line 0
         // come from the same function, so a mode switch leaves the first
         // line where it was: 24 px of padding, and under `showInlineTitle`

@@ -9,7 +9,7 @@ use gpui::{Action, App, ClipboardItem, Context, Entity, Focusable, Global, KeyBi
 use std::path::PathBuf;
 use std::sync::Arc;
 use tft_app::SplitDirection;
-use tft_commands::{CommandRegistry, hotkey_label, keystroke};
+use tft_commands::{hotkey_label, keystroke, CommandRegistry};
 use tft_formats::config::Hotkey;
 use tft_formats::FileKind;
 use tft_text::table::TableCommand;
@@ -619,6 +619,13 @@ impl Workspace {
                 self.left_dock.visible = !self.left_dock.visible;
                 if !self.left_dock.visible {
                     self.leave_search_field(window, cx);
+                    // Hiding the dock unmounts the tree, and a row holding the
+                    // keyboard would then reach nothing -- not even the hotkey
+                    // that brings the dock back. A breadcrumb click leaves the
+                    // keyboard on a row, so hand it to the main area first.
+                    if self.explorer.focus_handle(cx).is_focused(window) {
+                        self.focus_main(window, cx);
+                    }
                 }
                 cx.notify();
             }
@@ -954,8 +961,6 @@ impl Workspace {
             .is_some_and(|path| FileKind::from_path(path) == FileKind::Markdown)
     }
 
-
-
     pub(super) fn open_graph_action(
         &mut self,
         _: &OpenGraph,
@@ -991,7 +996,6 @@ pub(super) fn full_path_text(absolute: PathBuf) -> String {
 /// The vault's own trash folder, at the vault root, where
 /// `trashOption: "local"` moves a deleted file.
 pub(super) const TRASH_FOLDER: &str = ".trash";
-
 
 /// Obsidian's notice for a path that is not there, as "Show trash" showed
 /// it with no `.trash` folder: the absolute path in curly quotes.

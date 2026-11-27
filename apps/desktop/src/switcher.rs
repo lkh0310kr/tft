@@ -138,15 +138,17 @@ fn rank(candidates: &[Candidate], recent: &[String], query: &str) -> Vec<Item> {
             let by_path = if c.kind == ItemKind::File {
                 // A folder-only hit remains useful, but stays below every
                 // filename match. Compress its score to preserve ordering.
-                label_match(query, &c.path).map(|(score, _)| {
-                    (10_000.0 + 9_000.0 * score / (score + 50_000.0), Vec::new())
-                })
+                label_match(query, &c.path)
+                    .map(|(score, _)| (10_000.0 + 9_000.0 * score / (score + 50_000.0), Vec::new()))
             } else {
                 None
             };
             let best = match (by_label, by_path) {
                 (Some((label_score, ranges)), Some((path_score, _)))
-                    if label_score >= path_score => Some((label_score, ranges)),
+                    if label_score >= path_score =>
+                {
+                    Some((label_score, ranges))
+                }
                 // A path match highlights nothing in the basename.
                 (_, Some((path_score, ranges))) => Some((path_score, ranges)),
                 (Some((label_score, ranges)), None) => Some((label_score, ranges)),
@@ -208,7 +210,13 @@ impl Focusable for QuickSwitcher {
 
 impl QuickSwitcher {
     pub fn new(cx: &mut Context<Self>) -> QuickSwitcher {
-        let input = cx.new(|cx| TextInput::new("Find or create a note…", cx));
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("Find or create a note…", cx);
+            input.set_flat(true);
+            input.set_pad_left(px(4.));
+            input.set_pad_right(px(4.));
+            input
+        });
         let subscriptions =
             vec![
                 cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
@@ -388,11 +396,7 @@ impl QuickSwitcher {
                             this.selected = ix;
                             this.open_selected(cx);
                         }))
-                        .child(crate::assets::icon(
-                            file_icon,
-                            16.,
-                            theme.tokens.text_muted,
-                        ))
+                        .child(crate::assets::icon(file_icon, 16., theme.tokens.text_muted))
                         .child(
                             div()
                                 .flex_1()
@@ -436,31 +440,28 @@ impl Render for QuickSwitcher {
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(SwitcherEvent::Close)))
             .child(crate::ui::palette_search_slot(&theme).child(self.input.clone()))
             .when(count > 0, |d| {
-                d.child(crate::ui::palette_results_slot().child(
-                    uniform_list("switcher-list", count, cx.processor(Self::render_rows))
-                        .track_scroll(&self.scroll)
-                        .h(px(rows)),
-                ))
+                d.child(
+                    crate::ui::palette_results_slot().child(
+                        uniform_list("switcher-list", count, cx.processor(Self::render_rows))
+                            .track_scroll(&self.scroll)
+                            .h(px(rows)),
+                    ),
+                )
             })
             .when(count == 0 && !self.input.read(cx).text().is_empty(), |d| {
-                d.child(crate::ui::palette_results_slot().child(
-                    div()
-                        .h(px(38.))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.))
-                        .text_color(theme.tokens.text_muted)
-                        .child("No matching files."),
-                ))
+                d.child(
+                    crate::ui::palette_results_slot().child(
+                        div()
+                            .h(px(38.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.))
+                            .text_color(theme.tokens.text_muted)
+                            .child("No matching files."),
+                    ),
+                )
             })
-            .child(crate::ui::palette_footer(
-                "Open",
-                "↵",
-                "Actions…",
-                if cfg!(target_os = "macos") { "⌘⇧A" } else { "Ctrl+Shift+A" },
-                &theme,
-            ))
     }
 }
 

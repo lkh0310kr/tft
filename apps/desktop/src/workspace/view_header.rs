@@ -3,9 +3,9 @@
 use super::release_notes;
 use super::render::GroupView;
 use super::tab_strip::TabTitle;
-use super::{OpenGraph, ToggleMode, ViewMode, Workspace, leaf_title};
+use super::{leaf_title, OpenGraph, ToggleMode, ViewMode, Workspace};
 use crate::theme::Theme;
-use gpui::{Context, div, prelude::*, px};
+use gpui::{div, prelude::*, px, Context};
 
 /// Whether the view header carries the mode switch: no on an empty tab (nothing to
 /// read or edit), and the graph has its own toggle.
@@ -106,7 +106,12 @@ impl Workspace {
                     .overflow_hidden()
                     // `.view-header-title-parent`: `--text-muted`.
                     .when(!crumbs.is_empty(), |d| {
-                        d.child(breadcrumb)
+                        d.child(breadcrumb).child(
+                            div()
+                                .px(px(2.))
+                                .text_color(theme.tokens.text_muted)
+                                .child("/"),
+                        )
                     })
                     .child(self.render_title(view, title.clone(), title_color, theme, cx)),
             )

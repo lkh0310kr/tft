@@ -4,10 +4,10 @@
 use crate::keymap;
 use crate::theme::Theme;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, DispatchPhase, ElementInputHandler, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, ShapedLine, SharedString, TextAlign, UTF16Selection, Window, actions,
-    canvas, div, fill, point, prelude::*, px, size,
+    actions, canvas, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
+    DispatchPhase, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ShapedLine,
+    SharedString, TextAlign, UTF16Selection, Window,
 };
 use std::ops::Range;
 
@@ -30,6 +30,8 @@ actions!(
         Backspace,
         Delete,
         DeleteWordBackward,
+        DeleteToLineStart,
+        DeleteToLineEnd,
         Copy,
         Cut,
         Paste,
@@ -88,6 +90,9 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-left", Home, ctx),
         KeyBinding::new("cmd-right", End, ctx),
+        // macOS's native line deletion in an input.
+        KeyBinding::new("cmd-backspace", DeleteToLineStart, ctx),
+        KeyBinding::new("cmd-delete", DeleteToLineEnd, ctx),
         KeyBinding::new("cmd-shift-left", SelectHome, ctx),
         KeyBinding::new("cmd-shift-right", SelectEnd, ctx),
     ]);
@@ -159,7 +164,11 @@ impl Content {
     fn step(&mut self, forward: bool, extend: bool) {
         let to = if !extend && self.has_selection() {
             let sel = self.selection();
-            if forward { sel.end } else { sel.start }
+            if forward {
+                sel.end
+            } else {
+                sel.start
+            }
         } else if forward {
             self.next_boundary(self.cursor)
         } else {
@@ -285,6 +294,9 @@ pub struct TextInput {
     height: Pixels,
     layout: Layout,
     dragging: bool,
+    /// Drawn without its own background, border or rounding: a palette puts
+    /// the field directly on the panel.
+    flat: bool,
 }
 
 impl EventEmitter<InputEvent> for TextInput {}
@@ -307,6 +319,7 @@ impl TextInput {
             height: px(30.),
             layout: Layout::default(),
             dragging: false,
+            flat: false,
         }
     }
 
@@ -316,6 +329,12 @@ impl TextInput {
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
+    }
+
+    /// Drops the field's background, border and rounding, for a palette
+    /// that draws the input on its own panel.
+    pub fn set_flat(&mut self, flat: bool) {
+        self.flat = flat;
     }
 
     /// Room at the left for a glyph the owner draws over the field, the
@@ -454,6 +473,38 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         let range = self.content.delete_word_range();
+        if !range.is_empty() {
+            self.replace(range, "", cx);
+        }
+    }
+
+    /// macOS's Cmd+Backspace: the selection, or everything before the caret.
+    /// A single-line field has one line, so that is the field's start.
+    fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selection = self.content.selection();
+        let range = if !selection.is_empty() {
+            selection
+        } else {
+            0..self.content.cursor
+        };
+        if !range.is_empty() {
+            self.replace(range, "", cx);
+        }
+    }
+
+    /// macOS's Cmd+Delete: the selection, or everything after the caret.
+    fn delete_to_line_end(&mut self, _: &DeleteToLineEnd, _: &mut Window, cx: &mut Context<Self>) {
+        let selection = self.content.selection();
+        let range = if !selection.is_empty() {
+            selection
+        } else {
+            self.content.cursor..self.content.text.len()
+        };
         if !range.is_empty() {
             self.replace(range, "", cx);
         }
@@ -696,6 +747,7 @@ impl Render for TextInput {
         let theme = cx.global::<Theme>().clone();
         let entity = cx.entity();
         let paint_entity = entity.clone();
+        let focused = self.focus_handle.is_focused(_window);
         div()
             .key_context("TextInput")
             .track_focus(&self.focus_handle)
@@ -715,6 +767,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_backward))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::delete_to_line_end))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
@@ -730,16 +784,19 @@ impl Render for TextInput {
             .pr(self.pad_right)
             .flex()
             .items_center()
-            .rounded_md()
             // An input: `--background-modifier-form-field` inside
             // `--background-modifier-border`, `-focus` while focused (probe
-            // of 2026-11-02, `settings.search-input`).
-            .bg(theme.tokens.background_modifier_form_field)
-            .border_1()
-            .border_color(if self.focus_handle.is_focused(_window) {
-                theme.tokens.background_modifier_border_focus
-            } else {
-                theme.tokens.background_modifier_border
+            // of 2026-11-02, `settings.search-input`). A palette's field is
+            // flat and sits on the panel.
+            .when(!self.flat, |d| {
+                d.rounded_md()
+                    .bg(theme.tokens.background_modifier_form_field)
+                    .border_1()
+                    .border_color(if focused {
+                        theme.tokens.background_modifier_border_focus
+                    } else {
+                        theme.tokens.background_modifier_border
+                    })
             })
             .text_size(px(13.))
             .text_color(theme.tokens.text_normal)

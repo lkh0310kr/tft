@@ -44,7 +44,13 @@ impl Focusable for CommandPalette {
 
 impl CommandPalette {
     pub fn new(cx: &mut Context<Self>) -> CommandPalette {
-        let input = cx.new(|cx| TextInput::new("Type a command…", cx));
+        let input = cx.new(|cx| {
+            let mut input = TextInput::new("Type a command…", cx);
+            input.set_flat(true);
+            input.set_pad_left(px(4.));
+            input.set_pad_right(px(4.));
+            input
+        });
         let subscriptions =
             vec![
                 cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
@@ -165,11 +171,6 @@ impl CommandPalette {
                             this.selected = ix;
                             this.run_selected(cx);
                         }))
-                        .child(crate::assets::icon(
-                            "terminal",
-                            16.,
-                            theme.tokens.text_muted,
-                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -206,31 +207,28 @@ impl Render for CommandPalette {
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Close)))
             .child(crate::ui::palette_search_slot(&theme).child(self.input.clone()))
             .when(count > 0, |d| {
-                d.child(crate::ui::palette_results_slot().child(
-                    uniform_list("palette-list", count, cx.processor(Self::render_rows))
-                        .track_scroll(&self.scroll)
-                        .h(px(rows)),
-                ))
+                d.child(
+                    crate::ui::palette_results_slot().child(
+                        uniform_list("palette-list", count, cx.processor(Self::render_rows))
+                            .track_scroll(&self.scroll)
+                            .h(px(rows)),
+                    ),
+                )
             })
             .when(count == 0 && !self.input.read(cx).text().is_empty(), |d| {
-                d.child(crate::ui::palette_results_slot().child(
-                    div()
-                        .h(px(38.))
-                        .px(px(10.))
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.))
-                        .text_color(theme.tokens.text_muted)
-                        .child("No matching commands."),
-                ))
+                d.child(
+                    crate::ui::palette_results_slot().child(
+                        div()
+                            .h(px(38.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .text_size(px(12.))
+                            .text_color(theme.tokens.text_muted)
+                            .child("No matching commands."),
+                    ),
+                )
             })
-            .child(crate::ui::palette_footer(
-                "Run",
-                "↵",
-                "Actions…",
-                if cfg!(target_os = "macos") { "⌘⇧A" } else { "Ctrl+Shift+A" },
-                &theme,
-            ))
     }
 }
 
