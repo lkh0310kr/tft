@@ -1,11 +1,11 @@
 //! Desktop notices, modal overlays, menu focus handoff, and pane visibility.
 
-use super::notices::{NOTICE_LIFETIME, NoticeAction};
+use super::notices::{NoticeAction, NOTICE_LIFETIME};
 use super::{ChooserPurpose, PendingOp, Workspace};
 use crate::prompt::PromptSpec;
 use crate::search::CopyEntry;
 use crate::theme::Theme;
-use gpui::{Context, Focusable, Pixels, SharedString, Window, div, prelude::*, px};
+use gpui::{div, prelude::*, px, Context, Focusable, Pixels, SharedString, Window};
 
 /// The modal overlay currently shown by the Desktop workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

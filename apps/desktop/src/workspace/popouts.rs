@@ -2,18 +2,18 @@
 
 use super::tab_drag::TabDrag;
 use super::tab_strip::TabTitle;
-use super::window_frame::{WindowFrame, popout_margin, window_controls};
+use super::window_frame::{popout_margin, window_controls, WindowFrame};
 use super::window_node::{WindowBounds, WindowNode};
 use super::{
-    Layout, Modal, SplitDirection, Tab, ViewMode, Workspace, desktop_split, leaf_title,
-    popout_outer_size, popout_placement,
+    desktop_split, leaf_title, popout_outer_size, popout_placement, Layout, Modal, SplitDirection,
+    Tab, ViewMode, Workspace,
 };
 use crate::popout::PopoutWindow;
 use crate::reading::LinkTarget;
 use crate::theme::Theme;
 use gpui::{
-    App, Context, Decorations, DragMoveEvent, Pixels, SharedString, Tiling, Window, div,
-    prelude::*, px,
+    div, prelude::*, px, App, Context, Decorations, DragMoveEvent, Pixels, SharedString, Tiling,
+    Window,
 };
 use serde_json::Value;
 

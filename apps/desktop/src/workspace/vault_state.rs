@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Instant;
-use tft_cache::{CachedMetadata, LinkFormat, MetadataCache, index_markdown};
-use tft_formats::FileKind;
+use tft_cache::{index_markdown, CachedMetadata, LinkFormat, MetadataCache};
 use tft_formats::config::{
     AppConfig, AppearanceConfig, PagePreviewConfig, PropertyTypes, SwitcherConfig,
 };
+use tft_formats::FileKind;
 use tft_search::ExcludeFilters;
 use tft_vault::{FileChange, TrashOption, Vault, VaultError};
 

@@ -1,12 +1,12 @@
 //! Workspace adapter methods exposed to the Desktop control socket.
 
-use super::empty_tab::{EmptyAction, empty_tab_actions};
+use super::empty_tab::{empty_tab_actions, EmptyAction};
 use super::file_menu;
 use super::tab_strip::TabTitle;
-use super::{Commands, MainView, Modal, PendingOp, Tab, ViewMode, Workspace, context_names};
+use super::{context_names, Commands, MainView, Modal, PendingOp, Tab, ViewMode, Workspace};
 use crate::explorer::kind_name;
 use gpui::{App, Context, Window};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::path::{Component, Path, PathBuf};
 use tft_commands::keystroke;
 
@@ -127,12 +127,11 @@ impl Workspace {
         let mut vault = Map::new();
         vault.insert(
             "root".into(),
-            json!(
-                self.vault_session
-                    .state
-                    .as_ref()
-                    .map(|s| s.root.display().to_string())
-            ),
+            json!(self
+                .vault_session
+                .state
+                .as_ref()
+                .map(|s| s.root.display().to_string())),
         );
         vault.insert("name".into(), json!(self.vault_session.name.to_string()));
         vault.insert("loaded".into(), json!(self.vault_session.state.is_some()));
@@ -149,12 +148,11 @@ impl Workspace {
         file.insert("path".into(), json!(self.active_group_state.current));
         file.insert(
             "detached".into(),
-            json!(
-                self.active_group_state
-                    .detached
-                    .as_ref()
-                    .map(|n| n.to_string())
-            ),
+            json!(self
+                .active_group_state
+                .detached
+                .as_ref()
+                .map(|n| n.to_string())),
         );
         file.insert("mode".into(), json!(self.active_group_state.mode.as_str()));
         file.insert(

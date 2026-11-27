@@ -1,7 +1,7 @@
 //! Tab drag payloads, hit-test geometry, drop indicators, and drag previews.
 
-use crate::theme::{FONT_UI_SMALL, Theme};
-use gpui::{Context, CursorStyle, Pixels, SharedString, Window, canvas, div, prelude::*, px};
+use crate::theme::{Theme, FONT_UI_SMALL};
+use gpui::{canvas, div, prelude::*, px, Context, CursorStyle, Pixels, SharedString, Window};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

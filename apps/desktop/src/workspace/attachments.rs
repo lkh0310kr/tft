@@ -9,8 +9,8 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 use tft_formats::FileKind;
-use tft_vault::FileChange;
 use tft_vault::attachments as att;
+use tft_vault::FileChange;
 
 pub(super) mod download_modal;
 

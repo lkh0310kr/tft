@@ -1,7 +1,7 @@
 //! Desktop file operations and their prompt/UI coordination against the local VaultState.
 
 use super::vault_state::RenameOutcome;
-use super::{VaultState, ViewMode, Workspace, basename, plural};
+use super::{basename, plural, VaultState, ViewMode, Workspace};
 use crate::canvas::CanvasView;
 use crate::explorer;
 use crate::prompt::Prompt;
@@ -12,7 +12,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tft_app::FileOperationRequest;
-use tft_formats::{FileKind, validate_renamed_file};
+use tft_formats::{validate_renamed_file, FileKind};
 use tft_vault::TrashOption;
 
 /// Obsidian's "Update links" modal, to the drag pass that caught it

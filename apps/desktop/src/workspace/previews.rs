@@ -178,6 +178,13 @@ impl Workspace {
         let Some(pending) = &self.preview_state.model.pending else {
             return;
         };
+        // Mod-click in the Files tree opens a tab. Do not let the Files
+        // source's usual Mod-to-preview gesture race with that action.
+        if pending.source == crate::hover_preview::Source::Files
+            && crate::hover_preview::mod_held(&self.preview_state.model.modifiers)
+        {
+            return;
+        }
         if !state.core_plugin_enabled("page-preview") {
             return;
         }

@@ -58,7 +58,7 @@ use layout_docks::default_dock_json;
 use layout_docks::dock_current_view;
 use layout_read::{LayoutSpec, read_floating, read_main};
 #[cfg(test)]
-pub(crate) use layout_read::{WindowSpec, tab_from_leaf};
+pub(crate) use layout_read::{tab_from_leaf, WindowSpec};
 use layout_write::{
     desktop_split, floating_json, set_dimension, split_node_json, tabs_node_json, window_node_json,
 };
@@ -71,9 +71,9 @@ mod command_palette;
 mod commands;
 mod control_api;
 use commands::CommandState;
+pub use commands::{Commands, bind_keys};
 #[allow(unused_imports)]
 pub(super) use commands::{ACTIVE_FILE_ONLY, EDITOR_ONLY, RUNNABLE};
-pub use commands::{Commands, bind_keys};
 mod dock_controls;
 use dock_controls::DockState;
 mod document_folds;
@@ -91,7 +91,9 @@ mod overlays;
 use overlays::{Modal, OverlayState};
 mod popouts;
 mod previews;
+mod radial_tree_explorer;
 use previews::PreviewState;
+use radial_tree_explorer::RadialTreeState;
 mod quick_switcher;
 mod render;
 mod render_requests;
@@ -112,7 +114,7 @@ mod view_header;
 mod window_node;
 #[cfg(test)]
 use commands::{
-    TRASH_FOLDER, any_markdown_leaf, full_path_text, missing_file_notice, vault_folder_name,
+    any_markdown_leaf, full_path_text, missing_file_notice, vault_folder_name, TRASH_FOLDER,
 };
 #[cfg(test)]
 use control_api::vault_path_in;
@@ -248,6 +250,8 @@ pub struct Workspace {
     /// The workspace-wide graph view. Only one graph leaf is painted at a time;
     /// other groups show a placeholder, so this is intentionally not group-owned.
     graph: Entity<GraphView>,
+    /// Optional folder hierarchy view; the force GraphView remains independent.
+    radial_tree: RadialTreeState,
     /// Live tabs and navigation state for the active group, separate from its stashed snapshot.
     active_group_state: ActiveGroupState,
     /// Tabs eligible for session-local close/restore, with the history limit enforced.
@@ -370,6 +374,7 @@ impl Workspace {
             fold_store: FoldStoreState::default(),
             left_dock: DockState::new(cx.focus_handle(), SIDEBAR_WIDTH as f64),
             graph,
+            radial_tree: RadialTreeState::default(),
             active_group_state: ActiveGroupState::new(ViewMode::Reading),
             closed_tab_history: groups::ClosedTabHistory::default(),
             groups,

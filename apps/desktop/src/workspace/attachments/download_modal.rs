@@ -8,10 +8,10 @@
 
 use crate::theme::Theme;
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, ObjectFit, SharedUri, Window,
-    actions, div, img, prelude::*, px,
+    actions, div, img, prelude::*, px, App, Context, EventEmitter, FocusHandle, Focusable,
+    KeyBinding, ObjectFit, SharedUri, Window,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 actions!(download_attachments, [Dismiss]);
 

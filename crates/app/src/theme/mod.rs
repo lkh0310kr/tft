@@ -37,9 +37,8 @@ pub type CanvasColors = crate::design::CanvasColors<Hsla>;
 
 impl Global for Theme {}
 
-/// The fixed tokens of one base theme. The accent is TFT's own brick
-/// (`#a6462c`/`#d55227`), already resolved into these
-/// values by the probe.
+/// The fixed tokens of one base theme, including TFT's primary accent
+/// (`#0083f0`).
 fn base_tokens(dark: bool) -> &'static Tokens {
     static DARK: OnceLock<Tokens> = OnceLock::new();
     static LIGHT: OnceLock<Tokens> = OnceLock::new();

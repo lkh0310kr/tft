@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tft_commands::CommandRegistry;
-use tft_formats::FileKind;
 use tft_formats::properties::PropertiesInDocument;
+use tft_formats::FileKind;
 use tft_vault::FileChange;
 
 /// System color scheme plus the Desktop-only session override for `system` themes.
@@ -378,29 +378,27 @@ impl Workspace {
             }
         };
         self.vault_session.watcher = Some(watcher);
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(300))
-                    .await;
-                if this.upgrade().is_none() {
-                    break;
-                }
-                let mut paths: Vec<PathBuf> = Vec::new();
-                while let Ok(p) = rx.try_recv() {
-                    paths.push(p);
-                }
-                if paths.is_empty() {
-                    continue;
-                }
-                paths.sort();
-                paths.dedup();
-                if this
-                    .update(cx, |ws, cx| ws.files_changed(paths, cx))
-                    .is_err()
-                {
-                    break;
-                }
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            if this.upgrade().is_none() {
+                break;
+            }
+            let mut paths: Vec<PathBuf> = Vec::new();
+            while let Ok(p) = rx.try_recv() {
+                paths.push(p);
+            }
+            if paths.is_empty() {
+                continue;
+            }
+            paths.sort();
+            paths.dedup();
+            if this
+                .update(cx, |ws, cx| ws.files_changed(paths, cx))
+                .is_err()
+            {
+                break;
             }
         })
         .detach();

@@ -2,8 +2,8 @@
 
 use super::Workspace;
 use crate::assets::icon;
-use crate::theme::{FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE, Theme};
-use gpui::{Context, Window, anchored, deferred, div, point, prelude::*, px};
+use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
+use gpui::{anchored, deferred, div, point, prelude::*, px, Context, Window};
 use std::path::{Path, PathBuf};
 use tft_vault::VaultRegistry;
 

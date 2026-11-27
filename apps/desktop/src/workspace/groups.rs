@@ -3,16 +3,16 @@
 use super::layout_write::desktop_split_node;
 use super::subscriptions::view_subscriptions;
 use super::{
-    Layout, SplitDirection, VaultState, ViewMode, Workspace, leaf_id, release_notes, set_dimension,
+    leaf_id, release_notes, set_dimension, Layout, SplitDirection, VaultState, ViewMode, Workspace,
 };
 use crate::canvas::CanvasView;
 use crate::editor::Editor;
 use crate::pdf::view::PdfView;
 use crate::reading::{self, ReadingView};
 use gpui::{AppContext, Context, Entity, SharedString, Window};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
-use tft_app::{HistoryEntry, Tab, place_new_tab};
+use tft_app::{place_new_tab, HistoryEntry, Tab};
 use tft_markdown::Subpath;
 
 /// How many closed tabs `workspace:undo-close-pane` can bring back.

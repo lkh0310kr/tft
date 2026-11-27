@@ -1,9 +1,9 @@
 //! Pure encoding of tab and layout state into persisted workspace JSON.
 
-use super::ViewMode;
 use super::release_notes;
 use super::tab_strip::TabTitle;
-use serde_json::{Map, Value, json};
+use super::ViewMode;
+use serde_json::{json, Map, Value};
 use tft_app::{Layout, SplitDirection, Tab};
 use tft_formats::FileKind;
 

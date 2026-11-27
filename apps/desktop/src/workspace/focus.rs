@@ -36,13 +36,19 @@ impl Workspace {
         // The dock's tree handle is out of the dispatch tree once its pane is hidden or
         // another tab took the dock.
         let painted = self.main_view(cx);
+        let graph_focus = self
+            .radial_tree
+            .active
+            .then(|| self.radial_tree.focus.clone())
+            .flatten()
+            .unwrap_or_else(|| self.graph.focus_handle(cx));
         let unpainted =
             |view: MainView, handle: &FocusHandle| painted != view && handle.is_focused(window);
         if unpainted(
             MainView::Editor,
             self.active_editor().read(cx).focus_handle_ref(),
         ) || unpainted(MainView::Reading, &self.active_reading().focus_handle(cx))
-            || unpainted(MainView::Graph, &self.graph.focus_handle(cx))
+            || unpainted(MainView::Graph, &graph_focus)
             || unpainted(MainView::Search, &self.search.focus_handle(cx))
             || unpainted(MainView::Canvas, &self.active_canvas().focus_handle(cx))
             || unpainted(MainView::Pdf, &self.active_pdf().focus_handle(cx))
@@ -70,7 +76,12 @@ impl Workspace {
         let handle = match self.main_view(cx) {
             MainView::Reading => self.active_reading().focus_handle(cx),
             MainView::Editor => self.active_editor().focus_handle(cx),
-            MainView::Graph => self.graph.focus_handle(cx),
+            MainView::Graph => self
+                .radial_tree
+                .active
+                .then(|| self.radial_tree.focus.clone())
+                .flatten()
+                .unwrap_or_else(|| self.graph.focus_handle(cx)),
             MainView::Search => self.search.focus_handle(cx),
             MainView::Canvas => self.active_canvas().focus_handle(cx),
             MainView::Pdf => self.active_pdf().focus_handle(cx),

@@ -1,11 +1,11 @@
 //! Inline editing of the active view header's document title.
 
 use super::render::GroupView;
-use super::{ViewMode, Workspace, inline_field, leaf_title};
-use crate::theme::{FONT_UI_SMALL, HEADER_HEIGHT, Theme};
+use super::{inline_field, leaf_title, ViewMode, Workspace};
+use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT};
 use gpui::{
-    Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle, Hsla, MouseButton,
-    MouseDownEvent, Pixels, SharedString, UTF16Selection, Window, canvas, div, prelude::*, px,
+    canvas, div, prelude::*, px, Bounds, Context, ElementInputHandler, EntityInputHandler,
+    FocusHandle, Hsla, MouseButton, MouseDownEvent, Pixels, SharedString, UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::ops::Range;

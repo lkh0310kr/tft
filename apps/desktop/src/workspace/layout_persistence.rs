@@ -1,13 +1,13 @@
 //! Restoring and saving the Desktop Workspace layout and pane state.
 
 use super::{
-    LayoutSpec, SplitDirection, VaultState, ViewMode, WindowNode, Workspace, default_dock_json,
-    floating_json, leaf_json, read_floating, read_main, split_node_json, tabs_node_json,
-    window_node_json,
+    default_dock_json, floating_json, leaf_json, read_floating, read_main, split_node_json,
+    tabs_node_json, window_node_json, LayoutSpec, SplitDirection, VaultState, ViewMode, WindowNode,
+    Workspace,
 };
 use crate::theme::SIDEBAR_WIDTH;
 use gpui::{Context, Window};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tft_app::Layout;
 

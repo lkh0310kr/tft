@@ -2387,14 +2387,29 @@ impl Editor {
     }
 
     fn after_edit(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        self.after_edit_inner(window, true, cx);
+    }
+
+    fn after_edit_preserving_scroll(&mut self, cx: &mut Context<Self>) {
+        self.after_edit_inner(None, false, cx);
+    }
+
+    fn after_edit_inner(
+        &mut self,
+        window: Option<&mut Window>,
+        reveal_cursor: bool,
+        cx: &mut Context<Self>,
+    ) {
         // An edit never happens out of sight.
         self.unfold_at_cursor();
         self.request_parse(cx);
         self.refresh_matches(cx);
         self.update_suggest(true, cx);
-        match window {
-            Some(window) => self.reveal_cursor(window),
-            None => self.pending_reveal = true,
+        if reveal_cursor {
+            match window {
+                Some(window) => self.reveal_cursor(window),
+                None => self.pending_reveal = true,
+            }
         }
         cx.emit(EditorEvent::Edited);
         cx.notify();
@@ -4140,7 +4155,7 @@ impl Editor {
         &mut self,
         line: usize,
         col: usize,
-        window: Option<&mut Window>,
+        _window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(&start) = self.buf.line_starts().get(line) else {
@@ -4157,7 +4172,9 @@ impl Editor {
             head,
             Some(anchor),
         ) {
-            self.after_edit(window, cx);
+            // Revealing the editor's existing caret after a checkbox click can jump
+            // to an unrelated line, often the top of the note.
+            self.after_edit_preserving_scroll(cx);
         }
         true
     }
@@ -6115,6 +6132,44 @@ fn code_colour(paint: tft_highlight::Paint, p: &Palette) -> Hsla {
     }]
 }
 
+/// GPUI shapes a line by the byte lengths of its runs and slices the text at
+/// each cumulative length, so every one of those ends must fall on a char
+/// boundary. Highlight spans come from a parse that may be one edit behind
+/// the buffer; a range computed on the old Korean text can end inside a glyph
+/// of the text now being shaped. Clip each run to the boundary rather than
+/// letting `shape_text` abort the app; the style shifts by a glyph at most,
+/// until the next parse lands.
+fn clip_runs(text: &str, runs: Vec<TextRun>, fallback: TextRun) -> Vec<TextRun> {
+    let mut out: Vec<TextRun> = Vec::new();
+    let mut at = 0;
+    for mut run in runs {
+        if run.len == 0 || at >= text.len() {
+            continue;
+        }
+        let mut end = (at + run.len).min(text.len());
+        while end > at && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        // A run shorter than the glyph at `at` has no boundary to stop on;
+        // the next run (or the tail) takes that text.
+        if end == at {
+            continue;
+        }
+        run.len = end - at;
+        out.push(run);
+        at = end;
+        if at == text.len() {
+            break;
+        }
+    }
+    if at < text.len() {
+        let mut tail = out.last().cloned().unwrap_or(fallback);
+        tail.len = text.len() - at;
+        out.push(tail);
+    }
+    out
+}
+
 fn runs_for_display(
     display: &DisplayLine,
     spans: &[HighlightSpan],
@@ -6445,7 +6500,11 @@ fn shape_display(
     // A code block's lines run left to right whatever their text (Obsidian
     // 1.15.0 kept them `direction: ltr` under a right-to-left `dir`).
     let rtl = rtl && !display.decor.code_block;
-    let runs = runs_for_display(&display, spans, code, style, p);
+    let runs = clip_runs(
+        &display.text,
+        runs_for_display(&display, spans, code, style, p),
+        style.to_run(0),
+    );
     let size = font_size * display.scale;
     // Headings keep Obsidian's tighter line height, never below the body's.
     let row_height = if display.scale > 1.0 {

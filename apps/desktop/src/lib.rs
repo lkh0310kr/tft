@@ -201,6 +201,18 @@ fn startup() -> Startup {
         .as_deref()
         .and_then(|uri| uri::parse(uri).ok())
         .and_then(|uri| uri.vault().map(str::to_string));
+    // A bare launch reopens the vault last shown, the way Zed reopens the
+    // last project: the entry flagged `open`, else the newest one, if its
+    // folder still exists. An explicit folder, file or URI skips this.
+    if args.vault.is_none() && named.is_none() {
+        if let Some(path) = tft_vault::registry::VaultRegistry::open()
+            .ok()
+            .flatten()
+            .and_then(|registry| registry.most_recent().map(|entry| entry.path.clone()))
+        {
+            args.vault = Some(path);
+        }
+    }
     match instance::forward(&args, named.as_deref()) {
         Ok(Forward::Handled) => return Startup::Done,
         Ok(Forward::NoInstance) => {}

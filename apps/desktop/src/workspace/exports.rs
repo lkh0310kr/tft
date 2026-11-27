@@ -16,14 +16,14 @@
 use super::{MainView, Modal, VaultState, Workspace};
 use crate::export_modals::{ImageExportEvent, PdfExportEvent};
 use crate::reading;
-use crate::reading::EmbedSource;
 use crate::reading::model::{EmbedKind, InlineStyle, LinkTarget, RBlock, RichText, Segment};
+use crate::reading::EmbedSource;
 use crate::settings::SettingChange;
 use crate::theme::Theme;
 use gpui::{App, Context, Focusable, Hsla, Window};
 use std::collections::HashMap;
 use tft_export as ex;
-use tft_formats::{FileKind, config::PdfExportSettings};
+use tft_formats::{config::PdfExportSettings, FileKind};
 
 impl Workspace {
     /// The exports' check callbacks; `None` for any other id.

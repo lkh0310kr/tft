@@ -15,6 +15,7 @@ members = [
     "crates/search",
     "crates/text",
     "crates/canvas",
+    "crates/radial-tree-explorer",
     "crates/suggest",
     "crates/pdf",
     "crates/math",
@@ -47,6 +48,7 @@ cli = { path = "crates/cli" }
 search = { path = "crates/search" }
 text = { path = "crates/text" }
 canvas = { path = "crates/canvas" }
+radial-tree-explorer = { path = "crates/radial-tree-explorer" }
 suggest = { path = "crates/suggest" }
 pdf = { path = "crates/pdf" }
 math = { path = "crates/math" }

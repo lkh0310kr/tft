@@ -15,23 +15,23 @@
 use crate::assets::icon;
 use crate::explorer::SortOrder;
 use crate::text_input::{InputEvent, TextInput};
-use crate::theme::{FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE, Theme};
+use crate::theme::{Theme, FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE};
 use crate::ui::{focus_ring, menu, menu_item, toggle, tooltip};
 use crate::workspace::VaultState;
 use gpui::{
-    Anchor, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
-    ListAlignment, ListState, MouseButton, MouseDownEvent, Pixels, Point, SharedString, StyledText,
-    Subscription, Window, anchored, deferred, div, list, prelude::*, px, relative,
+    anchored, deferred, div, list, prelude::*, px, relative, Anchor, App, ClickEvent, Context,
+    Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment, ListState,
+    MouseButton, MouseDownEvent, Pixels, Point, SharedString, StyledText, Subscription, Window,
 };
 use rayon::prelude::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use tft_cache::CachedMetadata;
 pub(crate) use tft_search::inputs;
 use tft_search::{
-    MatchLine, Query, Search, SearchFile, context_window, match_lines, natural_cmp, parse,
+    context_window, match_lines, natural_cmp, parse, MatchLine, Query, Search, SearchFile,
 };
 
 #[derive(Debug, Clone)]

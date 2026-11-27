@@ -1019,7 +1019,9 @@ impl Workspace {
 
     /// `graph:animate`'s check: a global graph is the active leaf.
     fn global_graph_active(&self, cx: &App) -> bool {
-        self.main_view(cx) == MainView::Graph && !self.graph.read(cx).is_local()
+        self.main_view(cx) == MainView::Graph
+            && !self.radial_tree.active
+            && !self.graph.read(cx).is_local()
     }
 
     pub(super) fn open_graph_action(

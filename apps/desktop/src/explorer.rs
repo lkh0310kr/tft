@@ -5,20 +5,20 @@
 use crate::assets::icon;
 use crate::file_menu::{self, Menu, Pick, Target};
 use crate::inline_field;
-use crate::theme::{ICON_SIZE, Theme};
+use crate::theme::{Theme, ICON_SIZE};
 use gpui::{
-    App, Bounds, Context, DragMoveEvent, ElementInputHandler, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point,
-    ScrollStrategy, SharedString, UTF16Selection, UniformListScrollHandle, Window, actions, canvas,
-    div, prelude::*, px, uniform_list,
+    actions, canvas, div, prelude::*, px, uniform_list, App, Bounds, Context, DragMoveEvent,
+    ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight,
+    KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, ScrollStrategy, SharedString,
+    UTF16Selection, UniformListScrollHandle, Window,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
 pub use tft_app::explorer::{
-    FileTree, SortOrder, display_name, drop_folder, drop_moves, kind_name, move_into_label,
+    display_name, drop_folder, drop_moves, kind_name, move_into_label, FileTree, SortOrder,
 };
 
 /// The font size of a row's extension tag.
@@ -851,6 +851,8 @@ impl FileExplorer {
                 let row = self.tree.row(ix)?;
                 let active = self.active.as_deref() == Some(row.path.as_str());
                 let focused = focused_ix == Some(ix);
+                // Zed's spacing, TFT's chevrons: 20 px per depth, a 14 px
+                // icon and a 4 px gap to the name.
                 let marker = row.is_folder.then(|| {
                     if self.tree.is_collapsed(&row.path) {
                         "chevron-right"
@@ -914,6 +916,17 @@ impl FileExplorer {
                 };
                 Some(
                     row_el
+                        // Indent guides, as Zed's panel draws them: one hairline
+                        // at every ancestor's content inset, under this row.
+                        .children((0..row.depth).map(|depth| {
+                            div()
+                                .absolute()
+                                .left(px(8. + depth as f32 * 20.))
+                                .top_0()
+                                .bottom_0()
+                                .w(px(1.))
+                                .bg(t.background_modifier_border)
+                        }))
                         .when(block_top, |d| d.text_color(t.text_accent))
                         .when(dragged, |d| {
                             d.bg(t.interactive_accent).text_color(gpui::white())
@@ -965,7 +978,8 @@ impl FileExplorer {
                         })
                         .child(
                             div()
-                                .w(px(12.))
+                                .w(px(14.))
+                                .mr(px(4.))
                                 .flex_shrink_0()
                                 .flex()
                                 .items_center()

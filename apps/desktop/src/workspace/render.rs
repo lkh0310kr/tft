@@ -497,7 +497,15 @@ impl Workspace {
             MainView::Canvas => view.canvas.clone().into_any_element(),
             MainView::Pdf => view.pdf.clone().into_any_element(),
             MainView::Graph if self.graph_group() == Some(view.id) => {
-                self.graph.clone().into_any_element()
+                if self.radial_tree.active {
+                    self.radial_tree
+                        .view
+                        .as_ref()
+                        .map(|tree| tree.clone().into_any_element())
+                        .unwrap_or_else(|| self.graph.clone().into_any_element())
+                } else {
+                    self.graph.clone().into_any_element()
+                }
             }
             MainView::Graph => div()
                 .size_full()

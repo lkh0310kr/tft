@@ -1,15 +1,15 @@
 //! Tab strip rendering, tab title formatting, menu routing and pin actions.
 
 use super::render::GroupView;
-use super::tab_drag::{DROP_BAR_WIDTH, DragPart, TabDrag, TabDragPreview, measure_for_drag};
+use super::tab_drag::{measure_for_drag, DragPart, TabDrag, TabDragPreview, DROP_BAR_WIDTH};
 use super::{
-    FileKind, HEADER_HEIGHT, ICON_SIZE, Pick, RIBBON_WIDTH, Tab, ViewMode, WINDOW_RADIUS,
-    WindowFrame, Workspace, display_name, file_menu, icon, release_notes, window_handle,
+    display_name, file_menu, icon, release_notes, window_handle, FileKind, Pick, Tab, ViewMode,
+    WindowFrame, Workspace, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, WINDOW_RADIUS,
 };
 use crate::theme::Theme;
 use gpui::{
-    Anchor, App, Context, DragMoveEvent, MouseDownEvent, Pixels, SharedString, Window, deferred,
-    div, prelude::*, px,
+    deferred, div, prelude::*, px, Anchor, App, Context, DragMoveEvent, MouseDownEvent, Pixels,
+    SharedString, Window,
 };
 use std::time::Instant;
 
@@ -156,7 +156,9 @@ impl Workspace {
                     .children(tabs.iter().enumerate().map(|(ix, tab)| {
                         let active = ix == active_ix;
                         let pinned = tab.pinned;
-                        let divider = !active && ix + 1 != active_ix;
+                        // No divider between the last tab and the new-tab
+                        // button: that 1 px line read as a stray border.
+                        let divider = !active && ix + 1 != active_ix && ix + 1 != tabs.len();
                         let title = tab.title();
                         let drag = TabDrag {
                             group,

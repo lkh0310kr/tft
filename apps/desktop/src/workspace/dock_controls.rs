@@ -1,10 +1,10 @@
 //! Workspace sidebar toggle and dock resize controls.
 
-use super::Workspace;
 use super::tab_drag::NoDragPreview;
+use super::Workspace;
 use crate::theme::Theme;
-use gpui::{Context, FocusHandle, Focusable, Pixels, Window, div, prelude::*, px};
-use tft_app::{Tab, ViewMode, place_new_tab};
+use gpui::{div, prelude::*, px, Context, FocusHandle, Focusable, Pixels, Window};
+use tft_app::{place_new_tab, Tab, ViewMode};
 
 /// State for the Files dock's visibility, sizing, and keyboard focus.
 pub(super) struct DockState {

@@ -1,7 +1,7 @@
 //! Pure helpers for reading and updating dock state in persisted workspace JSON.
 
-use super::{SIDEBAR_WIDTH, leaf_id};
-use serde_json::{Value, json};
+use super::{leaf_id, SIDEBAR_WIDTH};
+use serde_json::{json, Value};
 
 /// The view type of the sidebar's current tab: the `tabs` group's
 /// `currentTab` child (the first when the key is absent).

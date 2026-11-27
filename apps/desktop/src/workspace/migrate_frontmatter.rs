@@ -9,13 +9,13 @@
 //! The files are read from disk, not from the index, so a note's BOM and
 //! line endings are what the converter sees, as Obsidian's did.
 
-use super::{Changes, Modal, NoticeAction, VaultState, Workspace, plural};
+use super::{plural, Changes, Modal, NoticeAction, VaultState, Workspace};
 use crate::migrate_modal::{Counts, MigrateEvent, MigrateModal, Stage};
 use gpui::{App, AppContext, Context, Entity, Focusable, IntoElement, Subscription, Window};
 use serde_json::Value;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tft_formats::migrate::{Migration, migrate_frontmatter};
+use std::sync::Arc;
+use tft_formats::migrate::{migrate_frontmatter, Migration};
 use tft_vault::FileChange;
 
 /// One file the run wrote: its path, its bytes before and its text after.

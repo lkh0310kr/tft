@@ -3,8 +3,8 @@
 //! itself is [`crate::debug_info`]; Show release notes is
 //! [`super::release_notes`]; Open file is [`super::attachments`].
 
-use super::{Modal, Workspace, release_notes};
-use crate::debug_info::{SystemInfo, operating_system};
+use super::{release_notes, Modal, Workspace};
+use crate::debug_info::{operating_system, SystemInfo};
 use gpui::{Context, Focusable, Window};
 
 impl Workspace {

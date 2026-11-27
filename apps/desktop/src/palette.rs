@@ -157,8 +157,8 @@ impl CommandPalette {
                     .collect();
                 let name = StyledText::new(SharedString::from(command.name.clone()))
                     .with_highlights(highlights);
-                let hotkeys: Option<SharedString> = (!command.hotkeys.is_empty())
-                    .then(|| command.hotkeys.join(", ").into());
+                let hotkeys: Option<SharedString> =
+                    (!command.hotkeys.is_empty()).then(|| command.hotkeys.join(", ").into());
                 Some(
                     div()
                         .id(("palette-row", ix))

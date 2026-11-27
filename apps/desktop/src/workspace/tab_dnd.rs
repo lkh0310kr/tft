@@ -1,7 +1,7 @@
 //! Tab drag/drop event coordination and group-to-group tab transitions.
 
 use super::{DragBounds, DropBar, DropZone, TabDrag, Workspace};
-use gpui::{Context, Pixels, Window, px};
+use gpui::{px, Context, Pixels, Window};
 use std::time::Instant;
 use tft_app::{SplitDirection, Tab};
 

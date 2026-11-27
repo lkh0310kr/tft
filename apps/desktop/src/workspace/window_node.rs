@@ -1,6 +1,6 @@
 use crate::popout::PopoutWindow;
-use gpui::{App, Bounds, Pixels, SharedString, px};
-use serde_json::{Map, Value, json};
+use gpui::{px, App, Bounds, Pixels, SharedString};
+use serde_json::{json, Map, Value};
 use tft_app::Layout;
 
 /// One popout window, as `workspace.json`'s `floating` split records it.

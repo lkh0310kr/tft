@@ -15,10 +15,10 @@
 //! no file and no history. Opening a note in it makes it a note's tab, as
 //! it does in Obsidian, and the leaf written for it is then the note's.
 
-use super::{Workspace, leaf_id};
+use super::{leaf_id, Workspace};
 use crate::reading::{self, ReadingView};
 use gpui::{Context, Entity};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::cell::RefCell;
 use tft_app::{Tab, ViewMode};
 
@@ -528,11 +528,8 @@ mod tests {
     #[test]
     fn an_unknown_version_says_the_page_has_no_notes() {
         let notes = notes_from("<section><h2>0.1.0</h2></section>", "9.9.9");
-        assert!(
-            notes.starts_with(
-                "# Release Notes 9.9.9\n\nThe releases page has no notes for 9.9.9.\n"
-            )
-        );
+        assert!(notes
+            .starts_with("# Release Notes 9.9.9\n\nThe releases page has no notes for 9.9.9.\n"));
     }
 
     #[test]

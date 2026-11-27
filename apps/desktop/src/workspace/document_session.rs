@@ -30,6 +30,7 @@ impl DocumentSaveState {
 impl Workspace {
     /// Shows the graph (`graph:open`); a second Ctrl+G returns to the note.
     pub fn show_graph(&mut self, local: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.radial_tree.active = false;
         self.graph.update(cx, |g, cx| g.set_local(local, cx));
         self.set_mode(ViewMode::Graph, window, cx);
     }

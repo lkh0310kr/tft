@@ -119,6 +119,18 @@ impl VaultRegistry {
             .map(|(id, e)| (id.as_str(), e))
     }
 
+    /// The vault a bare launch reopens: the entry flagged `open` — the vault
+    /// a window is showing — else the newest `ts`, among folders that still
+    /// exist. A list whose folders are all gone yields nothing, and the
+    /// launch opens an empty workspace as before.
+    pub fn most_recent(&self) -> Option<&VaultEntry> {
+        self.doc
+            .vaults
+            .values()
+            .filter(|entry| entry.path.is_dir())
+            .max_by_key(|entry| (entry.open, entry.ts))
+    }
+
     /// Notes that `root` is the vault this window shows now: its entry
     /// (made if it is new) gets the time and `open`, and every other entry
     /// loses `open`, since TFT shows one vault per process. Returns the
@@ -355,6 +367,27 @@ mod tests {
     /// runs on: a rootless path is relative on Windows and would be
     /// resolved against the current drive.
     const V: &str = if cfg!(windows) { "C:/v" } else { "/v" };
+
+    #[test]
+    fn a_bare_launch_picks_the_open_vault_else_the_newest_existing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("A");
+        let b = dir.path().join("B");
+        let gone = dir.path().join("Gone");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let mut reg = VaultRegistry::load(dir.path().join("tft.json")).unwrap();
+        reg.record_open(&a, 1);
+        reg.record_open(&b, 2);
+        assert_eq!(reg.most_recent().unwrap().path, b);
+        // The newest entry's folder is gone: it is skipped, and the `open`
+        // flag it took with it means the next newest existing folder wins.
+        reg.record_open(&gone, 3);
+        assert_eq!(reg.most_recent().unwrap().path, b);
+        // An existing vault flagged open wins over recency.
+        reg.record_open(&a, 4);
+        assert_eq!(reg.most_recent().unwrap().path, a);
+    }
 
     #[test]
     fn references_document_round_trips_with_its_unknown_keys() {

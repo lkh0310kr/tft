@@ -842,9 +842,7 @@ fn floating_is_read_as_windows_over_groups_with_their_bounds() {
     assert!(!first.node.contains_key("children") && !first.node.contains_key("direction"));
     assert_eq!(
         first.node.keys().collect::<Vec<_>>(),
-        [
-            "id", "type", "x", "y", "width", "height", "maximize", "zoom"
-        ]
+        ["id", "type", "x", "y", "width", "height", "maximize", "zoom"]
     );
     let LayoutSpec::Split {
         direction,
@@ -885,14 +883,12 @@ fn floating_is_read_as_windows_over_groups_with_their_bounds() {
     };
     assert_eq!(group.tabs[0].1.path, None);
     // No `floating` key, no windows; and a `floating` with none is none.
-    assert!(
-        read_floating(
-            &json!({"id": "x", "type": "floating", "children": []}),
-            ViewMode::LivePreview,
-            &|_| true
-        )
-        .is_empty()
-    );
+    assert!(read_floating(
+        &json!({"id": "x", "type": "floating", "children": []}),
+        ViewMode::LivePreview,
+        &|_| true
+    )
+    .is_empty());
 }
 
 #[test]
@@ -1041,14 +1037,12 @@ fn splitting_puts_a_sibling_in_a_split_that_runs_that_way_and_wraps_otherwise() 
     assert_eq!(tree.neighbors(3, SplitDirection::Horizontal, false), [2]);
     assert_eq!(tree.neighbors(3, SplitDirection::Vertical, false), [1]);
     assert_eq!(tree.neighbors(2, SplitDirection::Horizontal, true), [3]);
-    assert!(
-        tree.neighbors(2, SplitDirection::Horizontal, false)
-            .is_empty()
-    );
-    assert!(
-        tree.neighbors(1, SplitDirection::Vertical, false)
-            .is_empty()
-    );
+    assert!(tree
+        .neighbors(2, SplitDirection::Horizontal, false)
+        .is_empty());
+    assert!(tree
+        .neighbors(1, SplitDirection::Vertical, false)
+        .is_empty());
     // Removing 2 leaves the horizontal split nested around 3, as Obsidian
     // keeps it; removing 3 too takes the split with it.
     assert!(tree.remove(2));
@@ -1199,7 +1193,7 @@ fn prune_history_keeps_what_it_does_not_name() {
 /// note's own line endings, and refuses a file it did not plan from.
 #[test]
 fn writing_a_block_id_reaches_the_disk_and_refuses_a_stale_file() {
-    use tft_suggest::blocks::{Placement, plan_id};
+    use tft_suggest::blocks::{plan_id, Placement};
     let (dir, state) = vault();
     let path = "A.md";
     let before = fs::read_to_string(dir.path().join(path)).unwrap();
@@ -1230,7 +1224,7 @@ fn writing_a_block_id_reaches_the_disk_and_refuses_a_stale_file() {
 /// which is where TFT deliberately differs from Obsidian.
 #[test]
 fn a_block_id_written_into_a_crlf_note_keeps_its_endings() {
-    use tft_suggest::blocks::{Placement, plan_id};
+    use tft_suggest::blocks::{plan_id, Placement};
     let (dir, state) = vault();
     let path = "Crlf.md";
     let before = "# Crlf\r\n\r\npara in a CRLF file.\r\n";
@@ -1339,15 +1333,13 @@ fn heading_rename_rewrites_linking_notes_on_disk_whatever_always_update_links_sa
         );
         assert_eq!(state.texts()["Linker.md"].as_str(), expected);
         // The index follows: the rewritten links point at the new heading.
-        assert!(
-            state
-                .cache()
-                .file("Linker.md")
-                .unwrap()
-                .links
-                .iter()
-                .any(|l| l.link == "Note#New")
-        );
+        assert!(state
+            .cache()
+            .file("Linker.md")
+            .unwrap()
+            .links
+            .iter()
+            .any(|l| l.link == "Note#New"));
     }
 }
 
@@ -1442,12 +1434,10 @@ fn rename_rewrites_links_on_disk_and_in_the_index() {
         dir.path().join("Renamed A.md"),
         dir.path().join("B.md"),
     ]);
-    assert!(
-        changes
-            .files
-            .iter()
-            .all(|c| matches!(c, FileChange::Modified(_)))
-    );
+    assert!(changes
+        .files
+        .iter()
+        .all(|c| matches!(c, FileChange::Modified(_))));
     assert_eq!(state.cache().backlinks("Renamed A.md").len(), 4);
 }
 
@@ -1456,11 +1446,9 @@ fn rename_without_updating_links_leaves_them_dangling() {
     let (dir, state) = vault();
     let outcome = state.rename("A.md", "A2.md", false).unwrap();
     assert_eq!(outcome.rewritten_links, 0);
-    assert!(
-        fs::read_to_string(dir.path().join("B.md"))
-            .unwrap()
-            .contains("[[A]] and")
-    );
+    assert!(fs::read_to_string(dir.path().join("B.md"))
+        .unwrap()
+        .contains("[[A]] and"));
     assert_eq!(
         state.cache().unresolved_links("B.md").unwrap().get("A"),
         Some(&3),

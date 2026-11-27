@@ -12,7 +12,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        use crate::uri::{Uri, names_vault};
+        use crate::uri::{names_vault, Uri};
         let parsed = crate::uri::parse(uri)?;
         let Some(state) = self.vault_session.state.clone() else {
             return Err("no vault is open".to_string());

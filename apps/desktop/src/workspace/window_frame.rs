@@ -1,9 +1,9 @@
 use crate::assets::icon;
-use crate::theme::{FONT_UI_SMALLER, HEADER_HEIGHT, RIBBON_WIDTH, Theme};
+use crate::theme::{Theme, FONT_UI_SMALLER, HEADER_HEIGHT, RIBBON_WIDTH};
 use gpui::{
-    App, BoxShadow, CursorStyle, Decorations, HitboxBehavior, Hsla, MouseButton, Pixels,
-    ResizeEdge, Tiling, Window, WindowControlArea, canvas, div, point, prelude::*, px, rgb, rgba,
-    transparent_black,
+    canvas, div, point, prelude::*, px, rgb, rgba, transparent_black, App, BoxShadow, CursorStyle,
+    Decorations, HitboxBehavior, Hsla, MouseButton, Pixels, ResizeEdge, Tiling, Window,
+    WindowControlArea,
 };
 
 /// The margin around the content when TFT draws the frame: the shadow lives in it

@@ -4,9 +4,9 @@
 
 use crate::assets::icon;
 use crate::canvas::cards::{Cards, TaskOrigin};
-use crate::keymap;
 use crate::canvas::menu::{self, IconItem, ListItem};
 use crate::editor::{Editor, EditorEvent};
+use crate::keymap;
 use crate::reading::TaskMarker;
 use crate::theme::Theme;
 use crate::workspace::VaultState;

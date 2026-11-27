@@ -3,14 +3,14 @@
 
 use crate::theme::Theme;
 use crate::workspace::{
-    VaultState, WindowCorners, Workspace, client_frame, frame_window_options, window_title_row,
+    client_frame, frame_window_options, window_title_row, VaultState, WindowCorners, Workspace,
 };
 use gpui::{
-    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
-    ScrollHandle, SharedString, Subscription, WeakEntity, Window, WindowBounds, WindowHandle,
-    WindowOptions, actions, deferred, div, prelude::*, px, size,
+    actions, deferred, div, prelude::*, px, size, App, Bounds, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, KeyBinding, ScrollHandle, SharedString, Subscription,
+    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tft_formats::config::{AppConfig, AppearanceConfig};
 

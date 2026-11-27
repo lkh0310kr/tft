@@ -1,6 +1,6 @@
 //! Loading files into Desktop views and restoring document/heading/footnote positions.
 
-use super::{VaultState, Workspace, debug_status};
+use super::{debug_status, VaultState, Workspace};
 use crate::canvas::CanvasView;
 use crate::reading::{self, LinkTarget};
 use gpui::{ClipboardItem, Context};

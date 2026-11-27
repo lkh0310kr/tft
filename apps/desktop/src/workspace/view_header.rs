@@ -113,12 +113,32 @@ impl Workspace {
                             .gap(px(2.))
                             .child(
                                 crate::ui::icon_button("graph", "git-fork", theme)
-                                    .when(view.mode == ViewMode::Graph, |d| {
-                                        d.bg(theme.tokens.background_modifier_hover)
-                                    })
+                                    .when(
+                                        view.mode == ViewMode::Graph && !self.radial_tree.active,
+                                        |d| d.bg(theme.tokens.background_modifier_hover),
+                                    )
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.activate_group(id, cx);
-                                        this.open_graph_action(&OpenGraph, window, cx)
+                                        if this.radial_tree.active {
+                                            this.show_force_graph(window, cx)
+                                        } else {
+                                            this.open_graph_action(&OpenGraph, window, cx)
+                                        }
+                                    })),
+                            )
+                            .child(
+                                crate::ui::icon_button("radial-tree", "folder-tree", theme)
+                                    .when(
+                                        view.mode == ViewMode::Graph && self.radial_tree.active,
+                                        |d| d.bg(theme.tokens.background_modifier_hover),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.activate_group(id, cx);
+                                        if this.radial_tree.active {
+                                            this.show_force_graph(window, cx)
+                                        } else {
+                                            this.show_radial_tree(window, cx)
+                                        }
                                     })),
                             )
                             .when(header_shows_mode_switch(&view.current, view.mode), |d| {

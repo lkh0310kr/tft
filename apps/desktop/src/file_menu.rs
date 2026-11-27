@@ -5,10 +5,10 @@
 
 use crate::theme::Theme;
 use gpui::{
-    Anchor, AnyElement, App, Context, FocusHandle, KeyBinding, Pixels, Point, SharedString,
-    Stateful, Window, actions, anchored, deferred, div, prelude::*, px, relative,
+    actions, anchored, deferred, div, prelude::*, px, relative, Anchor, AnyElement, App, Context,
+    FocusHandle, KeyBinding, Pixels, Point, SharedString, Stateful, Window,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::cell::Cell;
 
 use std::path::{Path, PathBuf};

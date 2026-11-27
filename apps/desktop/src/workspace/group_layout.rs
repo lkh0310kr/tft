@@ -1,7 +1,7 @@
 //! Split sizing, divider interaction, and focus navigation between layout groups.
 
-use super::Workspace;
 use super::layout_write::set_dimension;
+use super::Workspace;
 use gpui::Context;
 use serde_json::Value;
 use tft_app::{Layout, SplitDirection};

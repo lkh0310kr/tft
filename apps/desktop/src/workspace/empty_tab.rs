@@ -1,9 +1,9 @@
 //! Empty-tab content and the command-backed actions it offers.
 
 use super::{Commands, Workspace};
-use crate::theme::{FONT_UI_SMALL, Theme};
-use gpui::{Context, div, prelude::*, px};
-use tft_commands::{CommandRegistry, hotkey_label};
+use crate::theme::{Theme, FONT_UI_SMALL};
+use gpui::{div, prelude::*, px, Context};
+use tft_commands::{hotkey_label, CommandRegistry};
 
 /// What an empty tab offers, in Obsidian's order: element id, pill label and command.
 /// What must match is the text and that each pill runs the command it names.
