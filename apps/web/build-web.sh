@@ -10,4 +10,5 @@ fi
 
 "$SCRIPT_DIR/apply-gpui-web-patch.sh"
 export RUSTC_BOOTSTRAP=1
+cd "$SCRIPT_DIR"
 exec "$TRUNK_BIN" build "$@"

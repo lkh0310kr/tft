@@ -1,2 +1,10 @@
 [alias]
 wasm-check = "check --target wasm32-unknown-unknown -p core -p model -p markdown -p formats -p cache -p search -p commands -p text -p canvas -p suggest -p math -p mermaid -p highlight -p paste -p pdf"
+
+# Apple Silicon: CoreText crashes in CopyEmojiImage (SIGBUS) when it
+# rasterizes an emoji from a binary that lacks the hardened runtime flag,
+# which cargo's linker-signed output does. `cargo run` and `cargo test` go
+# through this runner to add it. A binary launched directly still needs
+# `tools/macos-run.sh <binary>` (see AGENTS.md).
+[target.aarch64-apple-darwin]
+runner = "tools/macos-run.sh"

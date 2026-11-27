@@ -28,6 +28,11 @@ fcntl lock이 없어 증분 컴파일이 되지 않기 때문입니다. 공유�
 공유에 쓰인 바이너리가 Gatekeeper 프롬프트를 띄우므로, 그때는 `CARGO_TARGET_DIR`을 로컬 디렉터리로
 지정합니다.
 
+Apple Silicon에서 `cargo`가 링커로 서명한 바이너리에는 hardened runtime flag가 없어, Apple Color Emoji를
+그리는 순간 CoreText가 `CopyEmojiImage`에서 SIGBUS로 죽습니다. `.cargo/config.toml`의 runner가
+`cargo run`/`cargo test`가 시작하는 바이너리를 `--options runtime`으로 다시 서명합니다. `cargo build`
+결과를 직접 실행할 때는 `tools/macos-run.sh target/debug/tft …`처럼 실행합니다.
+
 ```
 cargo test --workspace            # 라이브러리 전체 테스트 (빠름)
 cargo wasm-check                  # 순수 crate를 wasm32-unknown-unknown으로 검사

@@ -2351,9 +2351,7 @@ impl<'a> Renderer<'a> {
                         .relative()
                         .w(px(width))
                         .flex_shrink_0()
-                        .px_2()
-                        .py_1()
-                        .when(editing.is_some(), |d| d.min_h(px(font_size + 8.)))
+                        .when(editing.is_none(), |d| d.px_2().py_1())
                         // A line between columns only: the table's border is the last column's edge.
                         .when(
                             ix != last_col
@@ -3229,16 +3227,10 @@ impl<'a> Renderer<'a> {
             .items_center()
             .when(wide, |d| d.flex_1())
             .when(table_cell, |d| {
-                // The cell keeps its normal padding and height. Overlay the
-                // input across that entire box so entering edit mode cannot
-                // shrink the clickable cell or inset the focus border.
-                d.absolute()
-                    .top(px(0.))
-                    .left(px(0.))
-                    .right(px(0.))
-                    .bottom(px(0.))
-                    .w_full()
-                    .h_full()
+                // Keep the editor in normal flow so its line box defines the
+                // row height. The cell removes its own padding while editing;
+                // this field supplies equivalent padding inside its border.
+                d.w_full()
             })
             .min_w_0()
             .px_1()
@@ -3248,7 +3240,7 @@ impl<'a> Renderer<'a> {
             .when_some(selected, |d, selected| {
                 d.child(
                     div()
-                        .bg(t.tokens.interactive_accent)
+                        .bg(selection_color(t))
                         .child(SharedString::from(selected.to_string())),
                 )
             })
