@@ -28,6 +28,7 @@ pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
                 key: &str| {
         m.entry(id).or_default().push(hk(mods, key));
     };
+    bind(&mut m, "app:toggle-left-sidebar", &["Mod"], "\\");
     // TFT's own accelerator: Obsidian binds this to `Mod+O`, but a file
     // search on `Mod+P` matches the editors TFT is used beside.
     bind(&mut m, "switcher:open", &["Mod"], "P");
@@ -86,7 +87,6 @@ pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
     bind(&mut m, "workspace:edit-file-title", &[], "F2");
     bind(&mut m, "app:go-back", &["Mod", "Alt"], "ArrowLeft");
     bind(&mut m, "app:go-forward", &["Mod", "Alt"], "ArrowRight");
-    bind(&mut m, "app:open-settings", &["Mod"], ",");
     m
 }
 

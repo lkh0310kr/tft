@@ -775,6 +775,7 @@ impl Render for Workspace {
                     .on_action(cx.listener(Self::open_search_action))
                     .on_action(cx.listener(Self::open_graph_action))
                     .on_action(cx.listener(Self::open_command_palette_action))
+                    .on_action(cx.listener(Self::focus_explorer_action))
                     .on_action(cx.listener(Self::run_command_action))
             })
             .relative()

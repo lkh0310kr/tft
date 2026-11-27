@@ -160,26 +160,15 @@ impl CommandPalette {
                 let hotkeys: Option<SharedString> =
                     (!command.hotkeys.is_empty()).then(|| command.hotkeys.join(", ").into());
                 Some(
-                    div()
-                        .id(("palette-row", ix))
-                        .w_full()
-                        .h(px(34.))
-                        .px_3()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(theme.tokens.background_modifier_hover))
-                        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+                    crate::ui::palette_result_row(("palette-row", ix), selected, &theme)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.selected = ix;
                             this.run_selected(cx);
                         }))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .text_size(px(14.))
                                 .text_color(theme.tokens.text_normal)
                                 .whitespace_nowrap()
@@ -189,6 +178,9 @@ impl CommandPalette {
                         )
                         .children(hotkeys.map(|h| {
                             div()
+                                .max_w(px(220.))
+                                .overflow_hidden()
+                                .text_ellipsis()
                                 .flex_shrink_0()
                                 .text_size(px(11.))
                                 .text_color(theme.tokens.text_muted)
@@ -205,27 +197,35 @@ impl Render for CommandPalette {
         let theme = cx.global::<Theme>().clone();
         let count = self.items.len();
         let rows = (count.min(12) as f32) * 34.;
-        crate::ui::modal_panel("command-palette", 620., &theme)
-            .p_2()
+        crate::ui::palette_panel("command-palette", 620., &theme)
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Close)))
-            .child(self.input.clone())
+            .child(crate::ui::palette_search_slot(&theme).child(self.input.clone()))
             .when(count > 0, |d| {
-                d.child(
+                d.child(crate::ui::palette_results_slot().child(
                     uniform_list("palette-list", count, cx.processor(Self::render_rows))
                         .track_scroll(&self.scroll)
-                        .h(px(rows))
-                        .mt_2(),
-                )
+                        .h(px(rows)),
+                ))
             })
             .when(count == 0 && !self.input.read(cx).text().is_empty(), |d| {
-                d.child(
+                d.child(crate::ui::palette_results_slot().child(
                     div()
-                        .p_3()
+                        .h(px(38.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
                         .text_size(px(12.))
                         .text_color(theme.tokens.text_muted)
                         .child("No matching commands."),
-                )
+                ))
             })
+            .child(crate::ui::palette_footer(
+                "Run",
+                "↵",
+                "Actions…",
+                if cfg!(target_os = "macos") { "⌘⇧A" } else { "Ctrl+Shift+A" },
+                &theme,
+            ))
     }
 }
 

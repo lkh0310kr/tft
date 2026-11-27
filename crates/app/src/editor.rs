@@ -365,8 +365,9 @@ impl Palette {
             text: k.text_normal,
             muted: k.text_muted,
             accent: k.interactive_accent,
+            // Links use the primary accent; tags stay in the body colour.
             link: k.link_color,
-            tag: k.tag_color,
+            tag: k.text_normal,
             code_bg: k.code_background,
             code: [
                 k.code_normal,
@@ -4057,6 +4058,13 @@ impl Editor {
 
     /// The buffer offset under a window point, using the last frame's layout.
     fn offset_at_point(&self, window: &mut Window, position: Point<Pixels>) -> Option<usize> {
+        if let Some(last) = self.layout.visible.last() {
+            let document_last_line = self.buf.line_starts().len().saturating_sub(1);
+            let content_bottom = self.layout.bounds.origin.y + last.top + last.height();
+            if last.line == document_last_line && position.y >= content_bottom {
+                return Some(self.buf.len());
+            }
+        }
         let hit = self.display_hit(window, position)?;
         let col = self
             .buf
@@ -6087,9 +6095,14 @@ fn run_for(
             | HighlightKind::QuoteMarker
             | HighlightKind::Html => color = p.muted,
             HighlightKind::Math => color = p.accent,
-            HighlightKind::Callout | HighlightKind::ListMarker | HighlightKind::Task => {
-                color = p.accent;
+            HighlightKind::Callout => color = p.text,
+            HighlightKind::ListMarker => {
+                color = p.muted;
+                color.l = (color.l - 0.1).max(0.0);
             }
+            // The source marker is replaced by an invisible-width box placeholder;
+            // the visible checkbox is painted separately from `p.checkbox`.
+            HighlightKind::Task => color = p.accent,
         }
     }
     if done && !kinds.contains(&HighlightKind::Task) {
@@ -7676,7 +7689,6 @@ impl Element for EditorElement {
                         };
                         if shaped.display.scale > 1.0 {
                             run.font.weight = FontWeight::BOLD;
-                            run.color = palette.accent;
                         }
                         style_html_run(&mut run, sc.style, &palette);
                         crate::math::paint_script_run(

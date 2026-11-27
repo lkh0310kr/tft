@@ -1,7 +1,7 @@
 use super::attachments::download_modal;
 use super::{
-    GoBack, GoForward, MainView, Modal, OpenCommandPalette, OpenGraph, OpenSearch, ToggleMode,
-    TreeActivate, TreeDown, TreeLeft, TreeRight, TreeUp, ViewMode, Workspace,
+    FocusExplorer, GoBack, GoForward, MainView, Modal, OpenCommandPalette, OpenGraph, OpenSearch,
+    ToggleMode, TreeActivate, TreeDown, TreeLeft, TreeRight, TreeUp, ViewMode, Workspace,
 };
 use crate::editor::Editor;
 use crate::popout::PopoutWindow;
@@ -299,6 +299,14 @@ pub fn bind_keys(cx: &mut App, registry: &CommandRegistry) {
     }) {
         cx.bind_keys([KeyBinding::new(&keys, OpenCommandPalette, ctx)]);
     }
+    // Tab steps into the Files tree from the main area; the tree's own Tab
+    // hands the keyboard back (Explorer's binding, which wins over this one).
+    // The editor, text fields and an open menu keep Tab for themselves.
+    let into_tree = Some("Workspace && !Editor && !TextInput && !Explorer && !Menu");
+    cx.bind_keys([
+        KeyBinding::new("tab", FocusExplorer, into_tree),
+        KeyBinding::new("shift-tab", FocusExplorer, into_tree),
+    ]);
     // The Tags, All properties and Outline trees: arrows walk and fold,
     // Enter and Space act like a click. Home, End, Escape, F2 and Delete are not theirs.
     let tree = Some("DockTree");

@@ -40,6 +40,52 @@ tags:
 
 공유 application/domain crate는 프레임워크에 종속되지 않습니다. 이 Leptos 앱은 참고용으로 보존되어 있으며, 현재 GPUI Web 렌더러로 쓰이지 않습니다.
 
+## Google Cloud 설정
+
+아래 설정과 배포는 보존된 Leptos 배포를 기준으로 합니다.
+
+1. Google Cloud project를 만들고 **Google Drive API**와 **Google Picker API**를 사용 설정합니다
+   (APIs & Services → Library).
+2. OAuth 동의 화면을 External로 구성합니다. Data Access에
+   `https://www.googleapis.com/auth/drive.file`을 추가하고, 사용할 계정을 테스트 사용자로 등록합니다.
+3. **Credentials → OAuth client ID → Web application**을 만듭니다.
+4. 다음 **Authorized JavaScript origins**를 추가합니다.
+   - `http://127.0.0.1:8080`
+   - `https://tft-web-sage.vercel.app` (production)
+5. `apps/web/config.example.js`를 `apps/web/config.js`로 복사하고 client ID를 채웁니다. API key는
+   Picker에 선택 사항이므로 처음에는 비워 둡니다.
+6. Trunk를 한 번 설치한 뒤 serve합니다.
+
+   ```sh
+   cargo install trunk --locked
+   cd apps/web
+   trunk serve
+   ```
+
+7. `http://127.0.0.1:8080`을 열고 로그인한 뒤 **Pick vault**를 누릅니다. Picker를 쓸 수 없으면
+   fallback 입력란에 Drive 폴더 ID를 붙여 넣거나 **Create test vault**를 사용합니다.
+
+`config.js`는 특정 Google project를 가리키므로 gitignore되어 있습니다. 이 파일에는 공개 식별자만
+들어갑니다: OAuth client ID와, 필요하면 브라우저 API key입니다. OAuth **client secret**, refresh
+token, 사용자 access token은 이 파일이나 다른 frontend 파일, 저장소 어디에도 넣지 마세요. 노출되었다면
+Google Cloud Console에서 폐기하세요.
+
+Picker 문제 해결(401, `API key not valid`, `access_denied`)은 `apps/web/README.md`에 있습니다.
+
+## Vercel 배포
+
+배포 대상은 Vercel의 `tft-web` project, production origin은 `https://tft-web-sage.vercel.app`입니다.
+
+```powershell
+cd apps/web
+.\deploy.ps1                 # Trunk로 빌드하고, API key를 비우고, 배포
+.\deploy.ps1 -WithApiKey     # Vercel origin으로 제한한 key에만 사용
+```
+
+배포 전에 Vercel origin이 OAuth client의 Authorized JavaScript origins에 있어야 합니다.
+`vercel.json`이 CSP와 보안 헤더를 제공합니다. 배포되는 것은 공개 식별자뿐입니다: client secret,
+token, vault 데이터는 없습니다. 파일은 사용자의 Drive에 남습니다.
+
 ## 보안
 
 - `drive.file` scope만 사용하며, Picker가 선택한 PKMS 폴더에 접근 권한을 부여합니다.

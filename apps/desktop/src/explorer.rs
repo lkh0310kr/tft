@@ -51,6 +51,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", Activate, ctx),
         KeyBinding::new("space", ToggleFolder, ctx),
         KeyBinding::new("escape", LeaveTree, ctx),
+        // Tab leaves the tree for the main area; the workspace's Tab binding
+        // is what enters the tree from there. Shift+Tab is the same trip.
+        KeyBinding::new("tab", LeaveTree, ctx),
+        KeyBinding::new("shift-tab", LeaveTree, ctx),
         KeyBinding::new("f2", RenameFocused, ctx),
         KeyBinding::new("delete", DeleteFocused, ctx),
     ]);
@@ -176,6 +180,8 @@ pub enum ExplorerEvent {
     OpenInNewWindow(String),
     /// "Copy path": the vault-relative path onto the clipboard.
     CopyPath(String),
+    /// "Copy Path": the absolute filesystem path onto the clipboard.
+    CopyAbsolutePath(String),
     /// "Open in default app": hand the file to the desktop.
     OpenInDefaultApp(String),
     /// "Show in system explorer": the file or folder selected in the
@@ -193,6 +199,16 @@ pub enum ExplorerEvent {
 fn event_for(pick: Pick, target: &Target) -> Option<ExplorerEvent> {
     use ExplorerEvent as E;
     let path = || target.path().to_string();
+    // Creation and folder search act on the folder the row stands for; a
+    // file row stands for the folder that holds it, which is what a context
+    // menu's "New note" means on a file.
+    let folder = || match target {
+        Target::File(p) => p
+            .rsplit_once('/')
+            .map(|(dir, _)| dir.to_string())
+            .unwrap_or_default(),
+        _ => path(),
+    };
     Some(match pick {
         Pick::OpenInNewTab => E::OpenInNewTab(path()),
         Pick::OpenToRight => E::OpenToRight(path()),
@@ -200,14 +216,15 @@ fn event_for(pick: Pick, target: &Target) -> Option<ExplorerEvent> {
         Pick::Duplicate => E::Duplicate(path()),
         Pick::Move => E::Move(path()),
         Pick::CopyPath => E::CopyPath(path()),
+        Pick::CopyAbsolutePath => E::CopyAbsolutePath(path()),
         Pick::OpenInDefaultApp => E::OpenInDefaultApp(path()),
         Pick::ShowInSystemExplorer => E::ShowInSystemExplorer(path()),
         Pick::Rename => E::Rename(path()),
         Pick::Delete => E::Delete(path()),
-        Pick::NewNote => E::NewNote { folder: path() },
-        Pick::NewFolder => E::NewFolder { parent: path() },
-        Pick::NewCanvas => E::NewCanvas { folder: path() },
-        Pick::SearchInFolder => E::SearchInFolder(path()),
+        Pick::NewNote => E::NewNote { folder: folder() },
+        Pick::NewFolder => E::NewFolder { parent: folder() },
+        Pick::NewCanvas => E::NewCanvas { folder: folder() },
+        Pick::SearchInFolder => E::SearchInFolder(folder()),
         // "Reveal file in navigation" reveals *in* the explorer, the tab
         // rows are the tab header's, the splits are the view header's, and the rest are the editor menu's rows,
         // which act on the editor.
@@ -302,10 +319,20 @@ impl FileExplorer {
         }
     }
 
-    /// Gives the tree the keyboard, on the row it had or none: what
-    /// `file-explorer:open` does.
+    /// Gives the tree the keyboard, on the row it had, else the open file's
+    /// row, else the first row: what `file-explorer:open` and Tab do.
     pub fn focus_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_rename(cx);
+        if self.focused_ix().is_none() {
+            let ix = self
+                .active
+                .as_deref()
+                .and_then(|path| self.tree.visible_index(path))
+                .or_else(|| self.tree.row(0).map(|_| 0));
+            if let Some(ix) = ix {
+                self.set_focused_ix(ix, cx);
+            }
+        }
         window.focus(&self.focus_handle, cx);
         cx.notify();
     }
@@ -1248,6 +1275,7 @@ mod menu_tests {
             | ExplorerEvent::OpenToRight(p)
             | ExplorerEvent::OpenInNewWindow(p)
             | ExplorerEvent::CopyPath(p)
+            | ExplorerEvent::CopyAbsolutePath(p)
             | ExplorerEvent::OpenInDefaultApp(p)
             | ExplorerEvent::ShowInSystemExplorer(p)
             | ExplorerEvent::SearchInFolder(p) => Some(p),
@@ -1276,6 +1304,15 @@ mod menu_tests {
             for item in file_menu::items(&target) {
                 let event = event_for(item.pick, &target)
                     .unwrap_or_else(|| panic!("{} has no event on {target:?}", item.label));
+                // A file's creation and folder-search rows act on the folder
+                // that holds it; every other row acts on the row itself.
+                let want = match (&target, item.pick) {
+                    (
+                        Target::File(_),
+                        Pick::NewNote | Pick::NewFolder | Pick::NewCanvas | Pick::SearchInFolder,
+                    ) => "Notes/Deep",
+                    _ => want,
+                };
                 assert_eq!(
                     payload(&event),
                     Some(want),

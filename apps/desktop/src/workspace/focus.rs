@@ -1,6 +1,6 @@
 //! Desktop Workspace focus and typed-text routing.
 
-use super::{MainView, Workspace};
+use super::{FocusExplorer, MainView, Modal, Workspace};
 use gpui::{App, Context, FocusHandle, Focusable, Window};
 
 /// The Workspace root focus handle and a pending request to refocus its main view.
@@ -19,6 +19,26 @@ impl WorkspaceFocusState {
 }
 
 impl Workspace {
+    /// Tab from the main area: the keyboard goes into the Files tree, the
+    /// way Zed's sidebar takes a tab stop. The tree's own Tab binding hands
+    /// it back. Nothing happens with the sidebar hidden or a modal up.
+    pub(super) fn focus_explorer_action(
+        &mut self,
+        _: &FocusExplorer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.overlay.modal != Modal::None
+            || self.file_menu_state.menu.is_some()
+            || !self.left_dock.visible
+        {
+            return;
+        }
+        self.leave_search_field(window, cx);
+        self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
+        cx.notify();
+    }
+
     /// Asks for the keyboard to go back to the main area at the next paint. Most callers
     /// have no `Window`, so they record the request and `render` carries it out.
     pub(super) fn request_focus_main(&mut self, cx: &mut Context<Self>) {

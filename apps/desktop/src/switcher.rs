@@ -1,7 +1,6 @@
 //! The quick switcher (Ctrl+O): fuzzy search over file names, aliases and
-//! paths, recent files first while the query is empty, unresolved link
-//! targets shown as "Not created yet"; Enter on one of those, or on a query
-//! nothing matches, creates the note.
+//! paths, recent files first while the query is empty. It opens only files
+//! that exist; Enter on a query nothing matches does nothing.
 
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
@@ -38,23 +37,15 @@ fn offers(kind: FileKind, show_unsupported: bool, switcher: &SwitcherConfig) -> 
     }
 }
 
-/// Whether the switcher offers link targets no file resolves to, the rows
-/// labelled "Not created yet". "Show existing only" hides them.
-fn offers_unresolved(switcher: &SwitcherConfig) -> bool {
-    !switcher.show_existing_only.unwrap_or(false)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ItemKind {
     File,
     Alias,
-    /// A link target no file resolves to; opening it would create the note.
-    Unresolved,
 }
 
 #[derive(Debug, Clone)]
 struct Candidate {
-    /// Vault path, or the link text for an unresolved target.
+    /// Vault path.
     path: String,
     /// What is matched and shown: the file name without `.md`, or the alias.
     label: String,
@@ -165,7 +156,6 @@ fn rank(candidates: &[Candidate], recent: &[String], query: &str) -> Vec<Item> {
                 let penalty = match c.kind {
                     ItemKind::File => 0.0,
                     ItemKind::Alias => 500.0,
-                    ItemKind::Unresolved => 3.0,
                 };
                 items.push((
                     score - penalty,
@@ -194,9 +184,6 @@ fn rank(candidates: &[Candidate], recent: &[String], query: &str) -> Vec<Item> {
 
 pub enum SwitcherEvent {
     Open(String),
-    /// Enter on a target no file resolves to, or on a query nothing
-    /// matches: create the note with that name.
-    Create(String),
     Close,
 }
 
@@ -278,30 +265,6 @@ impl QuickSwitcher {
                 }
             }
         }
-        let mut unresolved: Vec<String> = if offers_unresolved(&switcher) {
-            cache
-                .files()
-                .flat_map(|(p, _)| {
-                    cache
-                        .unresolved_links(p)
-                        .map(|m| m.keys().cloned().collect::<Vec<_>>())
-                        .unwrap_or_default()
-                })
-                .filter(|t| !t.is_empty())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        unresolved.sort();
-        unresolved.dedup();
-        for target in unresolved {
-            candidates.push(Candidate {
-                path: target.clone(),
-                label: target,
-                kind: ItemKind::Unresolved,
-                downranked: false,
-            });
-        }
         drop(vault);
         drop(cache);
         self.candidates = candidates;
@@ -362,17 +325,10 @@ impl QuickSwitcher {
     }
 
     fn open_selected(&mut self, cx: &mut Context<Self>) {
-        match self.items.get(self.selected) {
-            Some(item) if item.candidate.kind == ItemKind::Unresolved => {
-                cx.emit(SwitcherEvent::Create(item.candidate.path.clone()));
-            }
-            Some(item) => cx.emit(SwitcherEvent::Open(item.candidate.path.clone())),
-            None => {
-                let query = self.input.read(cx).text().trim().to_string();
-                if !query.is_empty() {
-                    cx.emit(SwitcherEvent::Create(query));
-                }
-            }
+        // Files that exist only: a query nothing matches, or an empty list,
+        // leaves the switcher as it is. It never creates a note.
+        if let Some(item) = self.items.get(self.selected) {
+            cx.emit(SwitcherEvent::Open(item.candidate.path.clone()));
         }
     }
 
@@ -419,7 +375,6 @@ impl QuickSwitcher {
                         )
                         .into(),
                     ),
-                    ItemKind::Unresolved => Some("Not created yet".into()),
                 };
                 Some(
                     div()
@@ -443,7 +398,7 @@ impl QuickSwitcher {
                         .child(
                             div()
                                 .text_size(px(14.))
-                                .text_color(if c.kind == ItemKind::Unresolved || c.downranked {
+                                .text_color(if c.downranked {
                                     theme.tokens.text_muted
                                 } else {
                                     theme.tokens.text_normal
@@ -489,7 +444,7 @@ impl Render for QuickSwitcher {
                         .p_3()
                         .text_size(px(12.))
                         .text_color(theme.tokens.text_muted)
-                        .child("No matching files. Enter to create."),
+                        .child("No matching files."),
                 )
             })
     }
@@ -499,9 +454,8 @@ impl Render for QuickSwitcher {
 mod tests {
     use super::*;
 
-    fn config(existing: bool, attachments: bool, all_types: bool) -> SwitcherConfig {
+    fn config(attachments: bool, all_types: bool) -> SwitcherConfig {
         SwitcherConfig {
-            show_existing_only: Some(existing),
             show_attachments: Some(attachments),
             show_all_file_types: Some(all_types),
             ..SwitcherConfig::default()
@@ -509,8 +463,7 @@ mod tests {
     }
 
     /// A vault with no `switcher.json`: notes, canvases and attachments are
-    /// offered, unknown extensions are not, and the not-created-yet targets
-    /// are.
+    /// offered; unknown extensions are not.
     #[test]
     fn the_defaults_match_a_vault_with_no_switcher_json() {
         let d = SwitcherConfig::default();
@@ -519,12 +472,11 @@ mod tests {
         assert!(offers(FileKind::Image, false, &d));
         assert!(offers(FileKind::Pdf, false, &d));
         assert!(!offers(FileKind::Other, true, &d));
-        assert!(offers_unresolved(&d));
     }
 
     #[test]
     fn show_attachments_off_hides_the_attachment_kinds_only() {
-        let c = config(false, false, false);
+        let c = config(false, false);
         for kind in [
             FileKind::Image,
             FileKind::Audio,
@@ -541,10 +493,10 @@ mod tests {
     /// vault has to be listing unsupported files at all.
     #[test]
     fn an_unknown_extension_needs_both_gates() {
-        assert!(!offers(FileKind::Other, false, &config(false, true, false)));
-        assert!(!offers(FileKind::Other, true, &config(false, true, false)));
-        assert!(!offers(FileKind::Other, false, &config(false, true, true)));
-        assert!(offers(FileKind::Other, true, &config(false, true, true)));
+        assert!(!offers(FileKind::Other, false, &config(true, false)));
+        assert!(!offers(FileKind::Other, true, &config(true, false)));
+        assert!(!offers(FileKind::Other, false, &config(true, true)));
+        assert!(offers(FileKind::Other, true, &config(true, true)));
     }
 
     fn file(path: &str, downranked: bool) -> Candidate {
@@ -580,11 +532,5 @@ mod tests {
         assert_eq!(&o[o.len() - 2..], ["Archive/Old.md", "Archive/Older.md"]);
         let recent = vec!["Archive/Old.md".to_string(), "Keep.md".to_string()];
         assert_eq!(paths(rank(&candidates, &recent, "")), ["Keep.md"]);
-    }
-
-    #[test]
-    fn show_existing_only_hides_the_unresolved_targets() {
-        assert!(!offers_unresolved(&config(true, true, true)));
-        assert!(offers_unresolved(&config(false, true, true)));
     }
 }

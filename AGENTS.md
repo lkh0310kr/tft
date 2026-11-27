@@ -1,94 +1,58 @@
 # TFT
 
-Native Rust/GPUI Markdown knowledge base with a local, loss-preserving vault format.
+Rust/GPUI 네이티브 Markdown 지식 베이스입니다. Vault 폴더를 유일한 원본으로 유지합니다.
 
-## Ground rules
+- 불변 조건(원본 보존, 단일 Markdown parser, 측정된 식별자, clean room): `docs/Specification.md` §1
+- 전체 앱/crate 구조: `docs/Specification.md` §2
 
-- The vault folder is the only source of truth. Never write a file TFT did not change; preserve
-  line endings, BOMs, and unknown JSON/YAML keys (`#[serde(flatten)] extra` everywhere).
-- One Markdown parser (`markdown`) feeds the editor, reading view, cache, and link rewriting.
-  Do not add a second tokenizer for any of those.
-- Formats and behavior are specified in `docs/Specification.md`. When implementation and measured
-  behavior disagree, reproduce it with a vault fixture and update the specification.
-- Command IDs, config keys and file names are defined by the measured behavior and recorded in
-  `commands/data/commands.txt` and `formats/src/config.rs`.
-- Clean room: implement from the spec and public docs. Do not paste code, CSS, or icons from
-  external application bundles.
+## 구조 보충
 
-## Layout
+Specification §2에 없는 항목:
 
-```
-apps/desktop           GPUI app (bin): workspace shell, Files view, reading view, source editor
-apps/web                GPUI WebAssembly app shell backed by Google Drive
-apps/web-leptos         preserved Leptos implementation (separate workspace)
-assets                 icons and fonts shared by the desktop app and the future web app
-crates/app       shared app state/use cases and wasm-safe services
-crates/domain    VaultData graph, storage identities and invariants
-crates/vault     folder scanning, .tft config
-crates/markdown  OFM primitives
-crates/cache     CachedMetadata, LinkResolver
-crates/formats   FileKind, config types, canvas, base
-crates/commands  command registry, default hotkeys
-crates/cli       the command line: flags and help, the file argument, the one-window-per-vault handover (no gpui)
-crates/search    search query grammar and matcher, fuzzy search, Excluded files
-crates/text      editor text model: buffer, selections, undo, edit plans (no gpui)
-crates/suggest   autocompletion: triggers, candidates, the link an accepted row writes (no gpui)
-crates/canvas    canvas model: viewport math, edge geometry, hit tests, selection, edits with undo (no gpui)
-crates/pdf       PDF rendering on hayro: pages to RGBA, outline, title, page text, the #page= subpath (no gpui)
-crates/math      TeX math typeset on RaTeX (KaTeX-compatible): a drawing list in em units plus the KaTeX fonts (no gpui)
-crates/highlight code highlighting: Prism's tokenizer and grammars ported, and the --code-* each token paints from (no gpui)
-crates/export    Export to PDF and Export as image: block layout and pagination, the PDF (krilla), the canvas PNG (tiny-skia) (no gpui)
-crates/audio     the media player (symphonia + opus-decoder, cpal out) and a video file's header (no gpui)
-crates/paste     what a paste or a drop writes: attachment names, a uri-list's paths (no gpui)
-crates/spell     spellcheck: Hunspell dictionaries on spellbook (SCOWL en_US bundled, others from the system), the words markdown leaves to check, the custom dictionary (no gpui)
-crates/mermaid   Mermaid diagrams laid out by limu into a drawing list (no gpui)
-crates/control   the control socket's wire types, method table and a blocking client (no gpui)
-crates/bench     spike benchmarks: synthetic vault generator, index timer (bin)
-docs             documentation vault used directly by TFT
-tools/prism-port        writes highlight's generated grammars and its Prism corpus from Prism 1.29 (node); change it and re-run, never hand-edit the output
-tools/plugin-spike      phase 5's runtime spike: WIT components on wasmtime against extism, measured (OUTSIDE the cargo workspace)
-tools/writer-gate       the Writer gate's baselines and diffs: `gate.sh check`, `gate.sh baseline`, `gate.sh status`
-tools/reference-probe    the probe scripts; `reference/observed-behavior.md` is the raw observation record behind the specification
-```
+- `docs/` — TFT로 직접 여는 문서 vault.
+- `tools/prism-port` — Prism 1.29에서 `highlight`의 grammar와 corpus를 생성합니다(node). 손으로 고치지 말고
+  스크립트를 고친 뒤 다시 실행합니다.
+- `tools/plugin-spike` — wasmtime vs extism을 측정한 phase 5 runtime spike. Cargo workspace 밖에 있습니다.
+- `tools/writer-gate` — Writer gate baseline/diff. `gate.sh check`, `gate.sh baseline`, `gate.sh status`.
+- `tools/reference-probe` — probe 스크립트. `reference/observed-behavior.md`가 명세의 근거인 원시 관측
+  기록입니다.
 
 ## Commands
 
-On NixOS run these inside `nix-shell` (`shell.nix` supplies gpui's X11, Wayland, and Vulkan libraries).
-`CARGO_TARGET_DIR` defaults to the repo's `target/`. The repo sits on an SMB share that a Linux
-machine also builds in.
-On the Mac, `build.build-dir` in `~/.cargo/config.toml` keeps intermediate artifacts on the local disk:
-smbfs has no fcntl locks, which incremental compilation needs. If the share is ever mounted with the
-quarantine flag again, binaries written there make Gatekeeper prompt; point `CARGO_TARGET_DIR` at a
-local directory then.
-gpui is a git dependency pinned to a Zed release commit (see the note in `Cargo.toml`); the crates.io
-release is stale and crashes on NVIDIA. Bump the pin on its own, one release at a time, and run the
-app on a real GPU before committing.
+Linux/NixOS에서는 `nix-shell` 안에서 실행합니다. `shell.nix`가 gpui의 X11, Wayland, Vulkan 라이브러리를
+제공합니다. `CARGO_TARGET_DIR`은 기본으로 저장소의 `target/`을 쓰며, 저장소가 SMB 공유에 있어 Linux
+머신도 같은 곳에서 빌드합니다.
+
+Mac에서는 `~/.cargo/config.toml`의 `build.build-dir`로 중간 산출물을 로컬 디스크에 둡니다. smbfs에는
+fcntl lock이 없어 증분 컴파일이 되지 않기 때문입니다. 공유가 다시 quarantine 플래그로 마운트되면
+공유에 쓰인 바이너리가 Gatekeeper 프롬프트를 띄우므로, 그때는 `CARGO_TARGET_DIR`을 로컬 디렉터리로
+지정합니다.
 
 ```
-cargo test --workspace            # all library tests (fast)
-cargo wasm-check                  # pure crates for wasm32-unknown-unknown
-TFT_ROUNDTRIP_VAULT=<vault> cargo test -p text --test writer_roundtrip   # Writer gate round trips, over a real vault too
-cargo check -p desktop             # app, pulls gpui (slow first time)
-cargo run --release -p desktop -- <vault> [--note "Name#Heading"]   # open a vault (release: the editor reparses on every edit)
-cargo run --release -p desktop -- --help                            # every flag, written from cli's own table
-cargo run --release -p desktop -- <vault>/Note.md --new-window      # a file argument; --new-window skips the handover a second run makes
-cargo run --release -p desktop -- <vault> --frame native   # the desktop's title bar instead of the hidden frame (TFT_FRAME=native does the same)
-cargo run --release -p desktop -- <vault> --synthetic 50000 --stress   # editor spike: self-driven edits, prints timings
-cargo run --release -p desktop -- <vault> --note X --source --type '[[al' [--accept enter]  # open the autocompletion popup (and press its keys) for a screenshot
-cargo run --release -p bench -- generate <dir>   # synthetic 20k-note vault
-cargo run --release -p bench -- index <vault>    # time scan/read/index/resolve, check the 2 s gate
+cargo test --workspace            # 라이브러리 전체 테스트 (빠름)
+cargo wasm-check                  # 순수 crate를 wasm32-unknown-unknown으로 검사
+TFT_ROUNDTRIP_VAULT=<vault> cargo test -p text --test writer_roundtrip   # 실제 vault로 Writer gate roundtrip
+cargo check -p desktop             # 앱 확인 (gpui 첫 빌드는 느림)
+cargo run --release -p desktop -- <vault> [--note "Name#Heading"]   # vault 열기 (release: 편집마다 재파싱)
+cargo run --release -p desktop -- --help                            # cli 표에서 생성한 모든 flag
+cargo run --release -p desktop -- <vault>/Note.md --new-window      # 파일 인자; --new-window는 두 번째 실행의 handover를 건너뜀
+cargo run --release -p desktop -- <vault> --frame native   # hidden frame 대신 데스크톱 title bar (TFT_FRAME=native와 동일)
+cargo run --release -p desktop -- <vault> --synthetic 50000 --stress   # 에디터 spike: 자체 편집을 돌리고 시간 출력
+cargo run --release -p desktop -- <vault> --note X --source --type '[[al' [--accept enter]  # 자동완성 popup 열기(및 키 입력)로 스크린샷
+cargo run --release -p bench -- generate <dir>   # 합성 20k-note vault
+cargo run --release -p bench -- index <vault>    # scan/read/index/resolve 시간 측정, 2초 gate 확인
 cargo fmt --all && cargo clippy --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings   # clippy as CI ran it: current stable, warnings denied
+cargo clippy --workspace --all-targets -- -D warnings   # CI와 동일: 현재 stable, warning 거부
 ```
 
 ## Conventions
 
-- Vault-relative paths use `/` and keep original case; comparisons are case-insensitive.
-- Positions use zero-based line/column coordinates plus a byte offset.
-- Tests that need a vault build one in a `tempfile::tempdir()`; never depend on the developer's vault.
-- `crates/markdown/tests/corpus` holds measured renderings from a 1000-note vault; the corpus test
-  and the CommonMark suite are ratchets. When a rendering differs, add a
-  probe note to `tests/corpus/vault/edge`, re-render with the plugin in that vault, and match the
-  observed behavior (list it in `docs/Specification.md`).
-- `docs/` is a Markdown vault: write notes with wikilinks and frontmatter, and keep
-  `.tft/` committed except `workspace.json`.
+- Vault 기준 경로는 `/`를 쓰고 원래 대소문자를 유지합니다. 비교는 대소문자를 무시합니다.
+- 위치는 0부터 시작하는 line/column과 byte offset을 함께 사용합니다.
+- Vault가 필요한 테스트는 `tempfile::tempdir()`에 직접 만듭니다. 개발자의 vault에 의존하지 않습니다.
+- 모델링하지 않은 JSON/YAML key 보존은 `#[serde(flatten)] extra`로 구현합니다.
+- `crates/markdown/tests/corpus`의 렌더링이 달라지면 `tests/corpus/vault/edge`에 probe note를 추가하고,
+  그 vault의 plugin으로 다시 렌더링해 관측된 동작에 맞춥니다. 결과는 `docs/Specification.md`에
+  기록합니다. CommonMark suite와 corpus는 ratchet입니다.
+- `docs/`는 Markdown vault입니다. wikilink와 frontmatter로 노트를 쓰고, `.tft/`는 `workspace.json`만
+  빼고 commit합니다.

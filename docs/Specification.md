@@ -107,9 +107,9 @@ Editor는 `tft-text`를 사용하는 단일 view입니다. buffer, selection, un
 
 ## 7. 뷰
 
-- **Files** — 폴더 트리, 키보드 탐색, context menu, 행 내 이름 변경, drag/drop, 파일 작업.
+- **Files** — 폴더 트리, 키보드 탐색, context menu, 행 내 이름 변경, drag/drop, 파일 작업. 파일·폴더·빈 영역의 context menu는 **같은 항목 목록**을 아이콘 없이 보여 주고, 그 대상에 쓸 수 없는 항목은 disabled(흐리게)로 둡니다(Zed 방식). 파일 행의 New note/New folder/New canvas와 Search in folder는 그 파일이 있는 **부모 폴더**를 대상으로 합니다.
 - **Search** — `Mod+Shift+F`로 중앙 Search 탭을 엽니다. query 문법(`path:`, `file:`, `tag:`, `line:`, `section:`, `block:`, `task:`, regex, 대소문자/설명 옵션), 강조 표시가 있는 그룹 결과, Copy search results를 지원합니다. 결과는 일반 문서 탭에서 열리고 Search 탭은 유지됩니다.
-- **Quick switcher** — `Mod+P`(macOS `Cmd+P`)로 열고, 파일/alias fuzzy 탐색, 새 파일 생성 후 열기.
+- **Quick switcher** — `Mod+P`(macOS `Cmd+P`)로 열고, 파일/alias fuzzy 탐색. 존재하는 파일만 열며, 일치하는 파일이 없거나 "Not created yet" 대상이면 Enter를 눌러도 새 파일을 만들지 않습니다.
 - **Command palette** — `Mod+Shift+P`(macOS `Cmd+Shift+P`)로 열고, 지금 실행할 수 있는 명령을 fuzzy 탐색합니다. 빈 query는 이 세션에서 최근 실행한 명령부터 나열하며, 각 행에 hotkey를 표시합니다. Slash commands popup과 같은 command list를 사용합니다.
 - **Graph** — 전체/로컬 graph, filter, group, force, timelapse; 첨부 파일은 선택 사항.
 - **Canvas** — 이동/확대/선택/이동/크기 조절, card, note/image/PDF card, label이 있는 edge, group, 정렬, undo. `.canvas` JSON은 정해진 byte 형식으로 저장합니다.

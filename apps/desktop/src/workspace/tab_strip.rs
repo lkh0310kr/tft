@@ -3,8 +3,9 @@
 use super::render::GroupView;
 use super::tab_drag::{measure_for_drag, DragPart, TabDrag, TabDragPreview, DROP_BAR_WIDTH};
 use super::{
-    display_name, file_menu, icon, release_notes, window_handle, FileKind, Pick, Tab, ViewMode,
-    WindowFrame, Workspace, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, WINDOW_RADIUS,
+    display_name, file_menu, icon, release_notes, window_handle, FileKind, GoBack, GoForward,
+    Pick, Tab, ViewMode, WindowFrame, Workspace, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH,
+    WINDOW_RADIUS,
 };
 use crate::theme::Theme;
 use gpui::{
@@ -78,6 +79,8 @@ impl Workspace {
         let active_ix = view.active_tab;
         let group = view.id;
         let group_active = view.active;
+        let can_back = view.history_ix > 1;
+        let can_forward = view.history_ix < view.history_len;
         let frameless = frame.frameless;
         let mac = frame.mac_frame();
         // A popout has no sidebars or ribbon: its corner strips draw no toggle (observed).
@@ -141,6 +144,41 @@ impl Workspace {
             .when(first && !popout && !left_open, |d| {
                 d.child(self.sidebar_toggle(theme, cx).mb(px(8.)).mr(px(2.)))
             })
+            // Back and forward sit in the strip's own cell, as Zed puts them:
+            // a fixed pair left of the tabs, parted from them by a hairline.
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .h_full()
+                    .gap(px(0.))
+                    .pl(px(4.))
+                    .pr(px(4.))
+                    .child(
+                        crate::ui::icon_button("back", "arrow-left", theme)
+                            .when(!can_back, |d| d.opacity(0.4))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_group(group, cx);
+                                this.go_back(&GoBack, window, cx)
+                            })),
+                    )
+                    .child(
+                        crate::ui::icon_button("forward", "arrow-right", theme)
+                            .when(!can_forward, |d| d.opacity(0.4))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_group(group, cx);
+                                this.go_forward(&GoForward, window, cx)
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .w(px(1.))
+                    .flex_shrink_0()
+                    .bg(theme.tokens.tab_divider_color),
+            )
             // The tabs scroll sideways in their own box, so a crowded strip keeps every
             // tab reachable.
             .child(

@@ -432,6 +432,79 @@ pub fn modal_panel(id: impl Into<ElementId>, width: f32, theme: &Theme) -> State
         .shadow_lg()
 }
 
+/// Shared frame for file and command palettes.
+pub fn palette_panel(id: impl Into<ElementId>, width: f32, theme: &Theme) -> Stateful<Div> {
+    modal_panel(id, width, theme).overflow_hidden()
+}
+
+/// Search field slot and divider shared by both palettes.
+pub fn palette_search_slot(theme: &Theme) -> Div {
+    div()
+        .w_full()
+        .p(px(8.))
+        .border_b_1()
+        .border_color(theme.tokens.background_modifier_border)
+}
+
+/// Inset list region shared by both palettes.
+pub fn palette_results_slot() -> Div {
+    div().w_full().px(px(6.)).py(px(6.))
+}
+
+/// A palette result row. The caller supplies its contents and click action.
+pub fn palette_result_row(
+    id: impl Into<ElementId>,
+    selected: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w_full()
+        .h(px(38.))
+        .px(px(10.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(10.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .when(selected, |d| d.bg(theme.tokens.background_modifier_hover))
+        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+}
+
+/// Bottom action bar shared by both palettes. Labels are hints; owners keep
+/// action behavior in their own view model.
+pub fn palette_footer(
+    primary: &'static str,
+    primary_key: &'static str,
+    secondary: &'static str,
+    secondary_key: &'static str,
+    theme: &Theme,
+) -> Div {
+    let hint = |label: &'static str, key: &'static str| {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.))
+            .child(div().text_color(theme.tokens.text_normal).child(label))
+            .child(div().text_color(theme.tokens.text_muted).child(key))
+    };
+    div()
+        .w_full()
+        .h(px(36.))
+        .px(px(10.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .border_t_1()
+        .border_color(theme.tokens.background_modifier_border)
+        .text_size(px(12.))
+        .child(hint(primary, primary_key))
+        .child(hint(secondary, secondary_key))
+}
+
 /// A dialog's panel: the secondary background in a border-coloured frame,
 /// the large radius and shadow every one of TFT's dialogs shares.
 pub fn dialog_panel(id: &'static str, width: f32, theme: &Theme) -> Stateful<Div> {

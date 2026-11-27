@@ -159,7 +159,8 @@ actions!(
         GoForward,
         OpenSearch,
         OpenGraph,
-        OpenCommandPalette
+        OpenCommandPalette,
+        FocusExplorer
     ]
 );
 

@@ -167,6 +167,7 @@ impl Workspace {
             Pick::Rename => self.start_rename(&path, window, cx),
             Pick::Move => self.start_move(&path, window, cx),
             Pick::CopyPath => self.copy_path(&path, cx),
+            Pick::CopyAbsolutePath => self.copy_absolute_path(&path, cx),
             Pick::OpenInDefaultApp => self.open_in_default_app(&path, cx),
             Pick::ShowInSystemExplorer => self.show_in_system_explorer(&path, cx),
             Pick::RevealInNavigation => self.reveal_in_navigation(&path, window, cx),
@@ -252,6 +253,17 @@ impl Workspace {
     /// speaks. Silent, as Obsidian shows no notice for it.
     pub(super) fn copy_path(&mut self, path: &str, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(path.to_string()));
+    }
+
+    /// The Files tree's "Copy Path": the absolute filesystem path.
+    pub(super) fn copy_absolute_path(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.vault_session.state.as_ref() else {
+            return;
+        };
+        let absolute = state.vault().absolute(path);
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            super::commands::full_path_text(absolute),
+        ));
     }
 
     /// The explorer menu's "Open in default app": one command per platform, no crate.

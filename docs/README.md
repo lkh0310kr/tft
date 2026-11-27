@@ -13,4 +13,4 @@ tags:
 - [[Web-Rebuild]] — GPUI Web 기반 구현의 목표, 진행 상황, 단계별 계획과 검증 기준을 기록합니다.
 - [[Workspace-Refactor]] — Desktop과 Web의 Workspace 동작을 공통화하고 Desktop 전용 경계를 정리하는 단계별 계획입니다.
 
-명세의 근거가 되는 측정값과 프로브 기록은 `tools/reference-probe/reference/observed-behavior.md`에 있습니다. 빌드 명령은 저장소의 `AGENTS.md`와 `README.md`를 참고하세요.
+명세의 근거가 되는 측정값과 프로브 기록은 `tools/reference-probe/reference/observed-behavior.md`에 있습니다. 빌드 명령은 저장소의 `AGENTS.md`를 참고하세요.

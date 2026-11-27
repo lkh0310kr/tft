@@ -173,6 +173,7 @@ pub enum Pick {
     Duplicate,
     Move,
     CopyPath,
+    CopyAbsolutePath,
     OpenInDefaultApp,
     ShowInSystemExplorer,
     /// "Reveal file in navigation": the Files view scrolled to the row.
@@ -372,7 +373,6 @@ fn tree_items(target: &Target) -> Vec<Item> {
     use Section as S;
     let file = matches!(target, Target::File(_));
     let folder = matches!(target, Target::Folder(_));
-    let blank = matches!(target, Target::Blank);
     let row = |label: &'static str, section: Section, pick: Pick, enabled: bool| Item {
         label: SharedString::new_static(label),
         icon: "",
@@ -384,29 +384,29 @@ fn tree_items(target: &Target) -> Vec<Item> {
         submenu: Vec::new(),
     };
     vec![
-        row("New note", S::ActionPrimary, P::NewNote, folder || blank),
-        row(
-            "New folder",
-            S::ActionPrimary,
-            P::NewFolder,
-            folder || blank,
-        ),
-        row(
-            "New canvas",
-            S::ActionPrimary,
-            P::NewCanvas,
-            folder || blank,
-        ),
+        // A file's creation rows act on the folder that holds it, so they
+        // stay enabled there too: a context menu greys out only what has no
+        // sensible target, never an item whose target is one level up.
+        row("New File", S::ActionPrimary, P::NewNote, true),
+        row("New folder", S::ActionPrimary, P::NewFolder, true),
+        row("New canvas", S::ActionPrimary, P::NewCanvas, true),
         row("Open in new tab", S::Open, P::OpenInNewTab, file),
         row("Open to the right", S::Open, P::OpenToRight, file),
         row("Open in new window", S::Open, P::OpenInNewWindow, file),
-        row("Make a copy", S::Action, P::Duplicate, file || folder),
+        row("Duplicate", S::Action, P::Duplicate, file || folder),
         row("Move to...", S::Action, P::Move, file || folder),
-        row("Search in folder", S::Action, P::SearchInFolder, folder),
-        row("Copy path", S::Unsectioned, P::CopyPath, file || folder),
+        // A file's "Search in folder" is the folder above it.
+        row(
+            "Search in folder",
+            S::Action,
+            P::SearchInFolder,
+            file || folder,
+        ),
+        row("Copy Path", S::Unsectioned, P::CopyAbsolutePath, file || folder),
+        row("Copy Relative Path", S::Unsectioned, P::CopyPath, file || folder),
         row("Open in default app", S::System, P::OpenInDefaultApp, file),
         row(
-            "Show in system explorer",
+            reveal_label(),
             S::System,
             P::ShowInSystemExplorer,
             file || folder,
@@ -414,6 +414,16 @@ fn tree_items(target: &Target) -> Vec<Item> {
         row("Rename...", S::Danger, P::Rename, file || folder),
         row("Delete", S::Danger, P::Delete, file || folder),
     ]
+}
+
+fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Reveal in File Explorer"
+    } else {
+        "Reveal in File Manager"
+    }
 }
 
 pub fn items(target: &Target) -> Vec<Item> {
@@ -894,6 +904,25 @@ pub fn render<V: 'static>(
         over_submenu.clone(),
     );
     let mut previous: Option<Section> = None;
+    // A menu whose rows all go without icons (the Files tree's) keeps no
+    // empty icon column: the labels start at the panel's padding.
+    let any_icons = items(&menu.target).iter().any(|i| !i.icon.is_empty());
+    let hotkey = |pick: Pick| {
+        if !matches!(menu.target, Target::File(_) | Target::Folder(_) | Target::Blank) {
+            return None;
+        }
+        let id = match pick {
+            Pick::NewNote => Some("file-explorer:new-file"),
+            Pick::Rename => Some("workspace:edit-file-title"),
+            _ => None,
+        }?;
+        cx.global::<crate::workspace::Commands>()
+            .0
+            .get(id)?
+            .hotkeys
+            .first()
+            .map(tft_commands::hotkey_label)
+    };
     for (ix, item) in items(&menu.target).into_iter().enumerate() {
         // Obsidian emits two separators before the danger pair but draws
         // only the first: the second is `display: none` (its rect is zero
@@ -941,21 +970,26 @@ pub fn render<V: 'static>(
                 })
             })
             // "No suggestions..." has no icon; its text keeps the column.
-            .child(if item.icon.is_empty() {
-                div().size(px(16.)).flex_shrink_0().into_any_element()
-            } else {
-                crate::assets::icon(
-                    item.icon,
-                    16.,
-                    if item.disabled {
-                        faded
-                    } else {
-                        theme.tokens.text_muted
-                    },
-                )
-                .into_any_element()
+            .when(any_icons, |d| {
+                d.child(if item.icon.is_empty() {
+                    div().size(px(16.)).flex_shrink_0().into_any_element()
+                } else {
+                    crate::assets::icon(
+                        item.icon,
+                        16.,
+                        if item.disabled {
+                            faded
+                        } else {
+                            theme.tokens.text_muted
+                        },
+                    )
+                    .into_any_element()
+                })
             })
             .child(div().flex_1().child(item.label.clone()))
+            .when_some(hotkey(item.pick), |d, hint| {
+                d.child(div().flex_shrink_0().text_color(theme.tokens.text_muted).child(hint))
+            })
             .when(item.checked, |d| {
                 d.child(crate::assets::icon("check", 14., theme.tokens.text_muted))
             })
@@ -1132,72 +1166,57 @@ mod tests {
     use super::*;
     use gpui::AssetSource;
 
-    /// [[Specification#The file explorer's context menus]], the file-row
-    /// table, minus the one item TFT has no command for -- Open version
-    /// history. Dropping it empties the `view` section, so the separator the
-    /// capture has around it is gone too; every other separator is where
-    /// Obsidian put it, including the pair above Rename.
+    /// The Files tree has one menu: a file row, a folder row and the empty
+    /// space below them all draw the same rows in the same order, with no
+    /// icons, and a row that cannot act on the clicked target is disabled.
+    /// This is TFT's own choice (Zed's project panel does the same), not the
+    /// per-target tables Obsidian draws.
     #[test]
-    fn the_file_rows_menu_is_references_order_without_the_rows_it_cannot_run() {
-        assert_eq!(
-            drawn(&Target::File("Notes/Plan.md".into())),
-            [
-                "Open in new tab",
-                "Open to the right",
-                "Open in new window",
-                "---",
-                "Make a copy",
-                "Move file to...",
-                "---",
-                "Copy path",
-                "---",
-                "Open in default app",
-                "Show in system explorer",
-                "---",
-                "---",
-                "Rename...",
-                "Delete",
-            ]
-        );
-    }
-
-    /// The folder-row table, whole. A folder gets no "Open in default app":
-    /// the capture has that item on the file row only, and "Show in system
-    /// explorer" is its whole `system` section.
-    #[test]
-    fn the_folder_rows_menu_is_references_order() {
-        assert_eq!(
-            drawn(&Target::Folder("Notes".into())),
-            [
-                "New note",
-                "New folder",
-                "New canvas",
-                "---",
-                "Make a copy",
-                "Move folder to...",
-                "Search in folder",
-                "---",
-                "Copy path",
-                "---",
-                "Show in system explorer",
-                "---",
-                "---",
-                "Rename...",
-                "Delete",
-            ]
-        );
-    }
-
-    /// "The empty space below the last row gives only the `action-primary`
-    /// items" -- so no separators at all, and every one of them rooted at
-    /// the vault.
-    #[test]
-    fn the_empty_space_offers_the_creation_items_at_the_root() {
-        assert_eq!(
-            drawn(&Target::Blank),
-            ["New note", "New folder", "New canvas"]
-        );
-        assert_eq!(Target::Blank.path(), "");
+    fn the_tree_menus_are_one_list_with_disabled_rows() {
+        let want = [
+            "New File",
+            "New folder",
+            "New canvas",
+            "---",
+            "Open in new tab",
+            "Open to the right",
+            "Open in new window",
+            "---",
+            "Duplicate",
+            "Move to...",
+            "Search in folder",
+            "---",
+            "Copy Path",
+            "Copy Relative Path",
+            "---",
+            "Open in default app",
+            reveal_label(),
+            "---",
+            "---",
+            "Rename...",
+            "Delete",
+        ];
+        let file = Target::File("Notes/Plan.md".into());
+        let folder = Target::Folder("Notes".into());
+        let blank = Target::Blank;
+        for target in [file.clone(), folder.clone(), blank.clone()] {
+            assert_eq!(drawn(&target), want, "{target:?}");
+            assert!(items(&target).iter().all(|i| i.icon.is_empty()));
+        }
+        let disabled = |target: &Target| -> Vec<Pick> {
+            items(target)
+                .into_iter()
+                .filter(|i| i.disabled)
+                .map(|i| i.pick)
+                .collect()
+        };
+        // Every row has a target on a file: creation and search act on the
+        // folder above it, so none of them is disabled.
+        assert!(disabled(&file).is_empty());
+        assert!(disabled(&folder).contains(&Pick::OpenInNewTab));
+        assert!(!disabled(&folder).contains(&Pick::NewNote));
+        assert!(disabled(&blank).contains(&Pick::CopyPath));
+        assert!(!disabled(&blank).contains(&Pick::NewFolder));
     }
 
     /// The 2026-10-22 probe's `s13-context-menu`, read off a Links row of

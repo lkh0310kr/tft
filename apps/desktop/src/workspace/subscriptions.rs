@@ -111,6 +111,7 @@ pub(super) fn workspace_subscriptions(
                     this.open_path_in_new_window(path.clone(), window, cx)
                 }
                 ExplorerEvent::CopyPath(path) => this.copy_path(path, cx),
+                ExplorerEvent::CopyAbsolutePath(path) => this.copy_absolute_path(path, cx),
                 ExplorerEvent::OpenInDefaultApp(path) => this.open_in_default_app(path, cx),
                 ExplorerEvent::ShowInSystemExplorer(path) => this.show_in_system_explorer(path, cx),
                 ExplorerEvent::SearchInFolder(folder) => this.search_in_folder(folder, window, cx),
@@ -252,10 +253,13 @@ pub(super) fn workspace_subscriptions(
                 SwitcherEvent::Open(path) => {
                     this.close_modal(window, cx);
                     this.open_file(path.clone(), None, cx);
-                }
-                SwitcherEvent::Create(name) => {
-                    this.close_modal(window, cx);
-                    this.create_from_link(name, window, cx);
+                    // The switcher can open a file inside a folded folder with
+                    // the sidebar hidden. Show it there too: the row is
+                    // selected and scrolled into view, while the keyboard
+                    // stays on the note that just opened.
+                    this.left_dock.visible = true;
+                    this.explorer.update(cx, |e, cx| e.reveal(&path, cx));
+                    cx.notify();
                 }
                 SwitcherEvent::Close => this.close_modal(window, cx),
             },

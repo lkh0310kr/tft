@@ -80,6 +80,7 @@ impl Workspace {
     ) -> gpui::Stateful<gpui::Div> {
         let command = "app:toggle-left-sidebar";
         crate::ui::icon_button("toggle-left", "panel-left", theme)
+            .ml(px(4.))
             .on_click(cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)))
     }
 
