@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if ! command -v rustup >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-fi
-
-source "$HOME/.cargo/env"
+TRUNK_VERSION=0.22.2
+CARGO_BIN_DIR="$(dirname "$(command -v cargo)")"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+  | tar -xz -C "$CARGO_BIN_DIR" trunk
 rustup target add wasm32-unknown-unknown
-cargo install trunk --locked --version 0.22.2
