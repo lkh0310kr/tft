@@ -825,7 +825,7 @@ mod tests {
     // ---------------------------------------------------------- inference
 
     #[test]
-    fn inference_matches_obsidian_1_14_4() {
+    fn inference_matches_reference_1_14_4() {
         let t = |v: Value| v.inferred_type();
         assert_eq!(t(Value::Text("hello".into())), PropertyType::Text);
         assert_eq!(t(Value::Number(42.0)), PropertyType::Number);
@@ -861,7 +861,7 @@ mod tests {
     // ---------------------------------------------------------- rendering
 
     #[test]
-    fn renders_scalars_the_way_obsidian_writes_them() {
+    fn renders_scalars_the_way_reference_writes_them() {
         let r = |s: &str| render_entry("k", &Value::Text(s.into()), "\n");
         assert_eq!(r("a: b"), "k: \"a: b\"");
         assert_eq!(r("a #b"), "k: \"a #b\"");

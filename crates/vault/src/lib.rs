@@ -1,5 +1,5 @@
 //! A vault is a plain folder. This crate opens one, enumerates its files, and
-//! reads `.obsidian` configuration without ever owning data outside the folder.
+//! reads `.tft` configuration without ever owning data outside the folder.
 
 pub mod attachments;
 pub mod data;
@@ -11,11 +11,11 @@ pub use registry::{VaultEntry, VaultRegistry};
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use tft_cache::LinkResolver;
-use tft_formats::config::{
-    merge_config, AppConfig, AppearanceConfig, CanvasConfig, CorePlugins, GraphConfig, Hotkeys,
-    PagePreviewConfig, PropertyTypes, SwitcherConfig, DEFAULT_CONFIG_DIR,
-};
 use tft_formats::FileKind;
+use tft_formats::config::{
+    AppConfig, AppearanceConfig, CanvasConfig, CorePlugins, DEFAULT_CONFIG_DIR, GraphConfig,
+    Hotkeys, PagePreviewConfig, PropertyTypes, SwitcherConfig, merge_config,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -93,7 +93,7 @@ pub struct Vault {
 }
 
 impl Vault {
-    /// Opens a vault with the default `.obsidian` config directory.
+    /// Opens a vault with the default `.tft` config directory.
     pub fn open(root: impl AsRef<Path>) -> Result<Vault, VaultError> {
         Vault::open_with_config_dir(root, DEFAULT_CONFIG_DIR)
     }
@@ -390,7 +390,7 @@ impl Vault {
             .map_err(|source| VaultError::Json { path, source })
     }
 
-    /// Writes one `.obsidian` config file, changing only what `value`
+    /// Writes one `.tft` config file, changing only what `value`
     /// changed.
     ///
     /// Obsidian writes these with two-space indentation and no trailing
@@ -410,7 +410,7 @@ impl Vault {
         self.write_config_with(name, value, true)
     }
 
-    /// Writes one `.obsidian` config file whole, so that a key `value` no
+    /// Writes one `.tft` config file whole, so that a key `value` no
     /// longer has leaves the file too. For a file that *is* a map of
     /// entries — `hotkeys.json`, where dropping a command's entry is what
     /// restores its defaults — the merge in [`Vault::write_config`] would
@@ -519,7 +519,7 @@ mod tests {
     fn sample_vault() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let r = dir.path();
-        fs::create_dir_all(r.join(".obsidian")).unwrap();
+        fs::create_dir_all(r.join(".tft")).unwrap();
         fs::create_dir_all(r.join(".trash")).unwrap();
         fs::create_dir_all(r.join("Projects")).unwrap();
         fs::write(r.join("Note.md"), "# Note\n[[Plan]]").unwrap();
@@ -528,9 +528,9 @@ mod tests {
         fs::write(r.join("pic.PNG"), "").unwrap();
         fs::write(r.join(".hidden.md"), "").unwrap();
         fs::write(r.join(".trash/old.md"), "").unwrap();
-        fs::write(r.join(".obsidian/app.json"), r#"{"vimMode":true}"#).unwrap();
+        fs::write(r.join(".tft/app.json"), r#"{"vimMode":true}"#).unwrap();
         fs::write(
-            r.join(".obsidian/core-plugins.json"),
+            r.join(".tft/core-plugins.json"),
             r#"{"file-explorer":true,"graph":true,"canvas":false}"#,
         )
         .unwrap();
@@ -598,7 +598,7 @@ mod tests {
                 FileChange::Removed("Projects/Plan.md".into())
             ]
         );
-        assert!(vault.refresh_path(&r.join(".obsidian/app.json")).is_empty());
+        assert!(vault.refresh_path(&r.join(".tft/app.json")).is_empty());
         assert!(vault.refresh_path(&r.join(".trash/x.md")).is_empty());
         assert!(vault.refresh_path(Path::new("/elsewhere/x.md")).is_empty());
         let paths: Vec<&str> = vault.files().iter().map(|f| f.path.as_str()).collect();
@@ -631,12 +631,12 @@ mod tests {
     #[test]
     fn writing_a_config_value_nothing_changed_rewrites_nothing() {
         let dir = sample_vault();
-        fs::write(dir.path().join(".obsidian/graph.json"), GRAPH_JSON).unwrap();
+        fs::write(dir.path().join(".tft/graph.json"), GRAPH_JSON).unwrap();
         let vault = Vault::open(dir.path()).unwrap();
         let graph = vault.graph_config().unwrap();
         vault.write_config("graph.json", &graph).unwrap();
         assert_eq!(
-            fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap(),
+            fs::read_to_string(dir.path().join(".tft/graph.json")).unwrap(),
             GRAPH_JSON,
             "a value read and written back changed the file"
         );
@@ -645,12 +645,12 @@ mod tests {
     #[test]
     fn writing_a_changed_setting_leaves_the_other_keys_alone() {
         let dir = sample_vault();
-        fs::write(dir.path().join(".obsidian/graph.json"), GRAPH_JSON).unwrap();
+        fs::write(dir.path().join(".tft/graph.json"), GRAPH_JSON).unwrap();
         let vault = Vault::open(dir.path()).unwrap();
         let mut graph = vault.graph_config().unwrap();
         graph.show_tags = Some(true);
         vault.write_config("graph.json", &graph).unwrap();
-        let after = fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap();
+        let after = fs::read_to_string(dir.path().join(".tft/graph.json")).unwrap();
         assert_eq!(
             after,
             GRAPH_JSON.replace("\"showTags\": false", "\"showTags\": true"),
@@ -664,14 +664,14 @@ mod tests {
         // `colorGroups` is skipped when empty, and `theme` is a key no
         // graph config models at all. Both have to survive a write.
         fs::write(
-            dir.path().join(".obsidian/graph.json"),
+            dir.path().join(".tft/graph.json"),
             "{\n  \"colorGroups\": [],\n  \"theme\": \"moonstone\",\n  \"scale\": 1\n}",
         )
         .unwrap();
         let vault = Vault::open(dir.path()).unwrap();
         let graph = vault.graph_config().unwrap();
         vault.write_config("graph.json", &graph).unwrap();
-        let after = fs::read_to_string(dir.path().join(".obsidian/graph.json")).unwrap();
+        let after = fs::read_to_string(dir.path().join(".tft/graph.json")).unwrap();
         assert!(after.contains("\"colorGroups\": []"), "{after}");
         assert!(after.contains("\"theme\": \"moonstone\""), "{after}");
     }
@@ -679,7 +679,7 @@ mod tests {
     #[test]
     fn a_nested_object_keeps_its_place_and_its_other_keys() {
         let dir = sample_vault();
-        let path = dir.path().join(".obsidian/types.json");
+        let path = dir.path().join(".tft/types.json");
         fs::write(
             &path,
             "{\n  \"first\": 1,\n  \"types\": {\n    \"due\": \"date\",\n    \"owner\": \"text\"\n  },\n  \"last\": 2\n}",
@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn a_config_file_with_a_byte_order_mark_keeps_its_keys_and_its_mark() {
         let dir = sample_vault();
-        let path = dir.path().join(".obsidian/app.json");
+        let path = dir.path().join(".tft/app.json");
         let original =
             "\u{feff}{\n  \"trashOption\": \"local\",\n  \"somethingTFTDoesNotModel\": 7\n}";
         fs::write(&path, original).unwrap();
@@ -713,7 +713,6 @@ mod tests {
             Some("local"),
             "the mark stopped the file being read"
         );
-        app.spellcheck = Some(false);
         vault.write_config("app.json", &app).unwrap();
 
         let written = fs::read_to_string(&path).unwrap();
@@ -725,7 +724,6 @@ mod tests {
             written.contains("\"somethingTFTDoesNotModel\": 7"),
             "a key TFT does not model was lost: {written}"
         );
-        assert!(written.contains("\"spellcheck\": false"), "{written}");
         assert!(written.contains("\"trashOption\": \"local\""), "{written}");
     }
 
@@ -734,9 +732,9 @@ mod tests {
     /// a rule appended, a duplicate kept, the last one deleted leaving
     /// `null`, and the key TFT does not model where it was.
     #[test]
-    fn excluded_files_edits_write_the_bytes_obsidian_wrote() {
+    fn excluded_files_edits_write_the_bytes_reference_wrote() {
         let dir = sample_vault();
-        let path = dir.path().join(".obsidian/app.json");
+        let path = dir.path().join(".tft/app.json");
         fs::write(
             &path,
             "{\n  \"userIgnoreFilters\": [\n    \"Archive/\"\n  ],\n  \"probeUnknownKey\": {\n    \"kept\": true\n  }\n}",
@@ -767,7 +765,6 @@ mod tests {
         // Read back, the `null` stays put when another setting is written.
         let mut app = vault.app_config().unwrap();
         assert!(app.ignore_filters().is_empty());
-        app.spellcheck = Some(false);
         vault.write_config("app.json", &app).unwrap();
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("\"userIgnoreFilters\": null"), "{written}");
@@ -781,7 +778,7 @@ mod tests {
     #[test]
     fn unparsable_json_is_refused_rather_than_replaced() {
         let dir = sample_vault();
-        let path = dir.path().join(".obsidian/types.json");
+        let path = dir.path().join(".tft/types.json");
         let broken = "{\n  \"types\": { \"due\": \"date\", },\n}";
         fs::write(&path, broken).unwrap();
         let vault = Vault::open(dir.path()).unwrap();
@@ -804,7 +801,7 @@ mod tests {
     #[test]
     fn json_of_the_wrong_shape_is_still_merged_into() {
         let dir = sample_vault();
-        let path = dir.path().join(".obsidian/types.json");
+        let path = dir.path().join(".tft/types.json");
         fs::write(&path, "{\"types\": 7, \"future\": \"kept\"}").unwrap();
         let vault = Vault::open(dir.path()).unwrap();
         let mut types = PropertyTypes::default();
@@ -876,10 +873,12 @@ mod tests {
                 fs::read_to_string(outside.path().join("secret")).unwrap(),
                 "s"
             );
-            assert!(fs::symlink_metadata(r.join("note.md"))
-                .unwrap()
-                .file_type()
-                .is_symlink());
+            assert!(
+                fs::symlink_metadata(r.join("note.md"))
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
             // A link may be moved or removed as an entry, not written through.
             assert!(vault.entry_path("note.md").is_ok());
             assert!(matches!(

@@ -13,12 +13,17 @@
 //! system's viewer. Cancelled at the dialog, nothing is written and the
 //! modal stays open.
 
-use super::*;
+use super::{MainView, Modal, VaultState, Workspace};
 use crate::export_modals::{ImageExportEvent, PdfExportEvent};
-use crate::reading::model::{EmbedKind, InlineStyle, LinkTarget, RBlock, RichText, Segment};
+use crate::reading;
 use crate::reading::EmbedSource;
+use crate::reading::model::{EmbedKind, InlineStyle, LinkTarget, RBlock, RichText, Segment};
+use crate::settings::SettingChange;
+use crate::theme::Theme;
+use gpui::{App, Context, Focusable, Hsla, Window};
+use std::collections::HashMap;
 use tft_export as ex;
-use tft_formats::config::PdfExportSettings;
+use tft_formats::{FileKind, config::PdfExportSettings};
 
 impl Workspace {
     /// The exports' check callbacks; `None` for any other id.
@@ -29,7 +34,8 @@ impl Workspace {
             "workspace:export-pdf" => Some(self.active_note_is_markdown()),
             // A canvas only.
             "canvas:export-as-image" => Some(
-                self.main_view(cx) == MainView::Canvas && self.canvas.read(cx).path().is_some(),
+                self.main_view(cx) == MainView::Canvas
+                    && self.active_canvas().read(cx).path().is_some(),
             ),
             _ => None,
         }
@@ -62,10 +68,11 @@ impl Workspace {
     /// `workspace:export-pdf`: the modal, over the active note, with the
     /// last export's values.
     fn show_export_pdf(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = self.current.clone() else {
+        let Some(path) = self.active_group_state.current.clone() else {
             return;
         };
         let settings = self
+            .vault_session
             .state
             .as_ref()
             .map(|s| pdf_settings(s.app().pdf_export_settings.as_ref()))
@@ -73,7 +80,7 @@ impl Workspace {
         let name = basename(&path);
         self.pdf_export
             .update(cx, |m, cx| m.open(name, settings, cx));
-        self.modal = Modal::PdfExport;
+        self.overlay.modal = Modal::PdfExport;
         window.focus(&self.pdf_export.focus_handle(cx), cx);
         cx.notify();
     }
@@ -102,7 +109,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(state), Some(path)) = (self.state.clone(), self.current.clone()) else {
+        let (Some(state), Some(path)) = (
+            self.vault_session.state.clone(),
+            self.active_group_state.current.clone(),
+        ) else {
             return;
         };
         let mut app = state.app().clone();
@@ -117,7 +127,7 @@ impl Workspace {
         // What the note says now: the buffer when it is being edited, which
         // the autosave may not have written yet.
         let text = if self.main_view(cx) == MainView::Editor {
-            self.editor.read(cx).text().to_string()
+            self.active_editor().read(cx).text().to_string()
         } else {
             match EmbedSource::read(state.as_ref(), &path) {
                 Some(text) => text,
@@ -172,7 +182,7 @@ impl Workspace {
     /// `canvas:export-as-image`: the modal over the canvas on screen, every
     /// row at its default.
     fn show_export_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let view = self.canvas.read(cx);
+        let view = self.active_canvas().read(cx);
         let Some(path) = view.path().map(str::to_string) else {
             return;
         };
@@ -180,7 +190,7 @@ impl Workspace {
         let area = view.view_area();
         self.image_export
             .update(cx, |m, cx| m.open(basename(&path), canvas, area, cx));
-        self.modal = Modal::ImageExport;
+        self.overlay.modal = Modal::ImageExport;
         window.focus(&self.image_export.focus_handle(cx), cx);
         cx.notify();
     }
@@ -206,10 +216,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
-        let view = self.canvas.read(cx);
+        let view = self.active_canvas().read(cx);
         let Some(path) = view.path().map(str::to_string) else {
             return;
         };
@@ -732,7 +742,7 @@ mod tests {
     fn a_canvas_exports_its_cards_and_tfts_mark() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Vault");
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(root.join(".tft")).unwrap();
         let mut png = Vec::new();
         image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 255, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -793,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn the_modal_opens_with_the_files_values_and_obsidians_defaults_for_the_rest() {
+    fn the_modal_opens_with_the_files_values_and_references_defaults_for_the_rest() {
         assert_eq!(pdf_settings(None), ex::PdfSettings::default());
         let config = PdfExportSettings {
             page_size: Some("A5".into()),
@@ -886,7 +896,7 @@ mod tests {
     fn a_note_with_an_embed_and_an_image_exports_to_pages_hayro_reads() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("Vault");
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(root.join(".tft")).unwrap();
         let mut png = Vec::new();
         image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 255, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)

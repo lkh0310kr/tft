@@ -12,7 +12,7 @@ use tft_formats::config::AppearanceConfig;
 
 pub use crate::design::{
     heading_style, DEFAULT_MONO_FONT, FONT_UI_MEDIUM, FONT_UI_SMALL, FONT_UI_SMALLER,
-    HEADER_HEIGHT, HEADINGS, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH, TAB_CURVE,
+    HEADER_HEIGHT, HEADINGS, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH,
 };
 pub use registry::Tokens;
 
@@ -88,8 +88,8 @@ impl Theme {
     /// only a window can answer; `system_dark` is that answer.
     pub fn from_appearance(config: &AppearanceConfig, system_dark: bool) -> Theme {
         let dark = match config.theme.as_deref() {
-            Some("moonstone") => false,
-            Some("obsidian") => true,
+            Some("light") => false,
+            Some("dark") => true,
             _ => system_dark,
         };
         Theme::from_tokens(dark, base_tokens(dark).clone())
@@ -120,7 +120,7 @@ impl Theme {
     /// highlight washes draw from, so the hue is picked here and the theme's
     /// own value comes from the registry — which is what makes the dark
     /// theme's callouts the dark theme's colours. The table of observed
-    /// values is in `docs/tft/Specification.md` under "The lucide icon
+    /// values is in `docs/Specification.md` under "The lucide icon
     /// and colour of every built-in callout type"; it was read in the
     /// default dark theme, and the light column is the same tokens' light
     /// values.
@@ -186,8 +186,8 @@ mod tests {
             theme: theme.map(str::to_string),
             ..AppearanceConfig::default()
         };
-        assert!(Theme::from_appearance(&config(Some("obsidian")), false).dark);
-        assert!(!Theme::from_appearance(&config(Some("moonstone")), true).dark);
+        assert!(Theme::from_appearance(&config(Some("dark")), false).dark);
+        assert!(!Theme::from_appearance(&config(Some("light")), true).dark);
         assert!(Theme::from_appearance(&config(Some("system")), true).dark);
         assert!(!Theme::from_appearance(&config(None), false).dark);
     }

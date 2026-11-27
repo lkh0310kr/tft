@@ -10,7 +10,6 @@ pub const FONT_UI_SMALLER: f32 = 12.;
 pub const FONT_UI_SMALL: f32 = 13.;
 pub const FONT_UI_MEDIUM: f32 = 15.;
 pub const HEADER_HEIGHT: f32 = 40.;
-pub const TAB_CURVE: f32 = 10.;
 pub const RIBBON_WIDTH: f32 = 44.;
 pub const ICON_SIZE: f32 = 16.;
 pub const SIDEBAR_WIDTH: f32 = 300.;

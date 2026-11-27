@@ -219,10 +219,12 @@ mod tests {
         );
         let alts: Vec<String> = external_embeds(&text).into_iter().map(|e| e.alt).collect();
         assert_eq!(alts, ["a", "b", "c"]);
-        assert!(external_embeds(&format!(
-            "no images here [x]({M}/img/pic.jpg) ![[local.png]]\n"
-        ))
-        .is_empty());
+        assert!(
+            external_embeds(&format!(
+                "no images here [x]({M}/img/pic.jpg) ![[local.png]]\n"
+            ))
+            .is_empty()
+        );
     }
 
     /// Names, from `s03`, `s03b` and `s03c`.
@@ -286,7 +288,7 @@ mod tests {
     /// `s03` `root`'s bytes after: every embed of a fetched URL rewritten,
     /// the rest untouched.
     #[test]
-    fn the_rewrite_matches_obsidians_bytes() {
+    fn the_rewrite_matches_references_bytes() {
         let text = format!(
             "a ![]({M}/img/photo.png) b\n![alt]({M}/img/two%20words.png)\n[link]({M}/img/pic.jpg)\n\
              ![x]({M}/png-noext)\n![q]({M}/img/photo.png?size=2)\n![sized|100]({M}/img/pic.jpg)\n\
@@ -325,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn the_notices_are_obsidians() {
+    fn the_notices_are_references() {
         assert_eq!(downloaded_notice(1), "Downloaded 1 attachment.");
         assert_eq!(downloaded_notice(3), "Downloaded 3 attachments.");
         assert_eq!(

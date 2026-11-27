@@ -183,7 +183,7 @@ pub fn slash_rows(
 /// Command names in the order Obsidian's lists put them: case ignored,
 /// whitespace before punctuation before digits before letters (so
 /// `Bookmark all tabs...` comes before `Bookmark...`, and `Copy current
-/// file path` before `Copy Obsidian URL`), then lower case before upper.
+/// file path` before `Copy TFT URL`), then lower case before upper.
 pub fn name_order(a: &str, b: &str) -> Ordering {
     fn class(c: char) -> u8 {
         if c.is_whitespace() {

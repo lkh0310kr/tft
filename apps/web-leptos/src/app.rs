@@ -187,7 +187,6 @@ pub fn App() -> impl IntoView {
     let save_tick = RwSignal::new(0u32);
     let context_menu = RwSignal::new(None::<ContextMenu>);
     let theme = RwSignal::new(drive::pref("theme", "system"));
-    let spellcheck = RwSignal::new(drive::pref("spellcheck", "true") != "false");
     let system_dark = RwSignal::new(drive::system_is_dark());
 
     let note = move |msg: String| {
@@ -985,7 +984,6 @@ pub fn App() -> impl IntoView {
                                         <div class="editor">
                                             <textarea
                                                 prop:value=move || draft.get()
-                                                spellcheck=move || if spellcheck.get() { "true" } else { "false" }
                                                 on:input=move |ev| draft.set(event_target_value(&ev))
                                                 on:blur=move |_| save_note(())
                                             ></textarea>
@@ -1115,24 +1113,6 @@ pub fn App() -> impl IntoView {
                                         >"System"</button>
                                     </div>
                                 </div>
-                            </section>
-                            <section>
-                                <h3>"Editor"</h3>
-                                <label class="setting-row">
-                                    <div>
-                                        <div>"Spellcheck"</div>
-                                        <div class="desc">"Use the browser's spell checker in Source mode."</div>
-                                    </div>
-                                    <input
-                                        type="checkbox"
-                                        prop:checked=move || spellcheck.get()
-                                        on:change=move |ev| {
-                                            let on = event_target_checked(&ev);
-                                            spellcheck.set(on);
-                                            drive::set_pref_value("spellcheck", if on { "true" } else { "false" });
-                                        }
-                                    />
-                                </label>
                             </section>
                         </div>
                     </div>

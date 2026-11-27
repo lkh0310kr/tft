@@ -1,5 +1,5 @@
 //! Prints the first difference between TFT's HTML and the corpus's, per
-//! language and per corpus (Obsidian's, then Prism's), which is how a
+//! language and per corpus (기준 앱's, then Prism's), which is how a
 //! ported grammar is debugged.
 //!
 //!     cargo run -p highlight --example diffcorpus [language]
@@ -15,8 +15,8 @@ struct Sample {
 fn main() {
     let corpora = [
         (
-            "obsidian",
-            include_str!("../tests/corpus/obsidian-1.14.5.json"),
+            "reference",
+            include_str!("../tests/corpus/reference-app-1.14.5.json"),
         ),
         ("prism", include_str!("../tests/corpus/prism-1.29.0.json")),
     ];

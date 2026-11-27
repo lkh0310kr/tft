@@ -945,7 +945,7 @@ mod tests {
         assert_eq!(run("()"), None);
     }
 
-    /// The ten half-typed shapes of `docs/tft/Specification.md`, "A
+    /// The ten half-typed shapes of `docs/Specification.md`, "A
     /// half-typed query: tolerated, or nothing at all", over the vault that
     /// section was observed on: two notes holding `foo`, two without it.
     /// Obsidian is not uniform — a dangling `OR` or `-`, a stray `)`, a
@@ -954,7 +954,7 @@ mod tests {
     /// nothing. Each row asserts the files returned rather than the parse
     /// tree: two of these shapes parse cleanly and went wrong only here.
     #[test]
-    fn half_typed_queries_match_as_obsidian_does() {
+    fn half_typed_queries_match_as_reference_does() {
         // `and` sits in a note that also holds `foo`, so a query that read
         // the dangling `AND` as an ordinary word would match it.
         let vault = [

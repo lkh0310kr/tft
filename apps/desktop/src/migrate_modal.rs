@@ -28,7 +28,7 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 pub const TITLE: &str = "Frontmatter migration";
-pub const INTRO: &str = "Migrate frontmatter tags, aliases, and cssclasses to the strict format required by Obsidian v1.9+";
+pub const INTRO: &str = "Migrate frontmatter tags, aliases, and cssclasses to TFT format";
 pub const WARNING: &str = "Warning: the converter will convert all the files in your vault, not just the current file. Your files will be overwritten. Back up all your files before attempting conversion.";
 
 /// The run's counters, as the modal shows them.

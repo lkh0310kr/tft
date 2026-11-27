@@ -2,7 +2,7 @@
 //!
 //! Obsidian highlights a rendered code block with Prism.js, so a theme
 //! addresses `.token.keyword` and the token *names* are the compatibility
-//! surface (see `docs/tft/Theming.md`). Matching the names without
+//! surface (see `docs/Theming.md`). Matching the names without
 //! matching the algorithm would not do: Prism's output depends on the order
 //! its grammar's keys are declared in, on a greedy pattern's right to reach
 //! across tokens already matched, and on the rematch that follows when one

@@ -249,7 +249,7 @@ mod tests {
     use super::*;
 
     /// Obsidian 1.15.0's own output for every note of the 2026-11-09 probe
-    /// (`tools/obsidian-probe/results/2026-11-09-attachments-app-info.json`,
+    /// (`tools/reference-probe/results/2026-11-09-attachments-app-info.json`,
     /// step `s04-migrate-frontmatter` of its three runs): the note's name,
     /// its bytes before, its bytes after. Equal bytes mean the file was not
     /// written.

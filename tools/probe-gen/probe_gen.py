@@ -2,7 +2,7 @@
 """Generate candidate OFM probe notes with a local model, render them in a real
 Obsidian, and report which ones TFT's parser gets wrong.
 
-The workflow this automates is the one in CLAUDE.md: when Obsidian and
+The workflow this automates is the one in AGENTS.md: when Obsidian and
 `markdown` disagree, a probe note goes into
 `crates/markdown/tests/corpus/vault/edge`, the vault is re-rendered,
 and the observed behavior is matched and written down. The tedious half is
@@ -65,7 +65,7 @@ LLM_KEY = os.environ.get("TFT_LLM_KEY") or None
 
 # Anchored so it can never match this process; admits the flags Obsidian is
 # launched with between the electron binary and the asar. Lifted from
-# tools/obsidian-probe/run-block.sh, which learned it the hard way.
+# tools/reference-probe/run-block.sh, which learned it the hard way.
 PGREP = r"^/nix/store/[^ ]*electron( --[^ ]*)* /nix/store/[^ ]*obsidian"
 
 # ---------------------------------------------------------------------------
@@ -581,7 +581,7 @@ def cmd_render(args):
             # A previous instance lingers for seconds after its window closes,
             # and a launch during that window is handed to the dying instance,
             # which then opens *its* vault. Wait for it to go, as
-            # tools/obsidian-probe/run-block.sh does.
+            # tools/reference-probe/run-block.sh does.
             for _ in range(40):
                 if not obsidian_running():
                     break
@@ -754,7 +754,7 @@ def cmd_promote(args):
     print("     command) so expected/ covers the new note. Until then the test")
     print("     reports it as `missing expected HTML` and silently gates nothing.")
     print("  2. Decide what Obsidian's behavior IS, and write it into")
-    print("     docs/tft/Specification.md. The snippet is evidence, not a rule.")
+    print("     docs/Specification.md. The snippet is evidence, not a rule.")
     print("  3. Fix the parser, then raise MIN_PASSING in tests/corpus.rs.")
 
 
@@ -785,8 +785,7 @@ def guard_real_vault(vault):
     resolved = vault.resolve()
     for forbidden in (
         Path(os.environ.get("TFT_GATE_VAULT", "/nonexistent-gate-vault")),
-        REPO / "docs/tft",
-        REPO / "docs/tft",
+        REPO / "docs",
         CORPUS / "vault",
     ):
         if resolved == forbidden.resolve() or forbidden.resolve() in resolved.parents:

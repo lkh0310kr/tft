@@ -1,6 +1,6 @@
 [package]
 name = "search"
-description = "Obsidian's search query language, file matching, and fuzzy search"
+description = "TFT search query language, file matching, and fuzzy search"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

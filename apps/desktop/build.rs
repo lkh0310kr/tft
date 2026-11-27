@@ -36,7 +36,7 @@ BEGIN
     BLOCK "040904b0"
     BEGIN
       VALUE "CompanyName", "TFT"
-      VALUE "FileDescription", "TFT: a native knowledge base compatible with Obsidian vaults"
+      VALUE "FileDescription", "TFT: a native Markdown knowledge base"
       VALUE "FileVersion", "{version}"
       VALUE "InternalName", "tft"
       VALUE "LegalCopyright", "MIT licensed"

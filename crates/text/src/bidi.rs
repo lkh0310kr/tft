@@ -2,7 +2,7 @@
 //! where its rows break, and where a caret stands among glyphs laid out in
 //! visual order.
 //!
-//! Observed in Obsidian 1.15.0 (`tools/obsidian-probe/gutter-guides-rtl.mjs`,
+//! Observed in Obsidian 1.15.0 (`tools/reference-probe/gutter-guides-rtl.mjs`,
 //! 2026-11-15): every editor line takes its direction from its first
 //! strong character, Hebrew or Arabic making it right-to-left and Latin
 //! left-to-right, whatever `rightToLeft` says; a line with no strong

@@ -2,7 +2,7 @@
 //!
 //! Obsidian is one process holding a window per vault, so launching it
 //! again — from a terminal, from a file manager, or by following an
-//! `obsidian://` link — raises the window that already shows the vault and
+//! `tft://` link — raises the window that already shows the vault and
 //! opens what the arguments named in it. TFT is one process per window,
 //! so the same behaviour needs a rendezvous: each run that opens a vault
 //! binds a socket named after that vault, and a later run finds it,
@@ -112,7 +112,7 @@ fn vault_hash(vault: &Path) -> u64 {
 ///
 /// `vault_hint` is the vault a URI named, if it named one, resolved through
 /// the machine's list — the app refuses a URI meant for another vault, so
-/// routing it by name is what makes `obsidian://open?vault=Rocks` reach the
+/// routing it by name is what makes `tft://open?vault=Rocks` reach the
 /// window holding Rocks rather than whichever one was used last.
 pub fn forward(args: &Args, vault_hint: Option<&str>) -> Result<Forward, String> {
     if !args.single_instance() {
@@ -451,12 +451,12 @@ mod tests {
         let env = Env::new();
         let (vault, socket) = env.vault("rocks");
         let seen = listen(&socket);
-        let args = args_for(&[&vault.to_string_lossy(), "obsidian://open?file=Basalt"]);
+        let args = args_for(&[&vault.to_string_lossy(), "tft://open?file=Basalt"]);
         assert_eq!(forward(&args, None), Ok(Forward::Handled));
         let calls: Vec<(String, Value)> = seen.try_iter().collect();
         assert_eq!(calls.len(), 4, "{calls:?}");
         assert_eq!(calls[2].0, "uri");
-        assert_eq!(calls[2].1["uri"], json!("obsidian://open?file=Basalt"));
+        assert_eq!(calls[2].1["uri"], json!("tft://open?file=Basalt"));
     }
 
     #[test]
@@ -477,7 +477,7 @@ mod tests {
 
         // A URI naming a vault goes to that vault's window instead, by the
         // folder's name, which is what Obsidian's URIs carry.
-        let args = args_for(&["obsidian://open?vault=older&file=Basalt"]);
+        let args = args_for(&["tft://open?vault=older&file=Basalt"]);
         assert_eq!(forward(&args, Some("older")), Ok(Forward::Handled));
         assert_eq!(
             methods(&older_seen),

@@ -18,7 +18,7 @@ workspace:split-horizontal	Split down
 workspace:edit-file-title	Rename file
 workspace:copy-path	Copy current file path from vault folder
 workspace:copy-full-path	Copy current file path from system root
-workspace:copy-url	Copy Obsidian URL for current file
+workspace:copy-url	Copy TFT URL for current file
 workspace:undo-close-pane	Undo close tab
 workspace:export-pdf	Export to PDF...
 editor:rename-heading	Rename this heading...
@@ -46,7 +46,6 @@ workspace:show-trash	Show trash
 mobile:quick-action	Configure mobile Quick Action
 app:go-back	Navigate back
 app:go-forward	Navigate forward
-app:open-vault	Manage vaults
 app:switch-vault	Change vault...
 app:open-another-vault	Open vault...
 theme:toggle-light-dark	Toggle light/dark mode
@@ -129,7 +128,6 @@ editor:attach-file	Insert attachment
 editor:delete-paragraph	Delete paragraph
 editor:add-cursor-below	Add cursor below
 editor:add-cursor-above	Add cursor above
-editor:toggle-spellcheck	Toggle spellcheck
 editor:table-row-before	Table: Add row above
 editor:table-row-after	Table: Add row below
 editor:table-row-up	Table: Move row up

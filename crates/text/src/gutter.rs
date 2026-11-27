@@ -3,7 +3,7 @@
 //! guides (`showIndentGuide`) — where each line's guides stand and which
 //! of them the caret lights.
 //!
-//! Observed in Obsidian 1.15.0 (`tools/obsidian-probe/gutter-guides-rtl.mjs`,
+//! Observed in Obsidian 1.15.0 (`tools/reference-probe/gutter-guides-rtl.mjs`,
 //! results of 2026-11-15): the gutter is as wide as a run of nines with as
 //! many digits as the note has lines, plus its padding, and never narrower
 //! than its minimum; a guide stands in each indent unit of a line's leading

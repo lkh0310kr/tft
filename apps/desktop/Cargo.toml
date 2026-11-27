@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-description = "TFT: a native Rust/GPUI knowledge base compatible with Obsidian vaults"
+description = "TFT: a native Rust/GPUI knowledge base with native Markdown vault support"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,14 +14,9 @@ build = "build.rs"
 name = "desktop"
 path = "src/lib.rs"
 
-[features]
-default = ["desktop-native"]
-desktop-native = ["dep:ureq", "dep:control", "dep:cli", "dep:notify"]
-
 [[bin]]
 name = "tft"
 path = "src/main.rs"
-required-features = ["desktop-native"]
 
 [dependencies]
 app = { workspace = true, features = ["gpui-ui"] }
@@ -31,8 +26,8 @@ markdown.workspace = true
 highlight.workspace = true
 cache.workspace = true
 commands.workspace = true
-cli = { workspace = true, optional = true }
-control = { workspace = true, optional = true }
+cli = { workspace = true }
+control = { workspace = true }
 formats.workspace = true
 search.workspace = true
 suggest.workspace = true
@@ -45,7 +40,6 @@ lyon.workspace = true
 export.workspace = true
 audio.workspace = true
 paste.workspace = true
-spell.workspace = true
 # A stacked tab's title is drawn on its side, which gpui's text cannot do:
 # its glyphs are outlined here and the bitmap turned.
 ab_glyph.workspace = true
@@ -55,13 +49,13 @@ indexmap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
-notify = { workspace = true, optional = true }
+notify = { workspace = true }
 regex.workspace = true
 serde_yaml.workspace = true
 chrono.workspace = true
 gpui.workspace = true
 http_client.workspace = true
-ureq = { workspace = true, optional = true }
+ureq = { workspace = true }
 futures.workspace = true
 # Already in the tree through gpui; a rendered PDF page is handed to gpui as
 # one of its `image` frames.

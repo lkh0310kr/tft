@@ -5,7 +5,6 @@ app:go-forward
 app:open-another-vault
 app:open-sandbox-vault
 app:open-settings
-app:open-vault
 app:reload
 app:show-debug-info
 app:show-release-notes
@@ -101,7 +100,6 @@ editor:toggle-italics
 editor:toggle-keyboard
 editor:toggle-numbered-list
 editor:toggle-source
-editor:toggle-spellcheck
 editor:toggle-strikethrough
 editor:undo
 editor:unfold-all

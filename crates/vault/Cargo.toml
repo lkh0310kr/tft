@@ -1,6 +1,6 @@
 [package]
 name = "vault"
-description = "A vault is a folder: scanning, file kinds, and .obsidian configuration"
+description = "A vault is a folder: scanning, file kinds, and .tft configuration"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

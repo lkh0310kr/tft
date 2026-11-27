@@ -7,13 +7,9 @@
 //! card's note or image, a link card, a group's label. `minimap` is the
 //! picture a canvas embedded in a note is drawn as.
 
-#[cfg(feature = "desktop-native")]
 pub mod cards;
-#[cfg(feature = "desktop-native")]
 pub mod menu;
 pub use tft_app::canvas::minimap;
-#[cfg(feature = "desktop-native")]
 pub mod view;
 
-#[cfg(feature = "desktop-native")]
 pub use view::{CanvasEvent, CanvasView, FilePick};

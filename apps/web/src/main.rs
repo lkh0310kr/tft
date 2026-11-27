@@ -26,7 +26,6 @@ fn run() {
                 &tft_app::formats::config::AppearanceConfig::default(),
                 system_is_dark(),
             ));
-            cx.set_global(tft_app::spellcheck::Spelling::disabled());
             cx.text_system()
                 .add_fonts(tft_app::assets::fonts())
                 .expect("register TFT fonts");

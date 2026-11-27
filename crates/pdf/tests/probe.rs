@@ -1,5 +1,5 @@
 //! The crate against what Obsidian 1.15.0 was observed doing on the same
-//! bytes (`tools/obsidian-probe/pdf-selection.mjs`, 2026-11-15): the text
+//! bytes (`tools/reference-probe/pdf-selection.mjs`, 2026-11-15): the text
 //! items a `#selection=` link counts, the password-protected files, and the
 //! colours of "Adapt to theme".
 

@@ -121,10 +121,10 @@ mod tests {
     }
 
     /// The order a real Obsidian 1.14.4 produced for these names under
-    /// `alphabetical`, captured in tools/obsidian-probe/results and written
-    /// up in docs/tft/Specification.md.
+    /// `alphabetical`, captured in tools/reference-probe/results and written
+    /// up in docs/Specification.md.
     #[test]
-    fn reproduces_the_observed_obsidian_order() {
+    fn reproduces_the_observed_reference_order() {
         let mut names = vec![
             "zebra",
             "apple2",

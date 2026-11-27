@@ -1,9 +1,20 @@
 //! Attach file, Download attachments and Open file. Names and links come from
 //! `tft_vault`/`tft_suggest`, so every entry point writes the same embed.
 
-use super::download_modal::{DownloadEvent, DownloadModal};
-use super::*;
+use super::{Changes, Modal, VaultState, Workspace};
+use crate::editor::{Editor, IncomingAttachments};
+use gpui::{App, AppContext, Context, Entity, Focusable, IntoElement, Subscription, Window};
+use serde_json::Value;
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
+use tft_formats::FileKind;
+use tft_vault::FileChange;
 use tft_vault::attachments as att;
+
+pub(super) mod download_modal;
+
+use download_modal::{DownloadEvent, DownloadModal};
 
 /// The extensions Obsidian 1.15.0's open dialog filters on ("Supported
 /// files"), in the order it sent them: every extension a registered view
@@ -13,11 +24,39 @@ pub(super) const OPEN_FILE_EXTENSIONS: [&str; 25] = [
     "flac", "ogg", "oga", "opus", "mp4", "webm", "ogv", "mov", "mkv", "pdf", "canvas", "base",
 ];
 
+/// Attachment-specific transient UI state.
+#[derive(Default)]
+pub(super) struct AttachmentState {
+    downloads: Option<DownloadsModal>,
+}
+
 /// The download modal while it is up, and the note it was opened for.
-pub(super) struct DownloadsModal {
+struct DownloadsModal {
     view: Entity<DownloadModal>,
     _subscription: Subscription,
     note: String,
+}
+
+impl AttachmentState {
+    fn set_downloads(&mut self, downloads: DownloadsModal) {
+        self.downloads = Some(downloads);
+    }
+
+    fn take_downloads(&mut self) -> Option<DownloadsModal> {
+        self.downloads.take()
+    }
+
+    fn downloads_element(&self) -> Option<gpui::AnyElement> {
+        self.downloads
+            .as_ref()
+            .map(|downloads| downloads.view.clone().into_any_element())
+    }
+
+    fn describe_downloads(&self, cx: &App) -> Option<Value> {
+        self.downloads
+            .as_ref()
+            .map(|downloads| downloads.view.read(cx).describe())
+    }
 }
 
 /// The vault path of `picked` when it is inside the vault at `root`, `/`
@@ -178,8 +217,10 @@ impl Workspace {
     /// The note the attachment commands act on: a Markdown file in the
     /// active tab, shown in an editing mode.
     fn attachment_note(&self) -> Option<String> {
-        let note = self.current.clone()?;
-        (self.mode.is_editing() && FileKind::from_path(&note) == FileKind::Markdown).then_some(note)
+        let note = self.active_group_state.current.clone()?;
+        (self.active_group_state.mode.is_editing()
+            && FileKind::from_path(&note) == FileKind::Markdown)
+            .then_some(note)
     }
 
     /// `can_run` for the three, `None` for any other id.
@@ -189,7 +230,7 @@ impl Workspace {
             "editor:attach-file" | "editor:download-attachments" => {
                 Some(self.attachment_note().is_some())
             }
-            "app:open-file" => Some(self.state.is_some()),
+            "app:open-file" => Some(self.vault_session.state.is_some()),
             _ => None,
         }
     }
@@ -234,11 +275,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
         // The note the dialog was opened over, still in front.
-        if self.current.as_deref() != Some(note) {
+        if self.active_group_state.current.as_deref() != Some(note) {
             return;
         }
         let (path, changes) = match state.import_attachment(note, source) {
@@ -247,10 +288,10 @@ impl Workspace {
         };
         self.after_changes(changes, cx);
         let link = state.embed_link(&path, note);
-        let range = self.editor.read(cx).selection();
-        self.editor
+        let range = self.active_editor().read(cx).selection();
+        self.active_editor()
             .update(cx, |e, cx| e.replace_range(range, &link, window, cx));
-        window.focus(&self.editor.focus_handle(cx), cx);
+        window.focus(&self.active_editor().focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -267,7 +308,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
         let note = editor.read(cx).name.to_string();
@@ -334,7 +375,7 @@ impl Workspace {
         let Some(note) = self.attachment_note() else {
             return;
         };
-        let urls = att::distinct_urls(&att::external_embeds(self.editor.read(cx).text()));
+        let urls = att::distinct_urls(&att::external_embeds(self.active_editor().read(cx).text()));
         if urls.is_empty() {
             return self.report(att::NOTHING_TO_DOWNLOAD, cx);
         }
@@ -350,22 +391,22 @@ impl Workspace {
             });
         self.close_editor_suggest(cx);
         window.focus(&view.focus_handle(cx), cx);
-        self.downloads = Some(DownloadsModal {
+        self.attachments.set_downloads(DownloadsModal {
             view,
             _subscription: subscription,
             note,
         });
-        self.modal = Modal::Downloads;
+        self.overlay.modal = Modal::Downloads;
         cx.notify();
     }
 
     fn close_downloads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let note = self.downloads.take().map(|d| d.note);
-        if self.modal == Modal::Downloads {
+        let note = self.attachments.take_downloads().map(|d| d.note);
+        if self.overlay.modal == Modal::Downloads {
             self.close_modal(window, cx);
         }
-        if note.is_some() && note == self.current {
-            window.focus(&self.editor.focus_handle(cx), cx);
+        if note.is_some() && note == self.active_group_state.current {
+            window.focus(&self.active_editor().focus_handle(cx), cx);
         }
         cx.notify();
     }
@@ -373,7 +414,7 @@ impl Workspace {
     /// Fetches `urls` one after another, saving each as it arrives; when
     /// every one came back the note's embeds of them are rewritten and the
     /// count reported. The first failure ends the run with no notice and no
-    /// rewrite, the files already saved left where they are -- Obsidian's
+    /// rewrite, the files already saved left where they are -- a known command ID
     /// behaviour for a 404 and for a refused connection.
     fn download_attachments(
         &mut self,
@@ -381,7 +422,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(note) = self.current.clone() else {
+        let Some(note) = self.active_group_state.current.clone() else {
             return;
         };
         if urls.is_empty() {
@@ -400,7 +441,7 @@ impl Workspace {
                 };
                 let (stem, ext) = att::downloaded_name(&url, got.content_type.as_deref());
                 let saved = this.update(cx, |ws, cx| {
-                    let state = ws.state.clone()?;
+                    let state = ws.vault_session.state.clone()?;
                     match state.add_attachment(&note, &stem, &ext, &got.bytes) {
                         Ok((path, changes)) => {
                             ws.after_changes(changes, cx);
@@ -432,12 +473,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
-        if self.current.as_deref() == Some(note) {
-            let (_, edits) = att::rewrite(self.editor.read(cx).text(), links);
-            self.editor
+        if self.active_group_state.current.as_deref() == Some(note) {
+            let (_, edits) = att::rewrite(self.active_editor().read(cx).text(), links);
+            self.active_editor()
                 .update(cx, |e, cx| e.replace_ranges(edits, window, cx));
         } else {
             // The note left the tab while the files came in: its bytes on
@@ -459,13 +500,11 @@ impl Workspace {
 
     /// The modal's element, for the overlay.
     pub(super) fn downloads_element(&self) -> Option<gpui::AnyElement> {
-        self.downloads
-            .as_ref()
-            .map(|d| d.view.clone().into_any_element())
+        self.attachments.downloads_element()
     }
 
     pub(super) fn describe_downloads(&self, cx: &App) -> Option<Value> {
-        self.downloads.as_ref().map(|d| d.view.read(cx).describe())
+        self.attachments.describe_downloads(cx)
     }
 
     /// "Open file from outside the vault...": a file asked for; one inside
@@ -497,14 +536,14 @@ impl Workspace {
             };
             this.update(cx, |ws, cx| {
                 if !opens_from_dialog(&picked) {
-                    // Obsidian's dialog would not have let it be picked.
+                    // a known command ID dialog would not have let it be picked.
                     return ws.report(format!("{} is not a file TFT opens", picked.display()), cx);
                 }
                 match path_in_vault(&root, &picked) {
                     Some(path) => {
                         // The switcher's open: the active tab, as a
                         // link click would. The note already there stays.
-                        if ws.current.as_deref() != Some(path.as_str()) {
+                        if ws.active_group_state.current.as_deref() != Some(path.as_str()) {
                             ws.open_file(path, None, cx);
                         }
                     }
@@ -534,9 +573,9 @@ mod tests {
     fn setup(app_json: &str) -> (tempfile::TempDir, VaultState, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let vault = dir.path().join("Probe Vault");
-        std::fs::create_dir_all(vault.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(vault.join(".tft")).unwrap();
         std::fs::create_dir_all(vault.join("Sub")).unwrap();
-        std::fs::write(vault.join(".obsidian/app.json"), app_json).unwrap();
+        std::fs::write(vault.join(".tft/app.json"), app_json).unwrap();
         std::fs::write(vault.join("Sub/Note.md"), "line one\nline two\n").unwrap();
         let outside = dir.path().join("Outside");
         std::fs::create_dir_all(&outside).unwrap();
@@ -648,9 +687,9 @@ mod tests {
 
     /// `s03` `collision` and `markdownLinks` end to end: each URL saved in
     /// document order under its name (a `photo.png` already there), and
-    /// the note's bytes after the rewrite equal Obsidian's.
+    /// the note's bytes after the rewrite equal a known command ID.
     #[test]
-    fn downloaded_attachments_rewrite_the_note_to_obsidians_bytes() {
+    fn downloaded_attachments_rewrite_the_note_to_references_bytes() {
         let m = "http://127.0.0.1:9343";
         let note = format!(
             "a ![]({m}/img/photo.png) b\n![alt]({m}/img/two%20words.png)\n[link]({m}/img/pic.jpg)\n\
@@ -693,24 +732,23 @@ mod tests {
         );
     }
 
-    /// The four this round settled run and are Obsidian's ids; the
+    /// The four this round settled run and are a known command ID ids; the
     /// frontmatter converter is left unrunnable.
     #[test]
-    fn the_attachment_and_spellcheck_commands_are_runnable() {
+    fn the_attachment_commands_are_runnable() {
         let known = tft_commands::known_ids();
         for id in [
-            "editor:toggle-spellcheck",
             "editor:attach-file",
             "editor:download-attachments",
             "app:open-file",
         ] {
             assert!(RUNNABLE.contains(&id), "{id} runnable");
-            assert!(known.contains(&id), "{id} is Obsidian's");
+            assert!(known.contains(&id), "{id} is a known command ID");
         }
     }
 
     #[test]
-    fn the_dialogs_filter_is_obsidians_twenty_five_extensions() {
+    fn the_dialogs_filter_is_references_twenty_five_extensions() {
         assert_eq!(OPEN_FILE_EXTENSIONS.len(), 25);
         assert!(opens_from_dialog(Path::new("/x/Note.md")));
         assert!(opens_from_dialog(Path::new("/x/pic.PNG")));

@@ -252,14 +252,14 @@ pub async fn index_vault(root_id: &str) -> Result<VaultIndex, String> {
     Ok(index)
 }
 
-/// Reads Obsidian's root `.obsidian/appearance.json` without adding hidden
+/// Reads the root `.tft/appearance.json` without adding hidden
 /// configuration files to the visible Vault tree.
 pub async fn read_appearance_config(root_id: &str) -> Result<AppearanceConfig, String> {
-    let obsidian = find_child(root_id, ".obsidian", true).await?;
-    let Some(obsidian) = obsidian else {
+    let tft_folder = find_child(root_id, ".tft", true).await?;
+    let Some(tft_folder) = tft_folder else {
         return Ok(AppearanceConfig::default());
     };
-    let appearance = find_child(&obsidian.id, "appearance.json", false).await?;
+    let appearance = find_child(&tft_folder.id, "appearance.json", false).await?;
     let Some(appearance) = appearance else {
         return Ok(AppearanceConfig::default());
     };

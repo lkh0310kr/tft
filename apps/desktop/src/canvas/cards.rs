@@ -1110,7 +1110,7 @@ mod tests {
 
     #[test]
     fn the_host_drops_scheme_path_user_and_port() {
-        assert_eq!(host_of("https://Obsidian.md/canvas"), "obsidian.md");
+        assert_eq!(host_of("https://example.com/canvas"), "example.com");
         assert_eq!(
             host_of("http://user:pw@example.com:8080/x?y#z"),
             "example.com"
@@ -1257,7 +1257,7 @@ mod tests {
         use std::fs;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        fs::create_dir_all(root.join(".tft")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(root.join("docs/Field.pdf"), "").unwrap();
         let state = Arc::new(VaultState::load(&root.to_path_buf()).unwrap());

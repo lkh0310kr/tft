@@ -1,13 +1,13 @@
 //! HTML rendering of a [`Document`].
 //!
-//! With `obsidian_attributes` off the output matches the CommonMark reference
+//! With `tft_attributes` off the output matches the CommonMark reference
 //! implementation byte for byte on CommonMark input, which is what the spec
 //! conformance tests compare against. With it on, the markup follows what
-//! Obsidian's reading view produces (observed with the corpus under
+//! 기준 앱's reading view produces (observed with the corpus under
 //! `tests/corpus`): `internal-link` anchors with `data-href`, `tag` anchors,
 //! `internal-embed` spans, callout and task-list structure, `data-heading`,
 //! footnote sections, and soft line breaks rendered as `<br>` because
-//! Obsidian's "strict line breaks" setting is off by default.
+//! 기준 앱's "strict line breaks" setting is off by default.
 
 use crate::ast::*;
 use std::borrow::Cow;
@@ -15,17 +15,17 @@ use std::fmt::Write;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtmlOptions {
-    /// Emit Obsidian's reading-view classes and attributes.
-    pub obsidian_attributes: bool,
+    /// Emit 기준 앱's reading-view classes and attributes.
+    pub tft_attributes: bool,
     /// Render a single newline as a soft break (CommonMark) rather than a
-    /// line break (Obsidian's default).
+    /// line break (기준 앱's default).
     pub strict_line_breaks: bool,
 }
 
 impl Default for HtmlOptions {
     fn default() -> HtmlOptions {
         HtmlOptions {
-            obsidian_attributes: true,
+            tft_attributes: true,
             strict_line_breaks: false,
         }
     }
@@ -35,13 +35,13 @@ impl HtmlOptions {
     /// Plain CommonMark output, as the spec tests expect.
     pub const fn commonmark() -> HtmlOptions {
         HtmlOptions {
-            obsidian_attributes: false,
+            tft_attributes: false,
             strict_line_breaks: true,
         }
     }
 }
 
-/// Renders `doc` with the default (Obsidian) options.
+/// Renders `doc` with the default (기준 앱) options.
 pub fn render_html(doc: &Document<'_>) -> String {
     render_html_with(doc, &HtmlOptions::default())
 }
@@ -130,10 +130,10 @@ fn escape_external_href(s: &str, out: &mut String) {
 
 /// Whether this inline renders as an `<a>`, and so cannot sit inside one.
 ///
-/// A nested markdown link is deliberately not counted: Obsidian resolves that
+/// A nested markdown link is deliberately not counted: 기준 앱 resolves that
 /// case in the parser instead, keeping the outer link and leaving the inner one
 /// as literal text, which `markdown` does not do yet (see the link
-/// nesting entry in `docs/tft/Specification.md`).
+/// nesting entry in `docs/Specification.md`).
 pub fn renders_as_anchor(inline: &Inline<'_>) -> bool {
     match &inline.kind {
         InlineKind::Wikilink { embed, .. } => !*embed,
@@ -194,8 +194,8 @@ impl<'r, 'a> Renderer<'r, 'a> {
         }
     }
 
-    fn obsidian(&self) -> bool {
-        self.opts.obsidian_attributes
+    fn tft(&self) -> bool {
+        self.opts.tft_attributes
     }
 
     /// Source text covered by a run of inlines, as written.
@@ -227,7 +227,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
             }
             BlockKind::Heading { level, content, .. } => {
                 self.cr();
-                if self.obsidian() {
+                if self.tft() {
                     let _ = write!(self.out, "<h{level} data-heading=\"");
                     escape_html(self.raw(content), &mut self.out);
                     self.out.push_str("\">");
@@ -247,22 +247,22 @@ impl<'r, 'a> Renderer<'r, 'a> {
                     .as_deref()
                     .and_then(|i| i.split_whitespace().next())
                     .unwrap_or("");
-                // Obsidian resolves the info string's first word to a
+                // 기준 앱 resolves the info string's first word to a
                 // highlighter language: the token is lowercased, and a token
                 // holding anything but `[A-Za-z0-9_-]` resolves to `none` --
                 // which is what `c#`, `f#`, `C++` and `.net` all do -- with the
                 // raw token kept on the `<code>` beside `language-none`.
                 // CommonMark has neither rule, and puts the token on the
-                // `<code>` as written. Observed against Obsidian 1.14.4
+                // `<code>` as written. Observed against 기준 앱 1.14.4
                 // (tools/probe-gen, 2026-10-29).
-                let obsidian = self.obsidian();
+                let extended = self.tft();
                 let resolves = !lang.is_empty()
                     && lang
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
                 let lowered = lang.to_ascii_lowercase();
                 self.out.push_str("<pre");
-                if obsidian && !lang.is_empty() {
+                if extended && !lang.is_empty() {
                     self.out.push_str(" class=\"language-");
                     escape_html(if resolves { &lowered } else { "none" }, &mut self.out);
                     self.out.push('"');
@@ -270,7 +270,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
                 self.out.push_str("><code");
                 if !lang.is_empty() {
                     self.out.push_str(" class=\"language-");
-                    match (obsidian, resolves) {
+                    match (extended, resolves) {
                         (true, true) => escape_html(&lowered, &mut self.out),
                         (true, false) => {
                             escape_html(lang, &mut self.out);
@@ -340,7 +340,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
             }
             BlockKind::List { kind, tight, items } => {
                 self.cr();
-                let task_list = self.obsidian() && items.iter().any(|i| i.task.is_some());
+                let task_list = self.tft() && items.iter().any(|i| i.task.is_some());
                 let class = if task_list {
                     " class=\"contains-task-list\""
                 } else {
@@ -361,7 +361,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
                     self.cr();
                     let mut children: &[Block<'a>] = &item.children;
                     match item.task {
-                        Some(c) if self.obsidian() => {
+                        Some(c) if self.tft() => {
                             self.out.push_str("<li data-task=\"");
                             if c != ' ' {
                                 escape_html(&c.to_string(), &mut self.out);
@@ -497,7 +497,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
             InlineKind::Strong(c) => self.wrap("strong", c),
             InlineKind::Strikethrough(c) => self.wrap("del", c),
             InlineKind::Highlight { color, children } => {
-                if self.obsidian() {
+                if self.tft() {
                     self.out.push_str("<mark data-highlight=\"");
                     self.out
                         .push_str(color.map(HighlightColor::name).unwrap_or(""));
@@ -522,7 +522,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
             } => {
                 // Only an inline `![alt](src)` without a scheme is a vault embed;
                 // reference-style images render as `<img>` whatever the path.
-                if self.obsidian() && *kind == LinkKind::Inline && !has_scheme(destination) {
+                if self.tft() && *kind == LinkKind::Inline && !has_scheme(destination) {
                     let alt = self.raw(children);
                     let alt = alt.split('|').next().unwrap_or("").trim_end();
                     self.out.push_str("<span alt=\"");
@@ -542,7 +542,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
                     escape_html(t, &mut self.out);
                     self.out.push('"');
                 }
-                if self.obsidian() {
+                if self.tft() {
                     self.out.push_str(" referrerpolicy=\"no-referrer\">");
                 } else {
                     self.out.push_str(" />");
@@ -632,7 +632,7 @@ impl<'r, 'a> Renderer<'r, 'a> {
         kind: LinkKind,
         children: &'r [Inline<'a>],
     ) {
-        if !self.obsidian() {
+        if !self.tft() {
             self.out.push_str("<a href=\"");
             escape_href(destination, &mut self.out);
             self.out.push('"');
@@ -699,15 +699,15 @@ impl<'r, 'a> Renderer<'r, 'a> {
     /// Renders a link's children and closes it, ending the anchor early when a
     /// child renders as an anchor of its own.
     ///
-    /// Obsidian never nests `<a>`: it closes the link at the first such child
+    /// 기준 앱 never nests `<a>`: it closes the link at the first such child
     /// and does not reopen it, so the text *after* that child is not part of
     /// the link. `[md [[Links]] link](url)` gives `<a>md </a>`, then the
     /// wikilink's own anchor, then a bare ` link`; with two wikilinks the text
     /// between them is bare as well. A tag counts, since a tag is an anchor
     /// too; an embed or an image does not, being a `<span>`. Observed against
-    /// Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
+    /// 기준 앱 1.14.4 (tools/probe-gen, 2026-10-29).
     fn anchor_body(&mut self, children: &'r [Inline<'a>]) {
-        let split = if self.obsidian() {
+        let split = if self.tft() {
             children.iter().position(renders_as_anchor)
         } else {
             None

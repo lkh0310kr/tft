@@ -23,7 +23,6 @@ members = [
     "crates/export",
     "crates/audio",
     "crates/paste",
-    "crates/spell",
     "crates/bench",
 ]
 
@@ -56,7 +55,6 @@ mermaid = { path = "crates/mermaid" }
 export = { path = "crates/export" }
 audio = { path = "crates/audio" }
 paste = { path = "crates/paste" }
-spell = { path = "crates/spell" }
 
 anyhow = "1"
 # std::time for wasm32-unknown-unknown, where std has no clock.
@@ -169,16 +167,6 @@ png = "0.17"
 # RFC 8251's twelve conformance vectors, one dependency: thiserror), fed the
 # packets symphonia's demuxer reads. Output is the same cpal.
 cpal = "0.18"
-# Spellchecking (spell). spellbook (MPL-2.0, used unmodified, the Helix
-# editor's checker) reads Hunspell .aff/.dic files in pure Rust, no_std plus
-# alloc, and checks and suggests the way Hunspell does; chosen 2026-11-15 over
-# zspell (suggestions still behind an unstable flag) and spellkit and the
-# hunspell crates (native libraries: NSSpellChecker, the Windows checker, or C
-# hunspell). option-ext puts MPL-2.0 in the tree already. md-5 (already in the
-# tree through gpui) writes the checksum line of `Custom Dictionary.txt`, the
-# file Chromium, and so Obsidian, keeps the added words in.
-spellbook = "0.4"
-md-5 = "0.10"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3", "pcm", "wav", "adpcm", "flac", "ogg", "vorbis", "mkv"] }
 opus-decoder = "0.1.1"
 

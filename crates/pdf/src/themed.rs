@@ -1,7 +1,7 @@
 //! "Adapt to theme": a page recoloured for a dark theme.
 //!
 //! Observed in Obsidian 1.15.0's dark theme
-//! (`tools/obsidian-probe/results/2026-11-15-pdf-selection.json`, s07, the
+//! (`tools/reference-probe/results/2026-11-15-pdf-selection.json`, s07, the
 //! page canvas read back pixel by pixel): the page's own ground becomes the
 //! view's `--pdf-background` (`#1C1C1C`); every colour the content draws
 //! keeps its hue and saturation and has its HSL lightness turned over —

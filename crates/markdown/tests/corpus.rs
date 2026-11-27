@@ -721,7 +721,7 @@ fn canonicalize(html: &str) -> Vec<String> {
 }
 
 #[test]
-fn obsidian_corpus() {
+fn reference_corpus() {
     let root = corpus_dir();
     let vault = root.join("vault");
     let expected_dir = root.join("expected");

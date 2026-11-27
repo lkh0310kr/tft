@@ -54,7 +54,7 @@ fn page_sizes_are_chromiums_points_and_landscape_swaps_them() {
 }
 
 #[test]
-fn margin_values_are_obsidians_strings_and_the_text_edge_is_where_it_was_measured() {
+fn margin_values_are_references_strings_and_the_text_edge_is_where_it_was_measured() {
     assert_eq!(Margin::Default.value(), "0");
     assert_eq!(Margin::None.value(), "1");
     assert_eq!(Margin::Minimal.value(), "2");

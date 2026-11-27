@@ -1,6 +1,6 @@
 [package]
 name = "formats"
-description = "Obsidian on-disk formats: file kinds, .obsidian config files, JSON Canvas, Bases YAML"
+description = "TFT on-disk formats: file kinds, .tft config files, JSON Canvas, Bases YAML"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

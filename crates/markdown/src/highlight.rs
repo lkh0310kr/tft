@@ -90,6 +90,10 @@ pub enum HighlightKind {
 pub struct HighlightSpan {
     pub range: Range<usize>,
     pub kind: HighlightKind,
+    /// The construct this line's span belongs to. A construct that crosses a
+    /// soft line break has one span per line, and they share this id, so a
+    /// cursor touching any of them reveals all of them.
+    pub id: usize,
 }
 
 /// Per-line highlight spans, in order of start offset; outer spans come
@@ -101,7 +105,7 @@ pub fn highlight_lines(doc: &Document<'_>) -> Vec<Vec<HighlightSpan>> {
     global.sort_by(|a, b| a.0.start.cmp(&b.0.start).then(b.0.end.cmp(&a.0.end)));
 
     let mut out: Vec<Vec<HighlightSpan>> = vec![Vec::new(); lines.line_count()];
-    for (span, kind) in global {
+    for (id, (span, kind)) in global.into_iter().enumerate() {
         if span.is_empty() {
             continue;
         }
@@ -120,6 +124,7 @@ pub fn highlight_lines(doc: &Document<'_>) -> Vec<Vec<HighlightSpan>> {
                 line_spans.push(HighlightSpan {
                     range: start..end,
                     kind,
+                    id,
                 });
             }
         }
@@ -522,5 +527,14 @@ mod tests {
         assert_eq!(lines[3][0].range, 0..2);
         assert_eq!(lines[4][0].range, 0..2);
         assert_eq!(lines[4][0].kind, HighlightKind::Emphasis);
+        // One construct, one id, so a cursor on either line reveals both.
+        assert_eq!(lines[3][0].id, lines[4][0].id);
+        let fence = lines[0]
+            .iter()
+            .find(|s| s.kind == HighlightKind::CodeBlock)
+            .expect("the opening fence's span");
+        assert!(lines[1..3]
+            .iter()
+            .all(|l| l.iter().any(|s| s.kind == HighlightKind::CodeBlock && s.id == fence.id)));
     }
 }

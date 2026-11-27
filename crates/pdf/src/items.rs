@@ -4,7 +4,7 @@
 //! Obsidian's PDF view is pdf.js, and the `selection=a,b,c,d` of a link it
 //! copies is "item `a`, character `b`" to "item `c`, character `d`" in
 //! pdf.js's `getTextContent()` items, marked content left out
-//! (`tools/obsidian-probe/results/2026-11-15-pdf-selection.json`, steps s01
+//! (`tools/reference-probe/results/2026-11-15-pdf-selection.json`, steps s01
 //! and s02). So the items here are cut where pdf.js cuts them, as observed on
 //! the probe's two files (`tests/fixtures/probe-items.json`):
 //!

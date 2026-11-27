@@ -1,14 +1,14 @@
 # Probe generator
 
-Candidate OFM probe notes from a local model, rendered by a real Obsidian,
+Candidate OFM probe notes from a local model, rendered by the reference application,
 triaged against `markdown`.
 
-This automates the front half of the workflow in `CLAUDE.md`: when Obsidian and
+This automates the front half of the workflow in `AGENTS.md`: when the reference application and
 the parser disagree, a probe note goes into
 `crates/markdown/tests/corpus/vault/edge`, the vault is re-rendered, and
 the observed behavior is matched and written into
-`docs/tft/Specification.md`. The tedious part is *thinking of* the snippets,
-and that part suits a small local model — because **Obsidian is the oracle**, a
+`docs/Specification.md`. The tedious part is *thinking of* the snippets,
+and that part suits a small local model — because **the reference application is the oracle**, a
 weak snippet is only a boring test, never a wrong answer. Nothing the model
 writes is trusted as a fact; it is trusted only as a thing to try.
 
@@ -23,7 +23,7 @@ areas below stay inside Markdown syntax for the same reason.
 ```
 tools/probe-gen/probe_gen.py areas                              # the syntax areas
 tools/probe-gen/probe_gen.py generate --area callout --rounds 3 # candidates -> staging
-tools/probe-gen/probe_gen.py render                             # real Obsidian renders them
+tools/probe-gen/probe_gen.py render                             # the reference application renders them
 tools/probe-gen/probe_gen.py triage                             # which ones disagree
 tools/probe-gen/probe_gen.py promote --note "Probe Callouts" --only 0003,0019
 ```
@@ -54,7 +54,7 @@ triage needs no bisection. The committed corpus is never written to until
 
 `triage` runs the corpus test's own comparator over the staging pair via
 `CORPUS_DIR`, and reads the failures out of the `CORPUS_DUMP` directory rather
-than parsing console output. Canonicalizing Obsidian's HTML is subtle — MathJax
+than parsing console output. Canonicalizing the reference app's HTML is subtle — MathJax
 containers, copy buttons, `dir="auto"` — and a second implementation here would
 disagree with the gate it exists to predict.
 
@@ -62,7 +62,7 @@ disagree with the gate it exists to predict.
 because the rest is editorial. It prints the three remaining steps: re-render
 the real corpus vault so `expected/` covers the new note (until then the test
 reports `missing expected HTML` and the probe silently gates nothing), decide
-what Obsidian's behavior *is* and write it into the specification, then fix the
+what the reference app's behavior *is* and write it into the specification, then fix the
 parser and raise `MIN_PASSING`.
 
 ## Configuration
@@ -99,15 +99,15 @@ without `json_schema`.
 
 ## Traps
 
-- **The render step needs your Obsidian closed.** It swaps
+- **The render step needs the reference application closed.** It swaps
   `~/.config/obsidian/obsidian.json` to register the staging vault and restores
   it byte-identical on exit, the same dance as
-  `tools/obsidian-probe/run-block.sh`; it refuses to start while an Obsidian is
+  `tools/reference-probe/run-block.sh`; it refuses to start while the reference application is
   running, so it can never close yours. `--manual` prints what to do by hand
   instead, which is also how you get past a first-run "trust this plugin"
   prompt.
-- `guard_real_vault` refuses to stage inside the gate vault, `docs/tft`,
-  `docs/tft` or the committed corpus. Keep it that way.
+- `guard_real_vault` refuses to stage inside the gate vault, the documentation
+  vault, or the committed corpus. Keep it that way.
 - **One resident model.** The router runs `--models-max 1`, so naming a
   different preset mid-pipeline evicts the loaded one and costs a 10-30 s
   reload. Pick one model per run. After 30 minutes idle

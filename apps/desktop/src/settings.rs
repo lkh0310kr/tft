@@ -1,17 +1,16 @@
-//! The Settings window: Appearance and Editor, read from `.obsidian/`.
-//! Toggles carry the key they write so display and disk cannot drift; a click
-//! emits [`SettingChange`] and the workspace merges the file.
+//! The Settings window: Appearance and Editor, read from `.tft/`.
+//! Controls emit [`SettingChange`] and the workspace merges the file.
 
 use crate::theme::Theme;
 use crate::workspace::{
-    client_frame, frame_window_options, window_title_row, VaultState, WindowCorners, Workspace,
+    VaultState, WindowCorners, Workspace, client_frame, frame_window_options, window_title_row,
 };
 use gpui::{
-    actions, deferred, div, prelude::*, px, size, App, Bounds, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, FontWeight, KeyBinding, ScrollHandle, SharedString, Subscription,
-    WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
+    ScrollHandle, SharedString, Subscription, WeakEntity, Window, WindowBounds, WindowHandle,
+    WindowOptions, actions, deferred, div, prelude::*, px, size,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tft_formats::config::{AppConfig, AppearanceConfig};
 
@@ -19,69 +18,6 @@ actions!(settings, [Close]);
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", Close, Some("Settings"))]);
-}
-
-/// A boolean setting: the key Obsidian writes, its absent default, and its
-/// read/write accessors. `invert` covers controls worded the other way round.
-macro_rules! flags {
-    ($ty:ident, $config:ty, $($name:ident, $key:literal, $field:ident, $default:literal, $invert:literal;)+) => {
-        #[derive(Clone, Copy, Debug)]
-        struct $ty {
-            key: &'static str,
-            default: bool,
-            invert: bool,
-            get: fn(&$config) -> Option<bool>,
-            set: fn(&mut $config, bool),
-        }
-
-        /// Two flags are the same setting when they write the same key;
-        /// the accessors are function pointers, which do not compare.
-        impl PartialEq for $ty {
-            fn eq(&self, other: &Self) -> bool {
-                self.key == other.key
-            }
-        }
-
-        impl Eq for $ty {}
-
-        impl $ty {
-            /// Every flag of this file, for the test that checks the keys.
-            #[cfg(test)]
-            const ALL: &'static [$ty] = &[$($name),+];
-
-            /// What the control shows, from the config in hand.
-            fn is_on(&self, config: &$config) -> bool {
-                (self.get)(config).unwrap_or(self.default) != self.invert
-            }
-
-            /// `config` with the control flipped.
-            fn toggled(&self, config: &$config) -> $config {
-                let mut next = config.clone();
-                (self.set)(&mut next, !self.is_on(config) != self.invert);
-                next
-            }
-        }
-
-        $(const $name: $ty = $ty {
-            key: $key,
-            default: $default,
-            invert: $invert,
-            get: |c| c.$field,
-            set: |c, v| c.$field = Some(v),
-        };)+
-    };
-}
-
-flags!(
-    AppFlag,
-    AppConfig,
-    SPELLCHECK, "spellcheck", spellcheck, true, false;
-);
-
-/// What a toggle writes.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Flag {
-    App(AppFlag),
 }
 
 /// A dropdown's options: what each row reads and what it writes.
@@ -172,8 +108,8 @@ appearance_choice!(
     "system",
     &[
         ("Adapt to system", "system"),
-        ("Light", "moonstone"),
-        ("Dark", "obsidian")
+        ("Light", "light"),
+        ("Dark", "dark")
     ]
 );
 
@@ -202,32 +138,13 @@ impl SettingChange {
     }
 }
 
-/// The flag a toggle command flips: `editor:toggle-spellcheck` is the
-/// Editor tab's "Spellcheck" row run from the palette, so it writes through
-/// the very flag the row does.
-fn command_flag(id: &str) -> Option<Flag> {
-    match id {
-        "editor:toggle-spellcheck" => Some(Flag::App(SPELLCHECK)),
-        _ => None,
-    }
-}
-
-/// What a toggle command writes: its row's file with the flag flipped, or
-/// `None` for an id that is not one of them. The config is read and let go
-/// in here, so the caller holds no read guard when it writes the change.
-pub fn toggle_command(id: &str, state: &VaultState) -> Option<SettingChange> {
-    command_flag(id).map(|flag| flag.toggled(state))
-}
-
-/// `theme:toggle-light-dark` over a base theme the file names: `obsidian`
-/// (dark) and `moonstone` (light) swapped, the other keys kept. Under
-/// `system`, a missing key (which Obsidian reads as `system`) or anything
-/// else it writes nothing and answers `None`; the caller flips the
-/// session's scheme instead (Obsidian 1.15.0, all four starting points).
+/// `theme:toggle-light-dark` swaps `dark` and `light`, preserving other
+/// keys. Under `system`, a missing key or any unrecognized value writes
+/// nothing and answers `None`; the caller flips the session's scheme.
 pub fn toggle_light_dark(appearance: &AppearanceConfig) -> Option<AppearanceConfig> {
     let swapped = match appearance.theme.as_deref() {
-        Some("obsidian") => "moonstone",
-        Some("moonstone") => "obsidian",
+        Some("dark") => "light",
+        Some("light") => "dark",
         _ => return None,
     };
     let mut next = appearance.clone();
@@ -235,26 +152,11 @@ pub fn toggle_light_dark(appearance: &AppearanceConfig) -> Option<AppearanceConf
     Some(next)
 }
 
-impl Flag {
-    /// The config file with this setting flipped.
-    fn toggled(&self, state: &VaultState) -> SettingChange {
-        match self {
-            Flag::App(flag) => SettingChange::App(flag.toggled(&state.app())),
-        }
-    }
-}
-
 /// What a control draws.
 #[derive(Debug, Clone, PartialEq)]
 enum Control {
     None,
-    Toggle(bool),
     Dropdown(SharedString),
-    /// "Spellcheck languages": a pill per chosen language (each with a ×
-    /// while there is more than one), a "Restore default" icon once the
-    /// list is not Obsidian's `["en-US"]`, and a "+" dropdown of the rest.
-    /// Read from the session's spellchecker when drawn.
-    Languages,
 }
 
 /// Whether an open dropdown swallows this click, which closes it and spends
@@ -269,8 +171,6 @@ fn popover_swallows_click(menu: &mut Option<&'static str>) -> bool {
 enum Escape {
     /// An open dropdown's option list.
     Popover,
-    /// A navigable row's page, which backs out to the tab's own rows.
-    Page,
     /// The modal itself, when nothing inside it is open.
     Modal,
 }
@@ -279,32 +179,11 @@ enum Escape {
 /// and the modal only when neither is. Obsidian's dropdown is a native
 /// `<select>`, so Escape over an open option list closes the list and
 /// leaves the dialog where it was.
-fn escape_closes(popover_open: bool, page_open: bool) -> Escape {
+fn escape_closes(popover_open: bool) -> Escape {
     if popover_open {
         Escape::Popover
-    } else if page_open {
-        Escape::Page
     } else {
         Escape::Modal
-    }
-}
-
-/// A page a tab opens in place of its rows. Obsidian's rows for these are
-/// `.setting-item.mod-navigable.tappable`, and the page has a titlebar of
-/// its own with a back chevron (probed 2026-11-02).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Page {
-    /// "Spellcheck dictionary", behind the Spellcheck row's cog: the words
-    /// "Add to dictionary" kept, each with a × that removes it. Obsidian
-    /// opens it as a modal over Settings; here it is a page of Settings.
-    SpellcheckDictionary,
-}
-
-impl Page {
-    fn title(self) -> &'static str {
-        match self {
-            Page::SpellcheckDictionary => "Spellcheck dictionary",
-        }
     }
 }
 
@@ -314,14 +193,8 @@ struct Item {
     name: SharedString,
     desc: SharedString,
     control: Control,
-    /// What a click writes; `None` for the controls that are still
-    /// read-only.
-    flag: Option<Flag>,
     /// What a dropdown writes, for the controls that are not toggles.
     typed: Option<Typed>,
-    /// The page a `lucide-settings` clickable icon before the control
-    /// opens (`extra-setting-button`): the Spellcheck row's dictionary.
-    cog: Option<Page>,
 }
 
 fn heading(name: &str) -> Item {
@@ -330,9 +203,7 @@ fn heading(name: &str) -> Item {
         name: name.to_string().into(),
         desc: "".into(),
         control: Control::None,
-        flag: None,
         typed: None,
-        cog: None,
     }
 }
 
@@ -342,23 +213,8 @@ fn item(name: &str, desc: &str, control: Control) -> Item {
         name: name.to_string().into(),
         desc: desc.to_string().into(),
         control,
-        flag: None,
         typed: None,
-        cog: None,
     }
-}
-
-/// A toggle drawn from the flag it writes, so its state and its click are
-/// the same key.
-fn toggle(name: &str, desc: &str, on: bool, flag: Flag) -> Item {
-    Item {
-        flag: Some(flag),
-        ..item(name, desc, Control::Toggle(on))
-    }
-}
-
-fn app_toggle(name: &str, desc: &str, app: &AppConfig, flag: AppFlag) -> Item {
-    toggle(name, desc, flag.is_on(app), Flag::App(flag))
 }
 
 /// A dropdown that writes: what it shows and what a pick writes both come
@@ -387,8 +243,6 @@ pub enum SettingsEvent {
 pub struct SettingsView {
     focus_handle: FocusHandle,
     state: Option<Arc<VaultState>>,
-    /// The page open in place of the single settings list.
-    page: Option<Page>,
     /// Where the list was scrolled to.
     items_scroll: ScrollHandle,
     /// The dropdown whose options are showing, by the key it writes.
@@ -411,7 +265,6 @@ impl SettingsView {
         SettingsView {
             focus_handle: cx.focus_handle(),
             state: None,
-            page: None,
             items_scroll: ScrollHandle::new(),
             menu: None,
             corners: WindowCorners::default(),
@@ -423,20 +276,6 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Opens a navigable row's page.
-    fn open_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = None;
-        self.page = Some(page);
-        self.focus_tab(window, cx);
-        cx.notify();
-    }
-
-    /// Back out of a page to the single settings list.
-    fn close_page(&mut self, cx: &mut Context<Self>) {
-        self.page = None;
-        cx.notify();
-    }
-
     /// Shows the modal and takes focus so Escape closes it.
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The view outlives the modal, so a dropdown or a text field left
@@ -444,9 +283,6 @@ impl SettingsView {
         // of the modal commits the field first, so there is nothing to write
         // here, only state to drop.
         self.menu = None;
-        // A page left open by the last session would come back instead of
-        // the list.
-        self.page = None;
         self.focus_tab(window, cx);
         cx.notify();
     }
@@ -457,7 +293,7 @@ impl SettingsView {
         let listed = self.described_rows(rows, _cx);
         let total = self.row_count();
         json!({
-            "page": self.page.map(Page::title),
+            "page": Value::Null,
             "menu": self.menu,
             "rows": listed,
             "rows_total": (total > rows).then_some(total),
@@ -480,9 +316,7 @@ impl SettingsView {
             .map(|item| {
                 let (control, value) = match &item.control {
                     Control::None => ("none", Value::Null),
-                    Control::Toggle(on) => ("toggle", json!(on)),
                     Control::Dropdown(v) => ("dropdown", json!(v.as_ref())),
-                    Control::Languages => ("languages", Value::Null),
                 };
                 json!({
                     "kind": if item.heading { "heading" } else { "setting" },
@@ -499,16 +333,11 @@ impl SettingsView {
         window.focus(&self.focus_handle, cx);
     }
 
-    fn close_action(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
-        match escape_closes(self.menu.is_some(), self.page.is_some()) {
+    fn close_action(&mut self, _: &Close, _window: &mut Window, cx: &mut Context<Self>) {
+        match escape_closes(self.menu.is_some()) {
             Escape::Popover => {
                 self.menu = None;
                 cx.notify();
-            }
-            Escape::Page => {
-                self.dismiss_open_controls(cx);
-                self.close_page(cx);
-                self.focus_tab(window, cx);
             }
             Escape::Modal => {
                 self.dismiss_open_controls(cx);
@@ -548,13 +377,6 @@ impl SettingsView {
     /// A click on a toggle: ask the workspace to write the flipped value.
     /// The modal redraws from the vault's config once the write lands, so a
     /// failed write leaves the control where it was.
-    fn toggle_flag(&mut self, flag: Flag, _window: &Window, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
-            return;
-        };
-        cx.emit(SettingsEvent::Changed(Box::new(flag.toggled(&state))));
-    }
-
     // ----- the single list -----------------------------------------------
 
     /// Every setting, in one list: Appearance, then Editor.
@@ -564,8 +386,6 @@ impl SettingsView {
         };
         let mut items = vec![heading("Appearance")];
         items.extend(Self::appearance_items(state));
-        items.push(heading("Editor"));
-        items.extend(Self::editor_items(state));
         items
     }
 
@@ -581,21 +401,6 @@ impl SettingsView {
         )]
     }
 
-    fn editor_items(state: &VaultState) -> Vec<Item> {
-        let app = &state.app();
-        vec![
-            Item {
-                cog: Some(Page::SpellcheckDictionary),
-                ..app_toggle("Spellcheck", "Turn on the spellchecker.", app, SPELLCHECK)
-            },
-            item(
-                "Spellcheck languages",
-                "Choose the languages for the spellchecker to use.",
-                Control::Languages,
-            ),
-        ]
-    }
-
     fn render_control(
         &self,
         item: &Item,
@@ -604,50 +409,6 @@ impl SettingsView {
     ) -> gpui::AnyElement {
         match &item.control {
             Control::None => div().into_any_element(),
-            Control::Toggle(on) => {
-                let on = *on;
-                let toggle = div()
-                    .relative()
-                    .w(px(36.))
-                    .h(px(20.))
-                    .rounded_full()
-                    // `.checkbox-container`: `--background-modifier-border-hover`,
-                    // `--interactive-accent` while on (probe of 2026-11-02).
-                    .bg(if on {
-                        theme.tokens.interactive_accent
-                    } else {
-                        theme.tokens.background_modifier_border_hover
-                    })
-                    .border_1()
-                    .border_color(if on {
-                        theme.tokens.interactive_accent
-                    } else {
-                        theme.tokens.background_modifier_border_hover
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.))
-                            .left(px(if on { 17. } else { 2. }))
-                            .size(px(14.))
-                            .rounded_full()
-                            .bg(theme.tokens.toggle_thumb_color),
-                    );
-                let Some(flag) = item.flag.clone() else {
-                    return toggle.into_any_element();
-                };
-                div()
-                    .id(SharedString::from(format!("settings-toggle-{}", item.name)))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.click_dismissed_a_popover(cx) {
-                            return;
-                        }
-                        this.toggle_flag(flag.clone(), window, cx)
-                    }))
-                    .child(toggle)
-                    .into_any_element()
-            }
             Control::Dropdown(value) => {
                 let shown = div()
                     .flex()
@@ -736,7 +497,6 @@ impl SettingsView {
                     })
                     .into_any_element()
             }
-            Control::Languages => self.render_languages(theme, cx),
         }
     }
 
@@ -819,267 +579,7 @@ impl SettingsView {
                     .items_center()
                     .gap_2()
                     .flex_shrink_0()
-                    .children(item.cog.map(|page| self.cog_button(page, theme, cx)))
                     .child(self.render_control(item, theme, cx)),
-            )
-            .into_any_element()
-    }
-
-    /// A `lucide-settings` clickable icon that opens one of the pages.
-    fn cog_button(
-        &self,
-        page: Page,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(SharedString::from(format!("settings-cog-{}", page.title())))
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(24.))
-            .rounded_sm()
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-            .child(crate::assets::icon(
-                "settings",
-                16.,
-                theme.tokens.icon_color,
-            ))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                if this.click_dismissed_a_popover(cx) {
-                    return;
-                }
-                this.open_page(page, window, cx)
-            }))
-    }
-
-    /// "Spellcheck dictionary": the custom words, one row each, the word
-    /// and a `lucide-x` "Remove from dictionary" before it, as Obsidian's
-    /// `spellchecker-dictionary-item` rows have them (probed 2026-11-15).
-    fn render_dictionary_page(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let words = crate::spellcheck::custom_words(cx);
-        let mut list = div()
-            .id("settings-spell-dictionary")
-            .overflow_y_scroll()
-            .size_full()
-            .flex()
-            .flex_col();
-        if words.is_empty() {
-            list = list.child(
-                div()
-                    .py_4()
-                    .text_size(px(12.))
-                    .text_color(theme.tokens.text_muted)
-                    .child("No words added."),
-            );
-        }
-        for (ix, word) in words.into_iter().enumerate() {
-            let remove = word.clone();
-            list = list.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .py(px(2.))
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("settings-spell-remove-{ix}")))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(20.))
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                            .tooltip(crate::ui::tooltip("Remove from dictionary"))
-                            .child(crate::assets::icon("x", 14., theme.tokens.icon_color))
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.stop_propagation();
-                                crate::spellcheck::remove_word(&remove, cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .text_color(theme.tokens.text_normal)
-                            .child(word),
-                    ),
-            );
-        }
-        list
-    }
-
-    /// "Spellcheck languages": the chosen languages as pills, a restore
-    /// icon away from the default, and the "+" dropdown of the others a
-    /// dictionary was found for.
-    fn render_languages(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::AnyElement {
-        const KEY: &str = "spellcheck-languages";
-        let chosen = crate::spellcheck::languages(cx);
-        let missing = crate::spellcheck::missing(cx);
-        let others: Vec<String> = crate::spellcheck::available(cx)
-            .into_iter()
-            .filter(|a| !chosen.iter().any(|c| c.eq_ignore_ascii_case(a)))
-            .collect();
-        let several = chosen.len() > 1;
-        let mut pills = Vec::new();
-        for (ix, code) in chosen.iter().enumerate() {
-            let without: Vec<String> = chosen.iter().filter(|c| *c != code).cloned().collect();
-            let absent = missing.iter().any(|m| m == code);
-            let name = crate::spellcheck::display_name(code);
-            let label = if absent {
-                format!("{name} (no dictionary)")
-            } else {
-                name
-            };
-            pills.push(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .px(px(6.))
-                    .py(px(1.))
-                    .rounded_sm()
-                    .bg(theme.tokens.background_modifier_hover)
-                    .text_size(px(12.))
-                    .text_color(if absent {
-                        theme.tokens.text_faint
-                    } else {
-                        theme.tokens.text_normal
-                    })
-                    .child(SharedString::from(label))
-                    .when(several, |d| {
-                        d.child(
-                            div()
-                                .id(SharedString::from(format!(
-                                    "settings-spell-lang-remove-{ix}"
-                                )))
-                                .cursor_pointer()
-                                .child(crate::assets::icon("x", 12., theme.tokens.icon_color))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    if this.click_dismissed_a_popover(cx) {
-                                        return;
-                                    }
-                                    crate::spellcheck::set_languages(without.clone(), cx);
-                                    cx.notify();
-                                })),
-                        )
-                    }),
-            );
-        }
-        let open = self.menu == Some(KEY);
-        let at_default = chosen == tft_spell::default_languages();
-        let mut rows = Vec::new();
-        for (ix, code) in others.into_iter().enumerate() {
-            let mut next = chosen.clone();
-            next.push(code.clone());
-            rows.push(
-                div()
-                    .id(SharedString::from(format!("settings-option-{KEY}-{ix}")))
-                    .px_3()
-                    .py_1()
-                    .text_size(px(12.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                    .text_color(theme.tokens.text_normal)
-                    .child(SharedString::from(crate::spellcheck::display_name(&code)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.menu = None;
-                        crate::spellcheck::set_languages(next.clone(), cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(div().flex().flex_row().flex_wrap().gap_1().children(pills))
-            .when(!at_default, |d| {
-                d.child(
-                    div()
-                        .id("settings-spell-lang-restore")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(24.))
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                        .tooltip(crate::ui::tooltip("Restore default"))
-                        .child(crate::assets::icon(
-                            "rotate-ccw",
-                            16.,
-                            theme.tokens.icon_color,
-                        ))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            if this.click_dismissed_a_popover(cx) {
-                                return;
-                            }
-                            crate::spellcheck::set_languages(tft_spell::default_languages(), cx);
-                            cx.notify();
-                        })),
-                )
-            })
-            .child(
-                div()
-                    .relative()
-                    .child(
-                        div()
-                            .id("settings-menu-spellcheck-languages")
-                            .px_2()
-                            .py(px(3.))
-                            .rounded_sm()
-                            .cursor_pointer()
-                            .bg(theme.tokens.dropdown_background)
-                            .border_1()
-                            .border_color(theme.tokens.background_modifier_border)
-                            .text_size(px(12.))
-                            .text_color(theme.tokens.text_normal)
-                            .child("+")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                if this.click_dismissed_a_popover(cx) {
-                                    return;
-                                }
-                                this.menu = Some(KEY);
-                                cx.notify();
-                            })),
-                    )
-                    .when(open, |d| {
-                        // Deferred, or the rows after this one paint over it.
-                        d.child(deferred(
-                            div()
-                                .id("settings-spell-lang-options")
-                                .absolute()
-                                .top(px(26.))
-                                .right(px(0.))
-                                .min_w(px(200.))
-                                .max_h(px(300.))
-                                .overflow_y_scroll()
-                                .flex()
-                                .flex_col()
-                                .bg(theme.tokens.background_secondary)
-                                .border_1()
-                                .border_color(theme.tokens.background_modifier_border)
-                                .rounded_md()
-                                .shadow_lg()
-                                .py_1()
-                                .children(rows),
-                        ))
-                    }),
             )
             .into_any_element()
     }
@@ -1089,24 +589,16 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
         self.corners = WindowCorners::of(window);
-        let page = self.page;
-        let body: gpui::AnyElement = match page {
-            Some(Page::SpellcheckDictionary) => {
-                self.render_dictionary_page(&theme, cx).into_any_element()
-            }
-            None => {
-                let items = self.items();
-                let mut list = div()
-                    .id("settings-items")
-                    .overflow_y_scroll()
-                    .track_scroll(&self.items_scroll)
-                    .size_full();
-                for item in &items {
-                    list = list.child(self.render_item(item, &theme, cx));
-                }
-                list.into_any_element()
-            }
-        };
+        let items = self.items();
+        let mut list = div()
+            .id("settings-items")
+            .overflow_y_scroll()
+            .track_scroll(&self.items_scroll)
+            .size_full();
+        for item in &items {
+            list = list.child(self.render_item(item, &theme, cx));
+        }
+        let body = list.into_any_element();
         // The title row sits over the content column alone, as the vault
         // manager's does over its splash: the nav runs the full height and
         // meets the top-left corner itself. The row is the content's own
@@ -1167,52 +659,11 @@ impl Render for SettingsView {
                             .pt_2()
                             .pb_2()
                             .child(
-                                // `.setting-page-titlebar`: a page replaces
-                                // the tab's name with a back chevron and
-                                // its own.
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .when_some(page, |d, page| {
-                                        d.child(
-                                            div()
-                                                .id("settings-page-back")
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .size(px(24.))
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .hover(|s| {
-                                                    s.bg(theme.tokens.background_modifier_hover)
-                                                })
-                                                .child(crate::assets::icon(
-                                                    "chevron-left",
-                                                    18.,
-                                                    theme.tokens.icon_color,
-                                                ))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    cx.stop_propagation();
-                                                    if this.click_dismissed_a_popover(cx) {
-                                                        return;
-                                                    }
-                                                    let _ = page;
-                                                    this.close_page(cx)
-                                                })),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .text_size(px(18.))
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.tokens.text_normal)
-                                            .child(match page {
-                                                Some(page) => page.title(),
-                                                None => "Settings",
-                                            }),
-                                    ),
+                                    .text_size(px(18.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.tokens.text_normal)
+                                    .child("Settings"),
                             ),
                     )
                     .child(
@@ -1224,7 +675,7 @@ impl Render for SettingsView {
                             .bg(theme.tokens.background_modifier_hover)
                             .text_size(px(11.))
                             .text_color(theme.tokens.text_muted)
-                            .child("Changes are written to the vault's .obsidian folder as you use them."),
+                            .child("Changes are written to the vault's .tft folder as you use them."),
                     )
                     .child(div().flex_1().min_h_0().child(body)),
                     ),
@@ -1342,41 +793,6 @@ impl Render for SettingsWindow {
 mod tests {
     use super::*;
 
-    /// Every toggle of every file writes the key Obsidian writes, flips
-    /// only that key, and then reads back the other way round.
-    #[test]
-    fn every_toggle_writes_its_own_key_and_nothing_else() {
-        macro_rules! check {
-            ($ty:ident, $config:ty) => {
-                for flag in $ty::ALL {
-                    let before = <$config>::default();
-                    let after = flag.toggled(&before);
-                    let json = serde_json::to_value(&after).unwrap();
-                    let object = json.as_object().expect("an object");
-                    assert_eq!(
-                        object.len(),
-                        1,
-                        "{} changed more than its own key: {json}",
-                        flag.key
-                    );
-                    assert_eq!(
-                        object.get(flag.key),
-                        Some(&serde_json::Value::Bool(!flag.default)),
-                        "{} wrote the wrong key or value: {json}",
-                        flag.key
-                    );
-                    assert_eq!(
-                        flag.is_on(&after),
-                        !flag.is_on(&before),
-                        "{} did not flip",
-                        flag.key
-                    );
-                }
-            };
-        }
-        check!(AppFlag, AppConfig);
-    }
-
     #[test]
     fn every_dropdown_writes_its_own_key_and_nothing_else() {
         let (_dir, state) = vault();
@@ -1430,88 +846,22 @@ mod tests {
     }
 
     /// Escape takes the innermost thing open, so a dropdown closes without
-    /// taking the modal with it and a page backs out to its tab.
+    /// taking the modal with it.
     #[test]
     fn escape_closes_the_innermost_thing_open() {
-        assert_eq!(escape_closes(false, false), Escape::Modal);
-        assert_eq!(escape_closes(true, false), Escape::Popover);
-        // A page is outside a dropdown it holds and inside the modal.
-        assert_eq!(escape_closes(false, true), Escape::Page);
-        assert_eq!(escape_closes(true, true), Escape::Popover);
+        assert_eq!(escape_closes(false), Escape::Modal);
+        assert_eq!(escape_closes(true), Escape::Popover);
     }
 
-    /// Only the spellcheck row is a toggle command now; the removed rows'
-    /// ids are silent.
-    #[test]
-    fn only_the_spellcheck_toggle_is_a_command() {
-        let (_dir, state) = vault();
-        let flag = SettingsView::editor_items(&state)
-            .into_iter()
-            .find(|i| i.name.as_ref() == "Spellcheck")
-            .and_then(|i| i.flag)
-            .expect("the spellcheck row");
-        assert_eq!(
-            toggle_command("editor:toggle-spellcheck", &state),
-            Some(flag.toggled(&state))
-        );
-        for id in [
-            "editor:toggle-readable-line-length",
-            "editor:toggle-line-numbers",
-            "editor:toggle-bold",
-        ] {
-            assert_eq!(toggle_command(id, &state), None, "{id}");
-        }
-    }
-
-    /// `editor:toggle-spellcheck` over two runs, from no key and from
-    /// `false`: `app.json`'s bytes after each are Obsidian 1.15.0's (the
-    /// 2026-11-09 `attachments-app-info` probe, `s01`), the key written
-    /// even when it goes back to the default.
-    #[test]
-    fn toggle_spellcheck_writes_obsidians_bytes_over_two_runs() {
-        for (start, first, second) in [
-            (
-                "{}",
-                "{\n  \"spellcheck\": false\n}",
-                "{\n  \"spellcheck\": true\n}",
-            ),
-            (
-                "{\n  \"spellcheck\": false\n}",
-                "{\n  \"spellcheck\": true\n}",
-                "{\n  \"spellcheck\": false\n}",
-            ),
-        ] {
-            let (dir, _) = vault();
-            let path = dir.path().join(".obsidian/app.json");
-            std::fs::write(&path, start).unwrap();
-            let state = VaultState::load(&dir.path().to_path_buf()).unwrap();
-            let change = toggle_command("editor:toggle-spellcheck", &state).unwrap();
-            state.apply_setting(&change).unwrap();
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                first,
-                "from {start}"
-            );
-            let change = toggle_command("editor:toggle-spellcheck", &state).unwrap();
-            state.apply_setting(&change).unwrap();
-            assert_eq!(
-                std::fs::read_to_string(&path).unwrap(),
-                second,
-                "from {start}"
-            );
-        }
-    }
-
-    /// `obsidian` and `moonstone` swap, the file's other keys kept; under
-    /// `system`, no key, or a value Obsidian does not know, nothing is
-    /// written.
+    /// `dark` and `light` swap while the file's other keys are kept; under
+    /// `system`, no key, or an unrecognized value, nothing is written.
     #[test]
     fn toggle_light_dark_swaps_the_two_base_themes_and_leaves_system_alone() {
         let (dir, _) = vault();
-        let path = dir.path().join(".obsidian/appearance.json");
+        let path = dir.path().join(".tft/appearance.json");
         std::fs::write(
             &path,
-            "{\n  \"accentColor\": \"#ff5721\",\n  \"theme\": \"obsidian\",\n  \"probeUnknown\": true\n}",
+            "{\n  \"accentColor\": \"#ff5721\",\n  \"theme\": \"dark\",\n  \"probeUnknown\": true\n}",
         )
         .unwrap();
         let state = VaultState::load(&dir.path().to_path_buf()).unwrap();
@@ -1521,10 +871,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "{\n  \"accentColor\": \"#ff5721\",\n  \"theme\": \"moonstone\",\n  \"probeUnknown\": true\n}"
+            "{\n  \"accentColor\": \"#ff5721\",\n  \"theme\": \"light\",\n  \"probeUnknown\": true\n}"
         );
         let back = toggle_light_dark(&state.appearance()).expect("a swap");
-        assert_eq!(back.theme.as_deref(), Some("obsidian"));
+        assert_eq!(back.theme.as_deref(), Some("dark"));
         for theme in [Some("system"), None, Some("probe")] {
             let config = AppearanceConfig {
                 theme: theme.map(str::to_string),
@@ -1534,45 +884,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_toggle_shows_the_file_first_and_the_default_when_the_key_is_absent() {
-        let mut config = AppConfig::default();
-        assert!(SPELLCHECK.is_on(&config), "spellcheck is on by default");
-        config.spellcheck = Some(false);
-        assert!(!SPELLCHECK.is_on(&config));
-    }
-
     /// A vault to build the tabs against; `VaultState::load` wants a real
     /// folder.
     fn vault() -> (tempfile::TempDir, VaultState) {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::create_dir_all(root.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(root.join(".tft")).unwrap();
         std::fs::write(root.join("Note.md"), "# Note\n").unwrap();
         let state = VaultState::load(&root.to_path_buf()).unwrap();
         (dir, state)
-    }
-
-    fn toggles(state: &VaultState) -> Vec<String> {
-        [
-            SettingsView::appearance_items(state),
-            SettingsView::editor_items(state),
-        ]
-        .into_iter()
-        .flatten()
-        .filter(|i| i.flag.is_some())
-        .map(|i| i.name.to_string())
-        .collect()
-    }
-
-    /// Every row that writes carries a flag.
-    #[test]
-    fn every_toggle_writes_something() {
-        let (_dir, state) = vault();
-        let toggles = toggles(&state);
-        assert!(!toggles.is_empty(), "no toggles were built");
-        for name in &toggles {
-            assert!(!name.is_empty(), "a toggle has no name");
-        }
     }
 }

@@ -4,7 +4,7 @@
 //! what a file manager hands over — the desktop entry claims `text/markdown`
 //! — and what shell completion produces, so `tft Rocks/Basalt.md` opens
 //! the vault that holds the note and then the note. The vault of a file is
-//! the nearest folder above it with a `.obsidian` in it, which is
+//! the nearest folder above it with a `.tft` in it, which is
 //! Obsidian's own definition of one; failing that, a vault on the machine's
 //! list that contains the file; failing that, the file's own folder, since
 //! any folder is a vault and that is the answer a person opening a loose
@@ -65,7 +65,7 @@ fn vault_of(file: &Path, known: &[PathBuf]) -> Option<PathBuf> {
     if let Some(root) = parents().find(|dir| dir.join(DEFAULT_CONFIG_DIR).is_dir()) {
         return Some(root.to_path_buf());
     }
-    // A vault that nothing has configured yet has no `.obsidian` — TFT
+    // A vault that nothing has configured yet has no `.tft` — TFT
     // does not write one just to read a vault — so the machine's own list
     // is the second answer, deepest entry first so that a vault inside a
     // vault takes the file.
@@ -121,7 +121,7 @@ mod tests {
     fn a_file_is_opened_in_the_vault_that_holds_it() {
         let dir = tempfile::tempdir().expect("a temp dir");
         let vault = dir.path().join("rocks");
-        std::fs::create_dir_all(vault.join(".obsidian")).expect("the config dir");
+        std::fs::create_dir_all(vault.join(".tft")).expect("the config dir");
         std::fs::create_dir_all(vault.join("Igneous")).expect("a folder");
         let note = vault.join("Igneous/Basalt.md");
         std::fs::write(&note, "# Basalt\n").expect("a note");
@@ -133,7 +133,7 @@ mod tests {
                 path: "Igneous/Basalt.md".into(),
             }
         );
-        // A deeper folder with no `.obsidian` of its own does not become the
+        // A deeper folder with no `.tft` of its own does not become the
         // vault: the search goes up to the one that has it.
         let deep = vault.join("Igneous/Flows");
         std::fs::create_dir_all(&deep).expect("a folder");

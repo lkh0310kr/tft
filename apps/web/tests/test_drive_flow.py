@@ -58,12 +58,12 @@ def main():
         elif "/files/mock-root?" in url:
             route.fulfill(status=200, content_type="application/json", body=json.dumps({"id": "mock-root", "name": "tft-ui-vault", "mimeType": "application/vnd.google-apps.folder"}))
         elif "mock-appearance" in url and "alt=media" in url:
-            route.fulfill(status=200, content_type="application/json", body='{"theme":"moonstone"}')
+            route.fulfill(status=200, content_type="application/json", body='{"theme":"light"}')
         elif "alt=media" in url:
             route.fulfill(status=200, content_type="text/plain; charset=utf-8", body=SOURCE)
         elif "/files?" in url:
-            if ".obsidian" in url:
-                files = [{"id": "mock-obsidian", "name": ".obsidian", "mimeType": "application/vnd.google-apps.folder"}]
+            if ".tft" in url:
+                files = [{"id": "mock-tft", "name": ".tft", "mimeType": "application/vnd.google-apps.folder"}]
             elif "appearance.json" in url:
                 files = [{"id": "mock-appearance", "name": "appearance.json", "mimeType": "text/plain"}]
             elif "mock-architecture" in url:

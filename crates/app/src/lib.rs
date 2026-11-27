@@ -16,6 +16,8 @@ pub mod gutter;
 #[cfg(feature = "gpui-ui")]
 pub mod inline_field;
 #[cfg(feature = "gpui-ui")]
+pub mod keymap;
+#[cfg(feature = "gpui-ui")]
 pub mod math;
 #[cfg(feature = "gpui-ui")]
 pub mod media;
@@ -32,7 +34,6 @@ pub mod reading;
 #[cfg(feature = "gpui-ui")]
 pub mod rtl;
 #[cfg(feature = "gpui-ui")]
-pub mod spellcheck;
 #[cfg(feature = "gpui-ui")]
 pub mod suggest;
 #[cfg(feature = "gpui-ui")]
@@ -51,7 +52,8 @@ pub use tft_domain::{
     NodeId, NodeKind, RenameError, ScannedNode, VaultData, VaultEvent, VaultNode,
 };
 pub use workspace::{
-    place_new_tab, FileOperationRequest, HistoryEntry, Layout, LeftTab, SplitDirection, Tab,
+    current_history_entry_mut, history_step, place_new_tab, push_history_entry,
+    FileOperationRequest, HistoryDirection, HistoryEntry, Layout, LeftTab, SplitDirection, Tab,
     TabGroup, ViewMode, WorkspaceModel,
 };
 

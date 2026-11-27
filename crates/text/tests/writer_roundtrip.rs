@@ -606,7 +606,7 @@ fn a_table_command_stays_inside_its_table_and_undoes_cleanly() {
                     continue;
                 }
                 check_invariants(&buf, &note, "table command");
-                // A table command rewrites its whole table, and Obsidian's
+                // A table command rewrites its whole table, and 기준 앱's
                 // does too — but nothing outside it may move.
                 let after = buf.text().to_string();
                 assert_eq!(
@@ -822,20 +822,20 @@ fn replacing_every_match_and_undoing_restores_the_note() {
 
 // ----- the config files ----------------------------------------------------
 
-/// The `.obsidian` sets in the repository: the corpus vault's, and the docs
-/// vault TFT dogfoods. Both were written by Obsidian itself.
+/// The `.tft` sets in the repository: the corpus vault's, and the docs
+/// vault TFT dogfoods. Both were written by 기준 앱 itself.
 fn config_dirs() -> Vec<PathBuf> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let mut dirs = vec![
-        corpus_root().join(".obsidian"),
-        repo.parent().unwrap().join("docs/tft/.obsidian"),
+        corpus_root().join(".tft"),
+        repo.parent().unwrap().join("docs/.tft"),
     ];
-    // The gate's real vault, when one is named: its `.obsidian` is the set a
+    // The gate's real vault, when one is named: its `.tft` is the set a
     // person actually accumulated, which the repository's two cannot imitate
     // — files missing outright, an `appearance.json` that is a bare `{}`, no
     // trailing newline. A tree that is not a vault root simply has none.
     if let Some(root) = std::env::var_os("TFT_ROUNDTRIP_VAULT") {
-        let dir = PathBuf::from(root).join(".obsidian");
+        let dir = PathBuf::from(root).join(".tft");
         if dir.is_dir() {
             dirs.push(dir);
         }
@@ -843,11 +843,11 @@ fn config_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// A vault whose `.obsidian` is a copy of `dir`, so a write never touches
+/// A vault whose `.tft` is a copy of `dir`, so a write never touches
 /// the repository.
 fn vault_with_config(dir: &Path) -> (tempfile::TempDir, Vault) {
     let tmp = tempfile::tempdir().unwrap();
-    let dest = tmp.path().join(".obsidian");
+    let dest = tmp.path().join(".tft");
     std::fs::create_dir_all(&dest).unwrap();
     for entry in std::fs::read_dir(dir).unwrap().flatten() {
         if entry.path().is_file() {
@@ -859,8 +859,8 @@ fn vault_with_config(dir: &Path) -> (tempfile::TempDir, Vault) {
 }
 
 /// Reads `name` as `T`, writes it straight back and compares the bytes.
-/// Obsidian rewrites a config file whole on every change, so what TFT
-/// writes has to be what Obsidian wrote, down to the indentation and the
+/// 기준 앱 rewrites a config file whole on every change, so what TFT
+/// writes has to be what 기준 앱 wrote, down to the indentation and the
 /// keys TFT does not model (`#[serde(flatten)] extra`).
 fn config_round_trips<T>(vault: &Vault, dir: &Path, name: &str) -> bool
 where
@@ -875,7 +875,7 @@ where
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
         .unwrap_or_else(|| panic!("{} did not parse", path.display()));
     vault.write_config(name, &value).unwrap();
-    let after = std::fs::read_to_string(vault.root().join(".obsidian").join(name)).unwrap();
+    let after = std::fs::read_to_string(vault.root().join(".tft").join(name)).unwrap();
     assert_eq!(
         after,
         before,
@@ -914,7 +914,7 @@ fn every_config_file_is_written_back_byte_identical() {
             &dir,
             "types.json",
         ));
-        // The per-plugin files. Obsidian does not create any of them until a
+        // The per-plugin files. 기준 앱 does not create any of them until a
         // setting in that plugin is written, so no set here has one yet and
         // these contribute nothing — they are listed so a set that does have
         // one covers it, `switcher.json` above all: the app writes it.
@@ -924,7 +924,7 @@ fn every_config_file_is_written_back_byte_identical() {
             "switcher.json",
         ));
         // Every set has to contribute, or naming a vault proves nothing
-        // about its own `.obsidian` -- unless the vault keeps none of the
+        // about its own `.tft` -- unless the vault keeps none of the
         // modelled files at all (a vault with only `workspace.json`, which
         // TFT does not model as a config type -- though it does write
         // it, see the note below), where there is nothing to prove and the
@@ -953,7 +953,7 @@ fn every_config_file_is_written_back_byte_identical() {
     }
     // `workspace.json` is deliberately not here, but NOT because TFT
     // leaves it alone: `Workspace::save_layout` writes it on the way out,
-    // where Obsidian writes it too. What TFT does not do is model it as a
+    // where 기준 앱 writes it too. What TFT does not do is model it as a
     // config type -- the layout goes out as a `serde_json::Value` merged
     // into the file's own JSON, so every key it did not set keeps its bytes.
     // It is out of this round trip because there is no type to round trip,
@@ -992,7 +992,7 @@ fn collect_canvases(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether a `:` is followed by a space outside a string literal. Obsidian's
+/// Whether a `:` is followed by a space outside a string literal. 기준 앱's
 /// writer puts no space after a colon; every pretty-printer does. Scanning
 /// rather than searching for `": "` keeps a label like `"Area: north"` out of
 /// the answer.
@@ -1016,27 +1016,27 @@ fn padded_colon_outside_a_string(text: &str) -> bool {
     false
 }
 
-/// Obsidian's own layout: a tab-indented object with no trailing newline and
+/// 기준 앱's own layout: a tab-indented object with no trailing newline and
 /// no padding after a colon. A canvas authored by anything else is rewritten
-/// whole the first time Obsidian saves it, so there is nothing byte-level to
+/// whole the first time 기준 앱 saves it, so there is nothing byte-level to
 /// hold the writer to until then.
 ///
 /// The first and last bytes alone do not separate the two, since a
 /// pretty-printer also opens `{\n\t` and can end without a newline. Nor does
-/// one-object-per-line: Obsidian expands an element that *nests* an object
+/// one-object-per-line: 기준 앱 expands an element that *nests* an object
 /// over several lines (`scrambled.out.canvas` has one). The colon is what
 /// tells them apart.
-fn in_obsidians_layout(text: &str) -> bool {
+fn in_reference_layout(text: &str) -> bool {
     text.starts_with("{\n\t") && !text.ends_with('\n') && !padded_colon_outside_a_string(text)
 }
 
-/// The canvases Obsidian wrote back for files it had read in the CDP probe
+/// The canvases 기준 앱 wrote back for files it had read in the CDP probe
 /// runs are always here (what it writes for a canvas made in the app, or on
 /// closing one unedited, is not a fixed point: see
-/// `formats/tests/canvas_obsidian.rs`); a real vault's own are added
+/// `formats/tests/canvas_roundtrip.rs`); a real vault's own are added
 /// when `TFT_ROUNDTRIP_VAULT` names one.
 #[test]
-fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
+fn every_canvas_reference_saved_is_written_back_byte_identical() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let fixtures = repo.join("formats/tests/canvas");
     let mut canvases: Vec<PathBuf> = ["scrambled", "order", "noedges"]
@@ -1053,7 +1053,7 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
     let mut normalized: Vec<String> = Vec::new();
     for path in &canvases {
         let before = std::fs::read_to_string(path).unwrap();
-        // `canvas:new-file` writes a zero-byte file, and Obsidian puts JSON
+        // `canvas:new-file` writes a zero-byte file, and 기준 앱 puts JSON
         // in it only once the canvas holds something (see
         // [[Specification#Observed canvas write behavior]]), so an untouched
         // new canvas is a real vault state with nothing to round trip. It is
@@ -1065,22 +1065,22 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
         }
         let canvas = tft_formats::canvas::Canvas::from_json(&before)
             .unwrap_or_else(|e| panic!("{} did not parse: {e}", path.display()));
-        if !in_obsidians_layout(&before) {
+        if !in_reference_layout(&before) {
             authored_elsewhere.push(path.display().to_string());
             continue;
         }
         let once = canvas.to_json();
         if once != before {
-            // A node Obsidian made *in the app* is not a fixed point: on the
-            // next edited save Obsidian itself moves the geometry after
+            // A node 기준 앱 made *in the app* is not a fixed point: on the
+            // next edited save 기준 앱 itself moves the geometry after
             // `type` and the type's own keys, so `id, x, y, width, height,
             // type, text, color` becomes `id, type, text, x, y, width,
             // height, color`
-            // (`formats/tests/canvas_obsidian.rs::a_node_made_in_the_app_is_reordered_once_read_back`,
+            // (`formats/tests/canvas_roundtrip.rs::a_node_made_in_the_app_is_reordered_once_read_back`,
             // observed on the gate vault's own canvas on 2026-10-18).
-            // `in_obsidians_layout` cannot see this: it reads the formatting,
+            // `in_reference_layout` cannot see this: it reads the formatting,
             // not the key order. So a real vault holding an app-made canvas
-            // would fail a byte-identity assertion that Obsidian would fail
+            // would fail a byte-identity assertion that 기준 앱 would fail
             // too. What must hold instead, and is strictly more than nothing:
             //
             //   - the rewrite only moves keys, never a value, and
@@ -1109,14 +1109,14 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
     }
     if !normalized.is_empty() {
         eprintln!(
-            "{} canvases reordered once, the way Obsidian reorders a node it made itself: {}",
+            "{} canvases reordered once, the way 기준 앱 reorders a node it made itself: {}",
             normalized.len(),
             normalized.join(", ")
         );
     }
     if !authored_elsewhere.is_empty() {
         eprintln!(
-            "{} canvases not in Obsidian's layout, which Obsidian itself would rewrite: {}",
+            "{} canvases not in 기준 앱's layout, which 기준 앱 itself would rewrite: {}",
             authored_elsewhere.len(),
             authored_elsewhere.join(", ")
         );
@@ -1138,7 +1138,7 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
 /// builds the layout as a `serde_json::Value` and hands it to
 /// `Vault::write_config`, so there is no `WorkspaceConfig` for
 /// [`config_round_trips`] to name. What that left is a file both apps rewrite
-/// on every session with nothing holding TFT's writer to Obsidian's bytes —
+/// on every session with nothing holding TFT's writer to 기준 앱's bytes —
 /// the one file the gate never checked (see [[Writer gate run]], day 1).
 ///
 /// The half that can be held without gpui is the half `vault` owns, and
@@ -1147,15 +1147,15 @@ fn every_canvas_obsidian_saved_is_written_back_byte_identical() {
 /// two-space indent, the key order, the empty containers, a byte order mark,
 /// the missing trailing newline, and how a number is spelled: a dock width
 /// respelled `315.19744110107420` or `3.151974411010742e2` fails here, because
-/// `serde_json` re-renders both, which is what would catch Obsidian writing a
+/// `serde_json` re-renders both, which is what would catch 기준 앱 writing a
 /// number this writer does not reproduce. What it does not cover is whether
-/// the *layout* TFT computes is the layout Obsidian would compute, which
+/// the *layout* TFT computes is the layout 기준 앱 would compute, which
 /// needs the app and belongs with the tab-group tests.
 ///
 /// The fixture is frozen in `vault/tests/config/` because every vault in
 /// the repository gitignores its own `workspace.json` as live per-user state;
 /// `crates/vault/tests/config/README.md` records where it came from and
-/// why it must stay a file Obsidian wrote. Any `workspace.json` the config sets
+/// why it must stay a file 기준 앱 wrote. Any `workspace.json` the config sets
 /// happen to have on a developer's machine is round-tripped as well, the gate
 /// vault's included.
 #[test]
@@ -1164,7 +1164,7 @@ fn every_workspace_json_is_written_back_byte_identical() {
     let fixture = repo.join("vault/tests/config");
     let (_tmp, vault) = vault_with_config(&fixture);
     assert!(
-        config_round_trips::<serde_json::Value>(&vault, &fixture, "workspace.obsidian.json"),
+        config_round_trips::<serde_json::Value>(&vault, &fixture, "workspace.tft.json"),
         "the frozen fixture is missing: {}",
         fixture.display()
     );

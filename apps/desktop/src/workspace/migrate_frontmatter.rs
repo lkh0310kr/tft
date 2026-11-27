@@ -9,10 +9,14 @@
 //! The files are read from disk, not from the index, so a note's BOM and
 //! line endings are what the converter sees, as Obsidian's did.
 
-use super::*;
+use super::{Changes, Modal, NoticeAction, VaultState, Workspace, plural};
 use crate::migrate_modal::{Counts, MigrateEvent, MigrateModal, Stage};
+use gpui::{App, AppContext, Context, Entity, Focusable, IntoElement, Subscription, Window};
+use serde_json::Value;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tft_formats::migrate::{migrate_frontmatter, Migration};
+use tft_formats::migrate::{Migration, migrate_frontmatter};
+use tft_vault::FileChange;
 
 /// One file the run wrote: its path, its bytes before and its text after.
 #[derive(Debug, Clone)]
@@ -36,6 +40,13 @@ pub(super) struct MigrateState {
     stop: Option<Arc<AtomicBool>>,
     /// The last finished run's files, for Done's notice.
     finished: Vec<Migrated>,
+}
+
+/// Active conversion dialog and the last run's Undo data.
+#[derive(Default)]
+pub(super) struct FrontmatterMigrationState {
+    pub(super) dialog: Option<MigrateState>,
+    pub(super) undo: Vec<Migrated>,
 }
 
 impl VaultState {
@@ -122,7 +133,7 @@ pub(super) fn reverted_notice(n: usize) -> String {
 impl Workspace {
     /// `app:migrate-frontmatter`: the modal, at its first page.
     pub(super) fn open_migrate_frontmatter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.state.is_none() {
+        if self.vault_session.state.is_none() {
             return;
         }
         let view = cx.new(MigrateModal::new);
@@ -130,7 +141,12 @@ impl Workspace {
             cx.subscribe_in(&view, window, |this, _, event, window, cx| match event {
                 MigrateEvent::Start => this.start_migration(window, cx),
                 MigrateEvent::Stop => {
-                    if let Some(stop) = this.migrate.as_ref().and_then(|m| m.stop.as_ref()) {
+                    if let Some(stop) = this
+                        .frontmatter_migration
+                        .dialog
+                        .as_ref()
+                        .and_then(|m| m.stop.as_ref())
+                    {
                         stop.store(true, Ordering::Relaxed);
                     }
                 }
@@ -139,23 +155,23 @@ impl Workspace {
             });
         self.close_editor_suggest(cx);
         window.focus(&view.focus_handle(cx), cx);
-        self.migrate = Some(MigrateState {
+        self.frontmatter_migration.dialog = Some(MigrateState {
             view,
             _subscription: subscription,
             stop: None,
             finished: Vec::new(),
         });
-        self.modal = Modal::MigrateFrontmatter;
+        self.overlay.modal = Modal::MigrateFrontmatter;
         cx.notify();
     }
 
     /// Start conversion: the open note saved first, so the run reads what
     /// is on screen, then every file converted off the UI thread.
     fn start_migration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
-        let Some(migrate) = self.migrate.as_mut() else {
+        let Some(migrate) = self.frontmatter_migration.dialog.as_mut() else {
             return;
         };
         if migrate.stop.is_some() {
@@ -179,7 +195,7 @@ impl Workspace {
     }
 
     fn migration_ran(&mut self, run: MigrationRun, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
         let changes = state.absorb(
@@ -189,7 +205,7 @@ impl Workspace {
                 .collect(),
         );
         self.after_changes(changes, cx);
-        match self.migrate.as_mut() {
+        match self.frontmatter_migration.dialog.as_mut() {
             Some(migrate) => {
                 migrate.stop = None;
                 // Go back and a second run start over: Done reports the
@@ -209,7 +225,8 @@ impl Workspace {
     /// Done: the modal closes and the notice offers Undo.
     fn finish_migration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let finished = self
-            .migrate
+            .frontmatter_migration
+            .dialog
             .as_mut()
             .map(|m| std::mem::take(&mut m.finished))
             .unwrap_or_default();
@@ -222,17 +239,22 @@ impl Workspace {
             return;
         }
         let n = written.len();
-        self.migration_undo = written;
+        self.frontmatter_migration.undo = written;
         self.report_with(updated_notice(n), Some(NoticeAction::UndoMigration), cx);
     }
 
     fn close_migrate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A run in progress is stopped; what it wrote stays, and its
         // notice follows when it returns.
-        if let Some(stop) = self.migrate.take().and_then(|m| m.stop) {
+        if let Some(stop) = self
+            .frontmatter_migration
+            .dialog
+            .take()
+            .and_then(|m| m.stop)
+        {
             stop.store(true, Ordering::Relaxed);
         }
-        if self.modal == Modal::MigrateFrontmatter {
+        if self.overlay.modal == Modal::MigrateFrontmatter {
             self.close_modal(window, cx);
         }
         cx.notify();
@@ -240,10 +262,10 @@ impl Workspace {
 
     /// The notice's Undo.
     pub(super) fn undo_migration(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.vault_session.state.clone() else {
             return;
         };
-        let files = std::mem::take(&mut self.migration_undo);
+        let files = std::mem::take(&mut self.frontmatter_migration.undo);
         if files.is_empty() {
             return;
         }
@@ -254,22 +276,27 @@ impl Workspace {
 
     /// The modal's element, for the overlay.
     pub(super) fn migrate_element(&self) -> Option<gpui::AnyElement> {
-        self.migrate
+        self.frontmatter_migration
+            .dialog
             .as_ref()
             .map(|m| m.view.clone().into_any_element())
     }
 
     pub(super) fn describe_migrate(&self, cx: &App) -> Option<Value> {
-        self.migrate.as_ref().map(|m| m.view.read(cx).describe())
+        self.frontmatter_migration
+            .dialog
+            .as_ref()
+            .map(|m| m.view.read(cx).describe())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::RUNNABLE;
     use super::*;
 
     #[test]
-    fn migrate_frontmatter_is_runnable_and_obsidians() {
+    fn migrate_frontmatter_is_runnable_and_references() {
         assert!(RUNNABLE.contains(&"app:migrate-frontmatter"));
         assert!(tft_commands::known_ids().contains(&"app:migrate-frontmatter"));
     }

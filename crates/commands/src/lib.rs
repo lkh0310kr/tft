@@ -1,5 +1,5 @@
-//! Obsidian command ids, names and default hotkeys. Ids are the exact
-//! strings in `data/commands.txt`, so an existing `hotkeys.json` applies.
+//! TFT command IDs, names and default hotkeys. IDs are stable public
+//! strings in `data/commands.txt`, with their default `hotkeys.json` entries.
 //! Templated ids are expanded at registration.
 
 use std::collections::{BTreeMap, HashMap};
@@ -11,8 +11,9 @@ pub const COMMAND_IDS: &str = include_str!("../data/commands.txt");
 /// `id<TAB>name` per line in Obsidian's registration order.
 pub const COMMAND_NAMES: &str = include_str!("../data/names.txt");
 
-/// Default bindings observed in Obsidian 1.14.4. `Mod` is Ctrl on Windows and
-/// Linux and Cmd on macOS; macOS-only alternates are omitted here.
+/// Default bindings observed in Obsidian 1.14.4, except where a comment says
+/// TFT chose its own. `Mod` is Ctrl on Windows and Linux and Cmd on macOS;
+/// macOS-only alternates are omitted here.
 pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
     fn hk(mods: &[&str], key: &str) -> Hotkey {
         Hotkey {
@@ -27,7 +28,9 @@ pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
                 key: &str| {
         m.entry(id).or_default().push(hk(mods, key));
     };
-    bind(&mut m, "switcher:open", &["Mod"], "O");
+    // TFT's own accelerator: Obsidian binds this to `Mod+O`, but a file
+    // search on `Mod+P` matches the editors TFT is used beside.
+    bind(&mut m, "switcher:open", &["Mod"], "P");
     bind(&mut m, "global-search:open", &["Mod", "Shift"], "F");
     bind(&mut m, "graph:open", &["Mod"], "G");
     bind(&mut m, "file-explorer:new-file", &["Mod"], "N");

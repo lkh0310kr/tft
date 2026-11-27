@@ -3,7 +3,7 @@
 //! the edges between them, scaled to fit the note's width
 //! ([[Specification#Observed canvas embeds, audio and video, Obsidian 1.15.0]]).
 //!
-//! Observed (`tools/obsidian-probe/results/2026-11-15-embeds-media.json`,
+//! Observed (`tools/reference-probe/results/2026-11-15-embeds-media.json`,
 //! `s01b`, `s01e`): an SVG whose `viewBox` is the cards' bounding box grown
 //! by 5 % of its longer side on every side; every card a rectangle with a
 //! 20-unit corner radius and a 5-unit stroke of its own fill colour, groups

@@ -1,4 +1,4 @@
-// The spike's world: milestone step 2 of docs/tft/Plugin SDK.md, commands only.
+// The spike's world: milestone step 2 of docs/Plugin SDK.md, commands only.
 package tft:plugin@0.1.0;
 
 // What the host lends a plugin. Paths are vault-relative with `/`, as everywhere in TFT.

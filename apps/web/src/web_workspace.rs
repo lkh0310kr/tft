@@ -3,8 +3,8 @@
 //! production Editor and document bytes live in `VaultData`.
 
 use gpui::{
-    div, prelude::*, px, App, Context, Entity, EventEmitter, Render, SharedString, Subscription,
-    Window,
+    App, Context, Entity, EventEmitter, Render, SharedString, Subscription, Window, div,
+    prelude::*, px,
 };
 #[cfg(feature = "browser-test")]
 use std::collections::BTreeSet;
@@ -19,8 +19,8 @@ use tft_app::reading::{
 use tft_app::text_input::{InputEvent, TextInput};
 use tft_app::theme::Theme;
 use tft_app::{
-    BackendObjectId, FileMeta, FileOperationRequest, NodeId, NodeKind, VaultData, ViewMode,
-    WorkspaceModel,
+    BackendObjectId, FileMeta, FileOperationRequest, LeftTab, NodeId, NodeKind, VaultData,
+    ViewMode, WorkspaceModel,
 };
 use tft_cache::LinkResolver;
 #[cfg(feature = "browser-test")]
@@ -62,7 +62,6 @@ pub struct WebWorkspace {
     vault: VaultData,
     tree: FileTree,
     model: WorkspaceModel,
-    left_tab: WebLeftTab,
     sort_menu_open: bool,
     vault_name: String,
     drive_controls: bool,
@@ -76,12 +75,6 @@ pub enum WebWorkspaceEvent {
     FileOperationRequested(FileOperationRequest),
     SaveRequested,
     SwitchVaultRequested,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WebLeftTab {
-    Files,
-    Search,
 }
 
 impl EventEmitter<WebWorkspaceEvent> for WebWorkspace {}
@@ -226,7 +219,6 @@ impl WebWorkspace {
             model,
             pending_link: None,
             last_link_event: String::new(),
-            left_tab: WebLeftTab::Files,
             sort_menu_open: false,
             vault_name: "Vault".into(),
             drive_controls: false,
@@ -597,8 +589,9 @@ impl WebWorkspace {
         );
         self.vault.rebuild_indexes();
         self.vault.set_text(node, contents);
-        self.tree = FileTree::from_vault(&self.vault);
-        self.tree.expand_all();
+        let mut tree = FileTree::from_vault(&self.vault);
+        tree.preserve_view_from(&self.tree);
+        self.tree = tree;
         let path = self
             .vault
             .path(node)
@@ -664,11 +657,7 @@ impl WebWorkspace {
         else {
             return;
         };
-        let next = if mode == ViewMode::Reading {
-            ViewMode::Source
-        } else {
-            ViewMode::Reading
-        };
+        let next = mode.toggle_reading_editing(ViewMode::Source);
         if let Some(tab) = self.model.active_mut().and_then(|group| group.active_mut()) {
             if let (Some(node), Some(path)) = (tab.node, tab.path.clone()) {
                 tab.open_node(node, path, next, 0);
@@ -803,10 +792,11 @@ impl WebWorkspace {
                 ViewMode::LivePreview => "live-preview",
                 ViewMode::Source => "source",
                 ViewMode::Graph => "graph",
+                ViewMode::Search => "search",
             });
-            let left_tab = match self.left_tab {
-                WebLeftTab::Files => "files",
-                WebLeftTab::Search => "search",
+            let left_tab = match self.model.left_tab {
+                LeftTab::Files => "files",
+                LeftTab::Search => "search",
             };
             let last_link = self.last_link_event.clone();
             let vault_text = active
@@ -955,7 +945,7 @@ impl Render for WebWorkspace {
         let editor = self.editor.clone();
         let reading = self.reading.clone();
         let search_input = self.search_input.clone();
-        let searching = self.left_tab == WebLeftTab::Search
+        let searching = self.model.left_tab == LeftTab::Search
             && !self.search_input.read(cx).text().trim().is_empty();
         let search_hits = self.search_hits.clone();
         let selected_search_hit = self.selected_search_hit;
@@ -1038,11 +1028,7 @@ impl Render for WebWorkspace {
                             }
                         }))
                         .child(div().w(px(16.)).flex_shrink_0().child(if folder {
-                            if collapsed {
-                                "›"
-                            } else {
-                                "⌄"
-                            }
+                            if collapsed { "›" } else { "⌄" }
                         } else {
                             ""
                         }))
@@ -1052,8 +1038,8 @@ impl Render for WebWorkspace {
                 .into_any_element()
         };
 
-        let files_tab = self.left_tab == WebLeftTab::Files;
-        let search_tab = self.left_tab == WebLeftTab::Search;
+        let files_tab = self.model.left_tab == LeftTab::Files;
+        let search_tab = self.model.left_tab == LeftTab::Search;
         let drive_controls = self.drive_controls;
         let sort_order = self.tree.sort();
         let any_expanded = self.tree.any_expanded();
@@ -1122,7 +1108,7 @@ impl Render for WebWorkspace {
                                     .border_b_1()
                                     .border_color(tokens.tab_outline_color)
                                     .child(
-                                        dock_tab(
+                                        tft_app::ui::dock_tab(
                                             "web-dock-files",
                                             "folder-closed",
                                             files_tab,
@@ -1130,19 +1116,26 @@ impl Render for WebWorkspace {
                                         )
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
-                                                this.left_tab = WebLeftTab::Files;
+                                                this.model.left_tab = LeftTab::Files;
                                                 cx.notify();
                                                 this.publish_test_state();
                                             }),
                                         ),
                                     )
                                     .child(
-                                        dock_tab("web-dock-search", "search", search_tab, &theme)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.left_tab = WebLeftTab::Search;
+                                        tft_app::ui::dock_tab(
+                                            "web-dock-search",
+                                            "search",
+                                            search_tab,
+                                            &theme,
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
+                                                this.model.left_tab = LeftTab::Search;
                                                 cx.notify();
                                                 this.publish_test_state();
-                                            })),
+                                            }),
+                                        ),
                                     )
                                     .child(div().flex_1())
                                     .child(
@@ -1194,7 +1187,7 @@ impl Render for WebWorkspace {
                                                     this.current_path().map(str::to_owned)
                                                 {
                                                     this.tree.reveal(&path);
-                                                    this.left_tab = WebLeftTab::Files;
+                                                    this.model.left_tab = LeftTab::Files;
                                                 }
                                                 cx.notify();
                                                 this.publish_test_state();
@@ -1412,42 +1405,6 @@ impl Render for WebWorkspace {
             )
             .children(sort_menu)
     }
-}
-
-fn dock_tab(
-    id: &'static str,
-    icon_name: &'static str,
-    active: bool,
-    theme: &Theme,
-) -> gpui::Stateful<gpui::Div> {
-    let tokens = &theme.tokens;
-    gpui::div()
-        .id(id)
-        .w(px(28.))
-        .h(px(25.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.))
-        .cursor_pointer()
-        .when(active, |tab| tab.bg(tokens.background_modifier_hover))
-        .hover(|style| style.bg(tokens.background_modifier_hover))
-        .child(
-            tft_app::assets::icon(
-                icon_name,
-                tft_app::theme::ICON_SIZE,
-                if active {
-                    tokens.icon_color_focused
-                } else {
-                    tokens.icon_color
-                },
-            )
-            .opacity(if active {
-                tokens.icon_opacity_active
-            } else {
-                tokens.icon_opacity
-            }),
-        )
 }
 
 fn vault_resolver(vault: &VaultData) -> LinkResolver {

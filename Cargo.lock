@@ -168,7 +168,6 @@ dependencies = [
  "search",
  "serde",
  "serde_json",
- "spell",
  "suggest",
  "tempfile",
  "text",
@@ -1613,7 +1612,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "smallvec",
- "spell",
  "suggest",
  "tempfile",
  "text",
@@ -6218,26 +6216,6 @@ checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
 dependencies = [
  "borsh",
  "serde_core",
-]
-
-[[package]]
-name = "spell"
-version = "0.7.0"
-dependencies = [
- "markdown",
- "md-5",
- "spellbook",
- "tempfile",
-]
-
-[[package]]
-name = "spellbook"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d204abcbdf8e88729306a8d0ca01a79d8a49969fe1f84696909d6dbc4321c1a"
-dependencies = [
- "foldhash 0.2.0",
- "hashbrown 0.17.1",
 ]
 
 [[package]]

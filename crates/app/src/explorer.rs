@@ -326,6 +326,14 @@ impl FileTree {
             .collect()
     }
 
+    /// Carries the visible tree preferences into a rebuilt tree. Folder
+    /// expansion is keyed by path, so folders absent from the new tree are
+    /// ignored and newly added folders keep the new tree's default state.
+    pub fn preserve_view_from(&mut self, previous: &Self) {
+        self.expand_folders(&previous.expanded_folders());
+        self.set_sort(previous.sort());
+    }
+
     /// Expands the given folders (unknown ones are ignored).
     pub fn expand_folders(&mut self, folders: &HashSet<String>) {
         self.collapsed.retain(|f| !folders.contains(f));

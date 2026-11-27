@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The plugin runtime spike (docs/tft/Plugin SDK.md, "Spike"). Run inside the
+# The plugin runtime spike (docs/Plugin SDK.md, "Spike"). Run inside the
 # spike's shell, from anywhere:
 #
 #   nix-shell tools/plugin-spike/shell.nix --run 'tools/plugin-spike/run.sh all'

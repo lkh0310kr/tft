@@ -1,12 +1,13 @@
 //! A single-line GPUI text field with IME, selection and clipboard. The line
 //! is shaped once per frame and scrolled to keep the cursor visible.
 
+use crate::keymap;
 use crate::theme::Theme;
 use gpui::{
-    actions, canvas, div, fill, point, prelude::*, px, size, App, Bounds, ClipboardItem, Context,
-    DispatchPhase, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ShapedLine,
-    SharedString, TextAlign, UTF16Selection, Window,
+    App, Bounds, ClipboardItem, Context, DispatchPhase, ElementInputHandler, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, ShapedLine, SharedString, TextAlign, UTF16Selection, Window, actions,
+    canvas, div, fill, point, prelude::*, px, size,
 };
 use std::ops::Range;
 
@@ -51,37 +52,44 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, ctx),
         KeyBinding::new("home", Home, ctx),
         KeyBinding::new("end", End, ctx),
-        KeyBinding::new("ctrl-left", WordLeft, ctx),
-        KeyBinding::new("ctrl-right", WordRight, ctx),
         KeyBinding::new("shift-left", SelectLeft, ctx),
         KeyBinding::new("shift-right", SelectRight, ctx),
         KeyBinding::new("shift-home", SelectHome, ctx),
         KeyBinding::new("shift-end", SelectEnd, ctx),
-        KeyBinding::new("ctrl-shift-left", SelectWordLeft, ctx),
-        KeyBinding::new("ctrl-shift-right", SelectWordRight, ctx),
-        KeyBinding::new("ctrl-a", SelectAll, ctx),
-        KeyBinding::new("cmd-a", SelectAll, ctx),
         // Obsidian swallows Ctrl+E inside a text input: it neither moves the
         // caret to the end of the field nor toggles reading view (see
         // [[Specification#Ctrl+E inside a text input does nothing]]). Binding
         // it to End was a divergence, and leaving it unbound is another --
         // the chord would reach the workspace and toggle the mode -- so the
-        // field eats it.
+        // field eats it. Literal Ctrl, as the observation is.
         KeyBinding::new("ctrl-e", Swallow, ctx),
         KeyBinding::new("backspace", Backspace, ctx),
         KeyBinding::new("delete", Delete, ctx),
-        KeyBinding::new("ctrl-backspace", DeleteWordBackward, ctx),
-        KeyBinding::new("ctrl-c", Copy, ctx),
-        KeyBinding::new("ctrl-x", Cut, ctx),
-        KeyBinding::new("ctrl-v", Paste, ctx),
-        KeyBinding::new("cmd-c", Copy, ctx),
-        KeyBinding::new("cmd-x", Cut, ctx),
-        KeyBinding::new("cmd-v", Paste, ctx),
+        // Ctrl+U clears the field, the readline key, on every platform.
         KeyBinding::new("ctrl-u", Clear, ctx),
         KeyBinding::new("enter", Submit, ctx),
         KeyBinding::new("escape", Cancel, ctx),
         KeyBinding::new("up", Up, ctx),
         KeyBinding::new("down", Down, ctx),
+    ]);
+    // Mod: Cmd on macOS, Ctrl elsewhere (see `keymap`).
+    keymap::bind_mod(cx, ctx, "a", SelectAll);
+    keymap::bind_mod(cx, ctx, "c", Copy);
+    keymap::bind_mod(cx, ctx, "x", Cut);
+    keymap::bind_mod(cx, ctx, "v", Paste);
+    // Word movement and deletion: Option on macOS, Ctrl elsewhere.
+    keymap::bind_word(cx, ctx, "left", WordLeft);
+    keymap::bind_word(cx, ctx, "right", WordRight);
+    keymap::bind_word(cx, ctx, "shift-left", SelectWordLeft);
+    keymap::bind_word(cx, ctx, "shift-right", SelectWordRight);
+    keymap::bind_word(cx, ctx, "backspace", DeleteWordBackward);
+    // Line ends on macOS: Cmd+←/→ (Home/End above stay literal).
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    cx.bind_keys([
+        KeyBinding::new("cmd-left", Home, ctx),
+        KeyBinding::new("cmd-right", End, ctx),
+        KeyBinding::new("cmd-shift-left", SelectHome, ctx),
+        KeyBinding::new("cmd-shift-right", SelectEnd, ctx),
     ]);
 }
 
@@ -151,11 +159,7 @@ impl Content {
     fn step(&mut self, forward: bool, extend: bool) {
         let to = if !extend && self.has_selection() {
             let sel = self.selection();
-            if forward {
-                sel.end
-            } else {
-                sel.start
-            }
+            if forward { sel.end } else { sel.start }
         } else if forward {
             self.next_boundary(self.cursor)
         } else {
@@ -564,10 +568,11 @@ impl TextInput {
     }
 
     fn byte_to_utf16(text: &str, byte: usize) -> usize {
-        text[..byte.min(text.len())]
-            .chars()
-            .map(char::len_utf16)
-            .sum()
+        let mut boundary = byte.min(text.len());
+        while !text.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        text[..boundary].chars().map(char::len_utf16).sum()
     }
 }
 

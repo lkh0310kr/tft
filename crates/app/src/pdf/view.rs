@@ -21,6 +21,7 @@
 //! observed is marked `OBSERVE:` where the guess is made.
 
 use crate::assets::icon;
+use crate::keymap;
 use crate::pdf::selection::{self, TextPos};
 use crate::pdf::{
     adapt_to_theme, documents, page_source, theming, toggle_adapt_to_theme, DocState, Loaded,
@@ -173,15 +174,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("space", PageDown, keys),
         KeyBinding::new("home", ScrollToTop, keys),
         KeyBinding::new("end", ScrollToBottom, keys),
-        KeyBinding::new("ctrl-f", Find, view),
         KeyBinding::new("f3", FindNext, view),
         KeyBinding::new("shift-f3", FindPrevious, view),
         KeyBinding::new("shift-enter", FindPrevious, view),
         KeyBinding::new("escape", Dismiss, view),
-        // Observed: Ctrl+C copies the selection as "Copy" does; Ctrl+A
-        // selects nothing, so it is not bound.
-        KeyBinding::new("ctrl-c", CopySelection, keys),
     ]);
+    // Mod+F finds, Mod+C copies the selection (Obsidian's Ctrl+C observation
+    // is the same chord with the platform's Mod). Ctrl+A selects nothing, so
+    // it is not bound.
+    keymap::bind_mod(cx, view, "f", Find);
+    keymap::bind_mod(cx, keys, "c", CopySelection);
 }
 
 /// What the view asks the workspace to do; it owns no vault of its own.

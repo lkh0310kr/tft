@@ -1,15 +1,18 @@
 //! The chrome several views draw the same way: tooltips, icon buttons,
-//! menu frames and the panel obsidian's prompts and pickers sit in.
+//! menu frames, prompts and pickers.
 
 use crate::assets::icon;
-use crate::theme::{Theme, FONT_UI_SMALL, ICON_SIZE, TAB_CURVE};
+use crate::theme::{FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE, Theme};
 use gpui::{
-    div, prelude::*, px, AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window,
+    AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window, div, prelude::*, px,
 };
 
 /// The tab shell shared by the native workspace and the GPUI Web composition.
 /// The caller supplies tab actions and inner content; active/group colors and
 /// geometry remain one implementation.
+///
+/// Square and full-height, as Zed's tab strip is: the tab fills the title bar's
+/// [`HEADER_HEIGHT`] edge to edge, with only the inner content inset.
 pub fn workspace_tab(
     id: impl Into<ElementId>,
     active: bool,
@@ -21,15 +24,10 @@ pub fn workspace_tab(
         .group("tab")
         .flex()
         .flex_row()
-        .h(px(34.))
+        .h(px(HEADER_HEIGHT))
         .w(px(200.))
         .flex_shrink_0()
-        .pt(px(1.))
-        .px(px(4.))
-        .pb(px(4.))
-        .rounded_t(px(TAB_CURVE))
         .relative()
-        .when(!active, |d| d.mb(px(1.)))
         .bg(if active {
             theme.tokens.tab_background_active
         } else {
@@ -53,10 +51,55 @@ pub fn workspace_view_header(theme: &Theme) -> Div {
         .flex_row()
         .items_center()
         .h(px(crate::theme::HEADER_HEIGHT))
-        .px(px(12.))
-        .gap(px(8.))
+        .px(px(16.))
+        .gap(px(10.))
         .text_size(px(FONT_UI_SMALL))
         .text_color(theme.tokens.text_normal)
+}
+
+/// Shared icon tab used by the Files and Search docks in Desktop and Web.
+pub fn dock_tab(
+    id: &'static str,
+    icon_name: &'static str,
+    active: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let tokens = &theme.tokens;
+    div()
+        .id(id)
+        .group(id)
+        .flex_shrink_0()
+        .w(px(28.))
+        .h(px(25.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .rounded(px(4.))
+        .when(active, |d| d.bg(tokens.background_modifier_hover))
+        .hover(|s| s.bg(tokens.background_modifier_hover))
+        .child(
+            icon(
+                icon_name,
+                ICON_SIZE,
+                if active {
+                    tokens.icon_color_focused
+                } else {
+                    tokens.icon_color
+                },
+            )
+            .opacity(if active {
+                tokens.icon_opacity_active
+            } else {
+                tokens.icon_opacity
+            })
+            .when(!active, |s| {
+                s.group_hover(id, |s| {
+                    s.opacity(tokens.icon_opacity_hover)
+                        .text_color(tokens.icon_color_hover)
+                })
+            }),
+        )
 }
 
 /// A compact GPUI button used by the shared Workspace shell.
@@ -86,8 +129,7 @@ pub fn file_tree_row(
     div()
         .id(id)
         .w_full()
-        .h(px(25.))
-        .mb(px(2.))
+        .h(px(24.))
         .flex()
         .flex_row()
         .items_center()
@@ -97,9 +139,8 @@ pub fn file_tree_row(
         } else {
             gpui::transparent_black()
         })
-        .pl(px(6. + depth as f32 * 14.))
-        .pr(px(6.))
-        .rounded(px(8.))
+        .pl(px(14. + depth as f32 * 14.))
+        .pr(px(8.))
         .cursor_pointer()
         .text_size(px(FONT_UI_SMALL))
         .text_color(if active {
@@ -183,21 +224,24 @@ fn icon_button_in(
         .rounded(px(4.))
         .cursor_pointer()
         .when(active, |d| d.bg(t.background_modifier_hover))
-        .hover(|s| s.bg(t.background_modifier_hover))
         .when_some(label, |d, text| d.tooltip(tooltip(text)));
     button = match glyph {
         Some(glyph) => button
             .text_size(px(font_size))
             .text_color(color)
-            .hover(|s| s.text_color(t.icon_color_hover))
-            .child(glyph),
-        None => button.child(icon(name, icon_size, color).opacity(opacity).group_hover(
-            group,
-            |s| {
-                s.opacity(t.icon_opacity_hover)
+            .hover(|s| {
+                s.bg(t.background_modifier_hover)
                     .text_color(t.icon_color_hover)
-            },
-        )),
+            })
+            .child(glyph),
+        None => button.hover(|s| s.bg(t.background_modifier_hover)).child(
+            icon(name, icon_size, color)
+                .opacity(opacity)
+                .group_hover(group, |s| {
+                    s.opacity(t.icon_opacity_hover)
+                        .text_color(t.icon_color_hover)
+                }),
+        ),
     };
     button
 }

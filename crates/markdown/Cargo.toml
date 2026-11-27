@@ -1,6 +1,6 @@
 [package]
 name = "markdown"
-description = "Obsidian Flavored Markdown: frontmatter, wikilinks, embeds, tags, block ids, callouts"
+description = "TFT extended Markdown: frontmatter, wikilinks, embeds, tags, block ids, callouts"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

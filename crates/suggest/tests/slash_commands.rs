@@ -1,6 +1,6 @@
 //! Slash commands against what Obsidian 1.15.0 did, over CDP with real key
-//! events (`tools/obsidian-probe/slash-commands.mjs`, results in
-//! `tools/obsidian-probe/results/2026-11-11-slash-commands.json`). See
+//! events (`tools/reference-probe/slash-commands.mjs`, results in
+//! `tools/reference-probe/results/2026-11-11-slash-commands.json`). See
 //! [[Specification#Observed Slash commands, Obsidian 1.15.0]].
 //!
 //! Three things are held to the probe: where `/` opens the popup, the rows
@@ -50,7 +50,7 @@ fn names(commands: &[CommandEntry], query: &str) -> Vec<String> {
 }
 
 #[test]
-fn the_empty_query_lists_the_commands_by_name_as_obsidian_did() {
+fn the_empty_query_lists_the_commands_by_name_as_reference_did() {
     let commands = commands();
     let observed = strings(&data()["empty"]);
     assert_eq!(observed.len(), 100);
@@ -62,7 +62,7 @@ fn the_empty_query_lists_the_commands_by_name_as_obsidian_did() {
 }
 
 #[test]
-fn a_query_keeps_the_commands_obsidian_kept() {
+fn a_query_keeps_the_commands_reference_kept() {
     let commands = commands();
     let data = data();
     for (query, rows) in data["queries"].as_object().expect("queries") {
@@ -87,7 +87,7 @@ fn a_query_keeps_the_commands_obsidian_kept() {
 /// order it does reproduce, the first rows of the rest are listed in
 /// differences.md.
 #[test]
-fn a_query_orders_the_rows_obsidian_ordered() {
+fn a_query_orders_the_rows_reference_ordered() {
     let commands = commands();
     let data = data();
     for query in ["head", "HEAD", "sethead", "h1"] {

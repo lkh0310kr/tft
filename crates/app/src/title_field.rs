@@ -36,10 +36,11 @@ pub fn utf16_to_byte(text: &str, utf16: usize) -> usize {
 
 /// The UTF-16 offset a byte offset names, the other way.
 pub fn byte_to_utf16(text: &str, byte: usize) -> usize {
-    text[..byte.min(text.len())]
-        .chars()
-        .map(char::len_utf16)
-        .sum()
+    let mut boundary = byte.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    text[..boundary].chars().map(char::len_utf16).sum()
 }
 
 /// The title being typed into: the text on screen and the selection in it.
@@ -173,11 +174,7 @@ impl TitleField {
     pub fn step(&mut self, forward: bool, extend: bool) {
         let to = if !extend && self.has_selection() {
             let sel = self.selection();
-            if forward {
-                sel.end
-            } else {
-                sel.start
-            }
+            if forward { sel.end } else { sel.start }
         } else if forward {
             self.next_boundary(self.cursor)
         } else {

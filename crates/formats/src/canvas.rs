@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn a_node_made_here_is_written_in_obsidians_own_order() {
+    fn a_node_made_here_is_written_in_references_own_order() {
         let mut canvas = Canvas::default();
         let mut text = Node::new("t", NodeType::Text, 0.0, 0.0, 250.0, 60.0);
         text.text = Some("T".into());

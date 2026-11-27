@@ -6,7 +6,7 @@
 //! theme registry already carries.
 //!
 //! The table below is Obsidian 1.14.5's, read by
-//! `tools/obsidian-probe/code-highlight.mjs` (step s10) on 2026-11-02. Its
+//! `tools/reference-probe/code-highlight.mjs` (step s10) on 2026-11-02. Its
 //! `.token` rules are not reachable through `document.styleSheets` — a dump
 //! found 184 CodeMirror rules and none of Prism's, with 39 token spans on
 //! screen — so the question was put to the renderer instead: a span of each
@@ -165,7 +165,7 @@ mod tests {
     /// Every class step s10 found a style for, with the property it
     /// resolved to. A disagreement here is a disagreement with Obsidian.
     #[test]
-    fn every_styled_class_paints_as_obsidian_paints_it() {
+    fn every_styled_class_paints_as_reference_paints_it() {
         let cases: &[(&str, Paint)] = &[
             ("atrule", Paint::Function),
             ("attr-name", Paint::String),

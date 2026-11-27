@@ -1,7 +1,7 @@
 //! Workspace application state shared by Desktop and Web. No UI or I/O.
 
 use crate::NodeId;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 /// A platform-neutral request from the Workspace UI to its host. The parent
 /// is a Vault-relative path (`""` means the Vault root); filesystem paths and
@@ -17,11 +17,22 @@ pub enum ViewMode {
     LivePreview,
     Source,
     Graph,
+    Search,
 }
 
 impl ViewMode {
     pub fn is_editing(self) -> bool {
         matches!(self, ViewMode::LivePreview | ViewMode::Source)
+    }
+
+    /// Toggles between Reading and the caller's preferred editing mode.
+    /// Any non-Reading mode, including Graph, returns to Reading.
+    pub fn toggle_reading_editing(self, editing_mode: Self) -> Self {
+        if self == Self::Reading {
+            editing_mode
+        } else {
+            Self::Reading
+        }
     }
 
     pub fn as_str(self) -> &'static str {
@@ -30,6 +41,7 @@ impl ViewMode {
             ViewMode::LivePreview => "live",
             ViewMode::Source => "source",
             ViewMode::Graph => "graph",
+            ViewMode::Search => "search",
         }
     }
 
@@ -39,6 +51,7 @@ impl ViewMode {
             "live" => Some(ViewMode::LivePreview),
             "source" => Some(ViewMode::Source),
             "graph" => Some(ViewMode::Graph),
+            "search" => Some(ViewMode::Search),
             _ => None,
         }
     }
@@ -78,6 +91,46 @@ impl HistoryEntry {
     }
 }
 
+/// Moves a one-based history cursor in the requested direction.
+/// Returns the new cursor, or `None` when the cursor cannot move.
+pub fn history_step(
+    history_ix: usize,
+    history_len: usize,
+    direction: HistoryDirection,
+) -> Option<usize> {
+    match direction {
+        HistoryDirection::Forward => history_ix
+            .checked_add(1)
+            .filter(|next| *next <= history_len),
+        HistoryDirection::Back => history_ix.checked_sub(1).filter(|previous| *previous >= 1),
+    }
+}
+
+/// Drops the forward branch and appends a new current history entry.
+pub fn push_history_entry(
+    history: &mut Vec<HistoryEntry>,
+    history_ix: &mut usize,
+    entry: HistoryEntry,
+) {
+    history.truncate(*history_ix);
+    history.push(entry);
+    *history_ix = history.len();
+}
+
+/// Returns the current history entry for the one-based cursor used by tabs.
+pub fn current_history_entry_mut(
+    history: &mut [HistoryEntry],
+    history_ix: usize,
+) -> Option<&mut HistoryEntry> {
+    history.get_mut(history_ix.checked_sub(1)?)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryDirection {
+    Back,
+    Forward,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
     pub node: Option<NodeId>,
@@ -114,6 +167,9 @@ impl Tab {
     }
 
     pub fn default_title(&self) -> String {
+        if self.mode == ViewMode::Search {
+            return "Search".to_string();
+        }
         self.path
             .as_deref()
             .map(|path| {
@@ -134,49 +190,48 @@ impl Tab {
     fn open_target(&mut self, node: Option<NodeId>, path: String, mode: ViewMode, offset: usize) {
         if self.node == node && self.path.as_deref() == Some(path.as_str()) {
             self.mode = mode;
-            if let Some(entry) = self.history.get_mut(self.history_ix.saturating_sub(1)) {
+            if let Some(entry) = current_history_entry_mut(&mut self.history, self.history_ix) {
                 entry.offset = offset;
                 entry.mode = mode;
             }
             return;
         }
-        self.history.truncate(self.history_ix);
-        self.history.push(HistoryEntry {
-            node,
-            path: path.clone(),
-            mode,
-            offset,
-        });
-        self.history_ix = self.history.len();
+        push_history_entry(
+            &mut self.history,
+            &mut self.history_ix,
+            HistoryEntry {
+                node,
+                path: path.clone(),
+                mode,
+                offset,
+            },
+        );
         self.node = node;
         self.path = Some(path);
         self.mode = mode;
     }
 
     pub fn back(&mut self) -> Option<&HistoryEntry> {
-        if self.history_ix > 1 {
-            self.history_ix -= 1;
-            let entry = self.history.get(self.history_ix - 1)?;
-            self.node = entry.node;
-            self.path = Some(entry.path.clone());
-            self.mode = entry.mode;
-            Some(entry)
-        } else {
-            None
-        }
+        self.history_ix =
+            history_step(self.history_ix, self.history.len(), HistoryDirection::Back)?;
+        let entry = self.history.get(self.history_ix - 1)?;
+        self.node = entry.node;
+        self.path = Some(entry.path.clone());
+        self.mode = entry.mode;
+        Some(entry)
     }
 
     pub fn forward(&mut self) -> Option<&HistoryEntry> {
-        if self.history_ix < self.history.len() {
-            self.history_ix += 1;
-            let entry = self.history.get(self.history_ix - 1)?;
-            self.node = entry.node;
-            self.path = Some(entry.path.clone());
-            self.mode = entry.mode;
-            Some(entry)
-        } else {
-            None
-        }
+        self.history_ix = history_step(
+            self.history_ix,
+            self.history.len(),
+            HistoryDirection::Forward,
+        )?;
+        let entry = self.history.get(self.history_ix - 1)?;
+        self.node = entry.node;
+        self.path = Some(entry.path.clone());
+        self.mode = entry.mode;
+        Some(entry)
     }
 }
 
@@ -185,6 +240,23 @@ pub fn place_new_tab(tabs: &mut Vec<Tab>, active: usize, tab: Tab) -> usize {
     let at = (active + 1).min(tabs.len());
     tabs.insert(at, tab);
     at
+}
+
+/// Removes a tab and keeps the active index on the same tab when possible.
+/// The caller decides what an empty tab strip means for its platform.
+pub fn remove_tab_at(tabs: &mut Vec<Tab>, active: &mut usize, ix: usize) -> Option<Tab> {
+    if ix >= tabs.len() {
+        return None;
+    }
+    let removed = tabs.remove(ix);
+    if tabs.is_empty() {
+        *active = 0;
+    } else if *active >= tabs.len() {
+        *active = tabs.len() - 1;
+    } else if ix < *active {
+        *active -= 1;
+    }
+    Some(removed)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,13 +293,26 @@ pub enum Layout {
 
 impl Layout {
     pub fn split(direction: SplitDirection, children: Vec<Layout>) -> Layout {
-        Layout::Split {
+        Self::split_with_node(
             direction,
             children,
-            node: Map::from_iter([
+            Map::from_iter([
                 ("id".to_string(), json!(0)),
                 ("type".to_string(), json!("split")),
             ]),
+        )
+    }
+
+    /// Creates a split with metadata supplied by the host that persists layouts.
+    pub fn split_with_node(
+        direction: SplitDirection,
+        children: Vec<Layout>,
+        node: Map<String, Value>,
+    ) -> Layout {
+        Layout::Split {
+            direction,
+            children,
+            node,
         }
     }
 
@@ -297,6 +382,27 @@ impl Layout {
         direction: SplitDirection,
         after: bool,
     ) -> Option<bool> {
+        self.insert_beside_with_node(
+            id,
+            new,
+            direction,
+            after,
+            Map::from_iter([
+                ("id".to_string(), json!(0)),
+                ("type".to_string(), json!("split")),
+            ]),
+        )
+    }
+
+    /// Inserts a group beside another, using host-supplied metadata if a new split is needed.
+    pub fn insert_beside_with_node(
+        &mut self,
+        id: u64,
+        new: u64,
+        direction: SplitDirection,
+        after: bool,
+        split_node: Map<String, Value>,
+    ) -> Option<bool> {
         let Layout::Split {
             direction: own,
             children,
@@ -316,10 +422,10 @@ impl Layout {
             } else {
                 vec![Layout::Group(new), Layout::Group(id)]
             };
-            children[ix] = Layout::split(direction, pair);
+            children[ix] = Layout::split_with_node(direction, pair, split_node);
             return Some(true);
         }
-        children[ix].insert_beside(id, new, direction, after)
+        children[ix].insert_beside_with_node(id, new, direction, after, split_node)
     }
 
     pub fn remove(&mut self, id: u64) -> bool {
@@ -333,7 +439,44 @@ impl Layout {
             children.remove(ix);
             return true;
         }
-        children[ix].remove(id)
+        let removed = children[ix].remove(id);
+        if removed && matches!(&children[ix], Layout::Split { children, .. } if children.is_empty())
+        {
+            children.remove(ix);
+        }
+        removed
+    }
+
+    /// Returns the nearest sibling group set in the requested direction.
+    pub fn neighbors(&self, id: u64, direction: SplitDirection, forward: bool) -> Vec<u64> {
+        let Some(path) = self.path_to(id) else {
+            return Vec::new();
+        };
+        for depth in (0..path.len()).rev() {
+            let Some(Layout::Split {
+                direction: own,
+                children,
+                ..
+            }) = self.node_at(&path[..depth])
+            else {
+                continue;
+            };
+            if *own != direction {
+                continue;
+            }
+            let ix = path[depth];
+            let sibling = if forward {
+                children.get(ix + 1)
+            } else {
+                ix.checked_sub(1).and_then(|i| children.get(i))
+            };
+            if let Some(sibling) = sibling {
+                let mut out = Vec::new();
+                sibling.groups(&mut out);
+                return out;
+            }
+        }
+        Vec::new()
     }
 }
 
@@ -417,7 +560,7 @@ impl TabGroup {
             if let Some(tab) = self.tabs.get_mut(ix) {
                 tab.mode = mode;
                 tab.path = Some(path.clone());
-                if let Some(entry) = tab.history.last_mut() {
+                if let Some(entry) = current_history_entry_mut(&mut tab.history, tab.history_ix) {
                     entry.path = path;
                 }
             }
@@ -434,17 +577,11 @@ impl TabGroup {
     }
 
     pub fn close(&mut self, ix: usize) -> bool {
-        if ix >= self.tabs.len() {
+        if remove_tab_at(&mut self.tabs, &mut self.active_tab, ix).is_none() {
             return false;
         }
-        self.tabs.remove(ix);
         if self.tabs.is_empty() {
             self.tabs.push(Tab::empty(ViewMode::Reading));
-            self.active_tab = 0;
-        } else if self.active_tab >= self.tabs.len() {
-            self.active_tab = self.tabs.len() - 1;
-        } else if ix < self.active_tab {
-            self.active_tab -= 1;
         }
         true
     }

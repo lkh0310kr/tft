@@ -1,7 +1,7 @@
 //! The Footnotes view's rows: a note's footnotes in the order Obsidian's
 //! `footnotes` view lists them, read off the one Markdown parser's tree.
 //!
-//! Observed on Obsidian 1.15.0 (`tools/obsidian-probe/results/2026-11-09-panes-workspaces-headings.json`,
+//! Observed on Obsidian 1.15.0 (`tools/reference-probe/results/2026-11-09-panes-workspaces-headings.json`,
 //! `SCEN=fn`): the rows follow the order of first reference in the text,
 //! not the order of the definitions; the number shown is the running one,
 //! never the label; an inline footnote (`^[...]`) is a row like the others;

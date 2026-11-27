@@ -3016,7 +3016,11 @@ mod tests {
             panic!("{:?}", w[0].block)
         };
         assert_eq!(*kind, "warning");
-        assert_eq!(*fold, Some(true), "`-` opens collapsed, as in Obsidian");
+        assert_eq!(
+            *fold,
+            Some(true),
+            "`-` opens collapsed, as in the reference behavior"
+        );
         assert_eq!(title.text, "Careful");
         assert_eq!(children.len(), 1);
         // The span covers every line, so Live Preview folds all three behind the widget.

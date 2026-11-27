@@ -9,6 +9,7 @@ use super::model::{
 };
 use crate::assets::{callout_icon, icon};
 use crate::fold::{self, FoldKey};
+use crate::keymap;
 use crate::math::{self, FormulaElement, Inline, Overlay, ScriptText, SpaceWidths};
 use crate::properties::{Field, Part, Target};
 use crate::properties::{PROPERTIES_FOLD_ID, PROPERTY_ID_BASE};
@@ -60,11 +61,21 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", ScrollLineDown, ctx),
         KeyBinding::new("up", ScrollLineUp, ctx),
         KeyBinding::new("home", ScrollToTop, ctx),
-        KeyBinding::new("ctrl-home", ScrollToTop, ctx),
         KeyBinding::new("end", ScrollToBottom, ctx),
+    ]);
+    // Mod: Cmd on macOS, Ctrl elsewhere (see `keymap`).
+    keymap::bind_mod(cx, ctx, "a", SelectAll);
+    keymap::bind_mod(cx, ctx, "c", Copy);
+    // Either end of the note: Cmd+↑/↓ on macOS, Ctrl+Home/End elsewhere.
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    cx.bind_keys([
+        KeyBinding::new("cmd-up", ScrollToTop, ctx),
+        KeyBinding::new("cmd-down", ScrollToBottom, ctx),
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-home", ScrollToTop, ctx),
         KeyBinding::new("ctrl-end", ScrollToBottom, ctx),
-        KeyBinding::new("ctrl-a", SelectAll, ctx),
-        KeyBinding::new("ctrl-c", Copy, ctx),
     ]);
 }
 

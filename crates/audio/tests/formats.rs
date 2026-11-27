@@ -1,6 +1,6 @@
 //! Every format the player decodes, from real files: half a second of a
 //! 1 kHz tone written by ffmpeg 8.1.3 into `tests/data` (the commands are in
-//! the 2026-11-15 section of `docs/tft/Development.md`). Each is opened, its
+//! the 2026-11-15 section of `docs/Development.md`). Each is opened, its
 //! length read without decoding, decoded whole, and its pitch counted.
 
 use std::path::{Path, PathBuf};

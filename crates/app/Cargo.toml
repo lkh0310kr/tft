@@ -29,7 +29,6 @@ paste.workspace = true
 pdf = { workspace = true, optional = true }
 math = { workspace = true, optional = true }
 mermaid = { workspace = true, optional = true }
-spell = { workspace = true, optional = true }
 vault = { workspace = true, optional = true }
 audio = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
@@ -43,7 +42,7 @@ pdf = ["dep:pdf"]
 math = ["dep:math"]
 mermaid = ["dep:mermaid"]
 browser-test = []
-gpui-ui = ["dep:gpui", "dep:anyhow", "dep:export", "dep:mermaid", "dep:math", "dep:pdf", "dep:spell", "dep:vault", "dep:audio", "dep:image", "dep:serde", "dep:lyon", "dep:web-time", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+gpui-ui = ["dep:gpui", "dep:anyhow", "dep:export", "dep:mermaid", "dep:math", "dep:pdf", "dep:vault", "dep:audio", "dep:image", "dep:serde", "dep:lyon", "dep:web-time", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { version = "0.3", optional = true }

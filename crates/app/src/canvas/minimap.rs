@@ -3,7 +3,7 @@
 //! draws there — not a live canvas
 //! ([[Specification#Observed canvas embeds, audio and video, Obsidian 1.15.0]]).
 //!
-//! Observed (`tools/obsidian-probe/results/2026-11-15-embeds-media.json`,
+//! Observed (`tools/reference-probe/results/2026-11-15-embeds-media.json`,
 //! `s01`..`s05`): `.internal-embed.canvas-embed`, a block the note's full
 //! width with no border, padding or margin; an `.embed-title` row 32 px
 //! tall (24 px line, 8 px under it) holding the `layout-dashboard` icon at

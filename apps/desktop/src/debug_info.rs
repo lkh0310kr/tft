@@ -39,12 +39,12 @@ pub struct SystemInfo {
     pub base_theme: Option<String>,
 }
 
-/// `Base theme:`'s value. `moonstone` reads "light" and a missing key or
-/// `system` "adapt to system" (observed); `obsidian` is "dark".
+/// `Base theme:`'s value. `light` and `dark` are named directly; a missing
+/// key or `system` reads "adapt to system".
 pub fn base_theme_label(theme: Option<&str>) -> &'static str {
     match theme {
-        Some("moonstone") => "light",
-        Some("obsidian") => "dark",
+        Some("light") => "light",
+        Some("dark") => "dark",
         _ => "adapt to system",
     }
 }
@@ -233,7 +233,7 @@ mod tests {
     /// Obsidian's shape with TFT's values: a tab before every value
     /// line, a blank line before RECOMMENDATIONS:, a final newline.
     #[test]
-    fn a_fresh_vaults_text_has_obsidians_shape_and_tfts_values() {
+    fn a_fresh_vaults_text_has_references_shape_and_tfts_values() {
         assert_eq!(
             debug_text(&fresh()),
             "SYSTEM INFO:\n\
@@ -250,9 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn the_text_never_claims_to_be_obsidian() {
+    fn the_text_never_claims_to_be_reference() {
         let text = debug_text(&fresh());
-        assert!(!text.contains("Obsidian"), "{text}");
+        assert!(text.contains("TFT"), "{text}");
         assert!(text.contains("TFT version: "));
     }
 
@@ -261,7 +261,7 @@ mod tests {
     fn the_base_theme_is_reported() {
         let themed = SystemInfo {
             live_preview: false,
-            base_theme: Some("moonstone".into()),
+            base_theme: Some("light".into()),
             ..fresh()
         };
         let text = debug_text(&themed);
@@ -274,8 +274,8 @@ mod tests {
     fn the_base_theme_reads_as_the_appearance_tab_names_it() {
         assert_eq!(base_theme_label(None), "adapt to system");
         assert_eq!(base_theme_label(Some("system")), "adapt to system");
-        assert_eq!(base_theme_label(Some("moonstone")), "light");
-        assert_eq!(base_theme_label(Some("obsidian")), "dark");
+        assert_eq!(base_theme_label(Some("light")), "light");
+        assert_eq!(base_theme_label(Some("dark")), "dark");
     }
 
     #[test]

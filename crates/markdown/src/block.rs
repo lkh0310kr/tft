@@ -1069,6 +1069,19 @@ impl<'a, 'o> BlockParser<'a, 'o> {
     fn try_block_starts(&mut self, container: usize) -> Option<Start> {
         let c = self.byte(self.next_nonspace)?;
         let tip_is_paragraph = self.open[container].is_paragraph();
+        // Obsidian, inside a list: a marker indented into the item's content
+        // is a list item, not a setext underline. `- A` / `  - B` / `    -`
+        // leaves B a paragraph with an empty bullet under it; reading the
+        // last line as an underline turned B into a heading (the Live
+        // Preview bug where B grew). The indentation is the line's own
+        // column, not the container-relative `self.indented` (which is 0
+        // here: the line starts at the item's content).
+        let indented_marker = self.opts.quirks
+            && self.next_nonspace_column >= 4
+            && self
+                .open
+                .iter()
+                .any(|n| matches!(n.kind, NodeKind::Item { .. }));
 
         // Block quote.
         if !self.indented && c == b'>' {
@@ -1255,7 +1268,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
 
         // Setext heading underline. Obsidian only underlines a one-line paragraph.
         let setext_ok = tip_is_paragraph && (!self.opts.quirks || single_line_paragraph);
-        if !self.indented && setext_ok && (c == b'=' || c == b'-') {
+        if !self.indented && !indented_marker && setext_ok && (c == b'=' || c == b'-') {
             let rest = self.rest();
             let run = rest.bytes().take_while(|&b| b == c).count();
             if rest[run..].bytes().all(is_space_or_tab) {
@@ -1362,7 +1375,7 @@ impl<'a, 'o> BlockParser<'a, 'o> {
         }
 
         // List item.
-        let in_list = matches!(self.open[container].kind, NodeKind::List { .. });
+        let in_list = matches!(self.open[container].kind, NodeKind::List { .. }) || indented_marker;
         if (!self.indented || in_list) && (matches!(c, b'-' | b'+' | b'*') || c.is_ascii_digit()) {
             if let Some(item) = self.parse_list_marker(tip_is_paragraph, in_list) {
                 self.close_unmatched_blocks();
@@ -1435,8 +1448,13 @@ impl<'a, 'o> BlockParser<'a, 'o> {
             Some(&c) if is_space_or_tab(c) => {}
             _ => return None,
         }
-        // A list item cannot interrupt a paragraph with a blank first line.
-        if tip_is_paragraph && rest[marker_len..].bytes().all(is_space_or_tab) {
+        // A list item cannot interrupt a paragraph with a blank first line,
+        // except the indented marker above, which exists for exactly this
+        // shape, and only inside a list.
+        if tip_is_paragraph
+            && rest[marker_len..].bytes().all(is_space_or_tab)
+            && !(self.opts.quirks && in_list)
+        {
             return None;
         }
         let marker_offset = self.indent;

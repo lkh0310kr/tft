@@ -216,18 +216,18 @@ pub const METHODS: &[MethodSpec] = &[
     ),
     m(
         "uri",
-        "Act on an `obsidian://` URI — `open`, `new`, `search` or `daily` — and return the status \
+        "Act on an `tft://` URI — `open`, `new`, `search` or `daily` — and return the status \
          bar text it left. A URI naming another vault is refused.",
         &[p(
             "uri",
             ParamType::Str,
             true,
-            "`obsidian://open?file=Note`, percent-encoded, or the same under `tft://`.",
+            "`tft://open?file=Note`, percent-encoded.",
         )],
     ),
     m(
         "command",
-        "Run a command by its Obsidian command id and return the status bar text it left.",
+        "Run a TFT command by its ID and return the status bar text it left.",
         &[p(
             "id",
             ParamType::Str,

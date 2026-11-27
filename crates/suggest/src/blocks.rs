@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_kinds_obsidian_writes_onto_take_an_id() {
+    fn only_the_kinds_reference_writes_onto_take_an_id() {
         assert_eq!(
             Placement::of(SectionKind::Paragraph),
             Some(Placement::Inline)

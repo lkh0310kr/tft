@@ -290,7 +290,7 @@ pub fn icon(name: &str, size: f32, color: Hsla) -> Svg {
 /// The Lucide icon Obsidian draws in a callout's title row, by canonical
 /// callout type (see [`tft_markdown::canonical_callout_type`]). The
 /// pairing was read from the rendered `.callout-icon svg`'s own class in
-/// Obsidian 1.14.5; the table is in `docs/tft/Specification.md` under
+/// Obsidian 1.14.5; the table is in `docs/Specification.md` under
 /// "The lucide icon and colour of every built-in callout type". Two of the
 /// names Obsidian leaves there are Lucide's older ones, and the drawing is
 /// bundled under its current name instead: `check-circle-2` is
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn every_callout_type_draws_the_icon_obsidian_draws() {
+    fn every_callout_type_draws_the_icon_reference_draws() {
         // The whole of the probe's table, aliases and all, plus a type
         // Obsidian does not know: it falls back to note's pencil.
         let table = [

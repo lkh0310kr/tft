@@ -5,10 +5,10 @@
 
 use crate::theme::Theme;
 use gpui::{
-    actions, anchored, deferred, div, prelude::*, px, relative, Anchor, AnyElement, App, Context,
-    FocusHandle, KeyBinding, Pixels, Point, SharedString, Stateful, Window,
+    Anchor, AnyElement, App, Context, FocusHandle, KeyBinding, Pixels, Point, SharedString,
+    Stateful, Window, actions, anchored, deferred, div, prelude::*, px, relative,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 
 use std::path::{Path, PathBuf};
@@ -64,18 +64,6 @@ impl MenuFocus {
     }
 }
 
-/// Makes a list box a menu: it tracks `focus` under the `Menu` key context,
-/// so Escape runs `on_close`, and a press outside it runs `on_close` too.
-/// `occlude` keeps a click on a row from reaching what is under it.
-pub fn menu_box<V: 'static>(
-    list: Stateful<gpui::Div>,
-    focus: &FocusHandle,
-    cx: &mut Context<V>,
-    on_close: impl Fn(&mut V, &mut Context<V>) + 'static,
-) -> Stateful<gpui::Div> {
-    menu_box_with_submenu(list, focus, cx, on_close, Rc::new(Cell::new(false)))
-}
-
 thread_local! {
     /// Whether the pointer rests on an open submenu. It outlives a frame
     /// because gpui reports a hover only when it *changes*: a flag made
@@ -121,11 +109,6 @@ pub fn menu_box_with_submenu<V: 'static>(
 /// separators that leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    /// `correction`: a misspelled word's suggestions, first in the editor
-    /// menu.
-    Correction,
-    /// `spellcheck`: "Add to dictionary".
-    Spellcheck,
     /// `close`: the tab header menu's Close, Close others and Close all.
     Close,
     /// `pane`: the tab header menu's Pin.
@@ -202,11 +185,6 @@ pub enum Pick {
     NewCanvas,
     SearchInFolder,
     // ----- the editor menu's rows ------------------------------------------
-    /// One of a misspelled word's corrections, by its place in the menu:
-    /// the word replaced by it.
-    Correction(u8),
-    /// "Add to dictionary": the word into the custom dictionary.
-    AddToDictionary,
     /// "Add link": the wikilink shape around the selection
     /// (`editor:insert-wikilink`). Obsidian's own label for that command is
     /// "Add internal link", and the row wears `lucide-link`, so the pairing
@@ -267,20 +245,20 @@ pub enum Target {
     /// probe raised the same rows in Live Preview and in Source mode.
     Editor(EditorClick),
     /// The view header's **More options** over a base leaf
-    /// (`tools/obsidian-probe/results/2026-11-01-bases-ui.json`, `s02`
+    /// (`tools/reference-probe/results/2026-11-01-bases-ui.json`, `s02`
     /// `moreOptions`): the file menu with the leaf's two splits in place
     /// of the open-in rows, Rename beside Move, and "Delete
     /// file" alone in the danger pair. The path is the leaf's file.
     View(String),
     /// A right click on a Search pane result: a file row (`file_row`) or
     /// one of its match rows, both standing for the file
-    /// (`tools/obsidian-probe/results/2026-11-16-bases-cells-search-menu.json`,
+    /// (`tools/reference-probe/results/2026-11-16-bases-cells-search-menu.json`,
     /// `s07`). The two menus are the same but for "Delete file", which only
     /// the file row draws; a match row's rows act on the file, never on the
     /// line.
     Search { path: String, file_row: bool },
     /// A right click on a tab header
-    /// (`tools/obsidian-probe/results/2026-11-09-tab-header-menu.json`):
+    /// (`tools/reference-probe/results/2026-11-09-tab-header-menu.json`):
     /// the close rows, Pin, the leaf's window and split rows, then the
     /// view header's file rows. A right click does not make the tab
     /// active, and an inactive tab's menu stops after Move to new window.
@@ -316,8 +294,6 @@ pub struct EditorClick {
     /// Whether a selection survived the click: a click inside one keeps it,
     /// a click anywhere else collapses it. Cut and Copy follow this.
     pub selected: bool,
-    /// A misspelled word under the click: its corrections lead the menu.
-    pub spelling: Option<crate::spellcheck::SpellHit>,
 }
 
 /// What a right click in the editor landed on.
@@ -362,6 +338,14 @@ impl Target {
 /// A click exactly on either end of the selection was not probed — it is
 /// taken as inside, the way a pointer landing on the edge of the painted
 /// highlight reads (OBSERVE).
+#[cfg(test)]
+fn right_click_caret(selection: &std::ops::Range<usize>, at: usize) -> Option<usize> {
+    if !selection.is_empty() && selection.start <= at && at <= selection.end {
+        None
+    } else {
+        Some(at)
+    }
+}
 
 /// The menu for a target, in Obsidian's order.
 ///
@@ -369,7 +353,7 @@ impl Target {
 /// TFT has no command behind it: **Open version history** (no file
 /// history). Listing a row that cannot run is what the command registry
 /// refuses to do, and the menu refuses it too; the gaps are entries in
-/// `docs/tft/UI parity backlog.md`. Dropping the only item of a section
+/// `docs/UI parity backlog.md`. Dropping the only item of a section
 /// drops its separator
 /// with it, so the `view` section's separator is absent here where the
 /// capture has it. **Open in new window** was a third until the popout
@@ -505,7 +489,7 @@ pub fn items(target: &Target) -> Vec<Item> {
         // `action` (Rename's `lucide-edit-3` is `pen-line`), the three
         // `system` rows with Reveal's `lucide-folder-open`, the danger pair
         // with "Delete file" on a file row only, and "Copy path" last,
-        // unsectioned. Copy path is a submenu there (as Obsidian URL / from
+        // unsectioned. Copy path is a submenu there (as TFT URL / from
         // vault folder / from system root) and one row here, as on every
         // other menu of this module.
         Target::Search { file_row, .. } => {
@@ -555,7 +539,7 @@ pub fn items(target: &Target) -> Vec<Item> {
         }
         // Observed on a base leaf; "Open version history" and the "Open
         // linked view" submenu are left out, as the file row's are, and
-        // dropping the two `view` rows drops their separator. "Copy path" is a submenu there (as Obsidian URL / from
+        // dropping the two `view` rows drops their separator. "Copy path" is a submenu there (as TFT URL / from
         // vault folder / from system root) and one row here, like the file
         // row's. Obsidian draws `lucide-edit-3` on Rename, which is
         // `pen-line`.
@@ -709,29 +693,6 @@ fn editor_items(click: &EditorClick) -> Vec<Item> {
     use Section as S;
     let on_link = matches!(click.spot, Spot::Link(_));
     let mut out = Vec::new();
-    // A misspelled word (observed 2026-11-15): up to three corrections,
-    // `lucide-repeat`, or a disabled "No suggestions..." when there are
-    // none; then "Add to dictionary"; then the rest of the menu.
-    if let Some(hit) = &click.spelling {
-        if hit.suggestions.is_empty() {
-            out.push(Item {
-                disabled: true,
-                ..item("No suggestions...", "", S::Correction, P::Correction(0))
-            });
-        }
-        for (i, s) in hit.suggestions.iter().enumerate().take(3) {
-            out.push(Item {
-                label: s.clone().into(),
-                ..item("", "repeat", S::Correction, P::Correction(i as u8))
-            });
-        }
-        out.push(item(
-            "Add to dictionary",
-            "folder-tree",
-            S::Spellcheck,
-            P::AddToDictionary,
-        ));
-    }
     if on_link {
         out.push(item(
             "Open in new tab",
@@ -1194,7 +1155,7 @@ mod tests {
     /// capture has around it is gone too; every other separator is where
     /// Obsidian put it, including the pair above Rename.
     #[test]
-    fn the_file_rows_menu_is_obsidians_order_without_the_rows_it_cannot_run() {
+    fn the_file_rows_menu_is_references_order_without_the_rows_it_cannot_run() {
         assert_eq!(
             drawn(&Target::File("Notes/Plan.md".into())),
             [
@@ -1221,7 +1182,7 @@ mod tests {
     /// the capture has that item on the file row only, and "Show in system
     /// explorer" is its whole `system` section.
     #[test]
-    fn the_folder_rows_menu_is_obsidians_order() {
+    fn the_folder_rows_menu_is_references_order() {
         assert_eq!(
             drawn(&Target::Folder("Notes".into())),
             [
@@ -1470,57 +1431,6 @@ mod tests {
         );
     }
 
-    /// The editor click the plain menu came from: no selection, plain text.
-    fn spelling_click(suggestions: &[&str]) -> Target {
-        Target::Editor(EditorClick {
-            spot: Spot::Text,
-            selection: "wrold".into(),
-            selected: true,
-            spelling: Some(crate::spellcheck::SpellHit {
-                range: 8..13,
-                word: "wrold".into(),
-                suggestions: suggestions.iter().map(|s| s.to_string()).collect(),
-            }),
-        })
-    }
-
-    /// The misspelled word's menu as Obsidian 1.15.0 drew it on "wrold"
-    /// (`results/2026-11-15-spellcheck.json`, `s02`): the corrections, ---,
-    /// Add to dictionary, ---, then the menu of a selected word.
-    #[test]
-    fn a_misspelled_word_leads_with_its_corrections() {
-        let drawn = drawn(&spelling_click(&["world", "wold"]));
-        assert_eq!(
-            drawn[..9],
-            [
-                "world",
-                "wold",
-                "---",
-                "Add to dictionary",
-                "---",
-                "Add link",
-                "Add external link",
-                "---",
-                "Search for \u{201c}wrold\u{201d}"
-            ]
-        );
-        let rows = items(&spelling_click(&["world", "wold"]));
-        assert_eq!(rows[0].icon, "repeat");
-        assert_eq!(rows[0].pick, Pick::Correction(0));
-        assert_eq!(rows[1].pick, Pick::Correction(1));
-        assert_eq!(rows[2].icon, "folder-tree");
-        assert_eq!(rows[2].pick, Pick::AddToDictionary);
-        assert!(!rows.iter().find(|r| r.label == "Copy").unwrap().disabled);
-        // No corrections: one disabled row says so.
-        let none = items(&spelling_click(&[]));
-        assert_eq!(none[0].label, "No suggestions...");
-        assert!(none[0].disabled);
-        assert_eq!(
-            drawn_of(&none)[..3],
-            ["No suggestions...", "---", "Add to dictionary"]
-        );
-    }
-
     fn drawn_of(items: &[Item]) -> Vec<String> {
         let mut out = Vec::new();
         let mut previous = None;
@@ -1539,7 +1449,6 @@ mod tests {
             spot: Spot::Text,
             selection: String::new(),
             selected: false,
-            spelling: None,
         })
     }
 
@@ -1557,7 +1466,7 @@ mod tests {
     /// rows nobody has opened: the two link rows, one separator where
     /// Format's section was, then the clipboard five.
     #[test]
-    fn the_editor_menu_is_obsidians_plain_list_without_the_submenus() {
+    fn the_editor_menu_is_references_plain_list_without_the_submenus() {
         assert_eq!(
             drawn(&plain_click()),
             [
@@ -1591,7 +1500,6 @@ mod tests {
             spot: Spot::Text,
             selection: "paragraph with".into(),
             selected: true,
-            spelling: None,
         });
         assert_eq!(
             clipboard_rows(&live)
@@ -1611,7 +1519,6 @@ mod tests {
             spot: Spot::Text,
             selection: "paragraph with".into(),
             selected: true,
-            spelling: None,
         });
         assert_eq!(
             drawn(&target),
@@ -1639,7 +1546,6 @@ mod tests {
             spot: Spot::Text,
             selection: "paragraph with".into(),
             selected: false,
-            spelling: None,
         });
         assert!(drawn(&target).contains(&"Search for \u{201c}paragraph with\u{201d}".to_string()));
         assert_eq!(
@@ -1658,7 +1564,6 @@ mod tests {
             spot: Spot::Tag("project".into()),
             selection: String::new(),
             selected: false,
-            spelling: None,
         });
         assert_eq!(drawn(&tag), drawn(&plain_click()));
         assert_eq!(tag.path(), "", "a tag names no file");
@@ -1675,7 +1580,6 @@ mod tests {
             spot: Spot::Link("Notes/Plan.md".into()),
             selection: String::new(),
             selected: false,
-            spelling: None,
         });
         assert_eq!(
             drawn(&target),
@@ -1831,7 +1735,6 @@ mod tests {
                 spot: Spot::Link("Plan.md".into()),
                 selection: "some words".into(),
                 selected: true,
-                spelling: None,
             }),
         ];
         for target in targets {

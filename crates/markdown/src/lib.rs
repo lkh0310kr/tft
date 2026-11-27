@@ -1,4 +1,4 @@
-//! Obsidian Flavored Markdown: the one parser shared by editor decorations,
+//! TFT extended Markdown: the one parser shared by editor decorations,
 //! reading, cache and link rewriting. [`parse`] keeps a byte span on every
 //! node; [`render_html`] renders the same tree.
 
@@ -24,7 +24,7 @@ pub use span::{LineIndex, Loc, Pos, Span};
 use block::{RawBlock, RawItem, RawKind};
 use inline::InlineContext;
 
-/// Which extensions the parser recognizes. [`Options::obsidian`] is the
+/// Which extensions the parser recognizes. [`Options::tft`] is the
 /// default; [`Options::commonmark`] turns every extension off for spec tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
@@ -54,17 +54,18 @@ pub struct Options {
     pub footnotes: bool,
     /// Bare `https://` and `www.` URLs become links.
     pub bare_urls: bool,
-    /// Obsidian's observed departures from CommonMark and GFM: an unclosed
+    /// 기준 앱's observed departures from CommonMark and GFM: an unclosed
     /// backtick run retries one backtick shorter, `~~~` and `===` runs
     /// delimit with their first two characters, a `#` right after a tag
     /// starts another tag, legacy entities decode without a semicolon, a
-    /// list marker indented four or more columns inside a list is a sibling
-    /// item, and `[^x]` without a definition renders as `x`.
+    /// list marker indented into a list item's content is a list item rather
+    /// than a setext underline, and `[^x]` without a definition renders as
+    /// `x`.
     pub quirks: bool,
 }
 
 impl Options {
-    pub const fn obsidian() -> Options {
+    pub const fn tft() -> Options {
         Options {
             frontmatter: true,
             wikilinks: true,
@@ -105,13 +106,13 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Options {
-        Options::obsidian()
+        Options::tft()
     }
 }
 
-/// Parses `src` with the default (Obsidian) options.
+/// Parses `src` with the default (기준 앱) options.
 pub fn parse(src: &str) -> Document<'_> {
-    parse_with(src, &Options::obsidian())
+    parse_with(src, &Options::tft())
 }
 
 /// Parses `src` with explicit options.
@@ -230,7 +231,7 @@ fn lower_block<'a>(cx: &InlineContext<'a, '_>, raw: RawBlock<'a>) -> Block<'a> {
     }
 }
 
-/// Callout types shipped with Obsidian and their aliases. Unknown types render as `note`.
+/// Callout types shipped with 기준 앱 and their aliases. Unknown types render as `note`.
 pub fn canonical_callout_type(name: &str) -> &'static str {
     match name.to_ascii_lowercase().as_str() {
         "note" => "note",
@@ -262,14 +263,14 @@ pub fn parse_callout_header(line: &str) -> Option<(&str, Option<bool>, &str)> {
     Some((ty, fold, line[title_offset..].trim()))
 }
 
-/// The title Obsidian shows for a callout whose header carries none: the type
+/// The title 기준 앱 shows for a callout whose header carries none: the type
 /// with each `-` turned into a space, lowercased, and its first character
 /// upper-cased.
 ///
 /// So `[!note]` shows "Note", `[!bad-type-two]` shows "Bad type two" and
 /// `[!NOTE-X]` shows "Note x". `_` is not touched, so `[!bad_type]` shows
 /// "Bad_type", and an empty type (which `[! ]` has) shows nothing. Observed
-/// against Obsidian 1.14.4 (tools/probe-gen, 2026-10-29).
+/// against 기준 앱 1.14.4 (tools/probe-gen, 2026-10-29).
 ///
 /// Shared so that the reading view and Live Preview cannot drift apart on it,
 /// which they had: Live Preview used to leave the tail of the type as written.

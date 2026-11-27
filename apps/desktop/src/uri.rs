@@ -1,9 +1,6 @@
-//! `obsidian://` URIs: the four actions Obsidian documents, parsed into
-//! what the workspace does for each.
+//! TFT deep links parsed into the workspace action they request.
 //!
-//! Implemented from Obsidian's public help ("Obsidian URI"), which is the
-//! whole specification here; no URI was driven against a running Obsidian.
-//! The scheme is `obsidian://<action>?<params>`, every parameter value
+//! The scheme is `tft://<action>?<params>`, every parameter value
 //! percent-encoded:
 //!
 //! - `open` — `vault` (name or id), and either `file` (a note's name, the
@@ -16,12 +13,9 @@
 //! - `daily` — `vault`: today's daily note.
 //!
 //! A `vault` naming another vault is refused rather than opened: TFT
-//! shows one vault per window and does not switch under a URI. What the
-//! desktop entry registers is `tft://`, the same grammar under TFT's
-//! own name, because Obsidian owns `obsidian://` on a machine that has it.
-//! Either way the URI reaches TFT as a
-//! command-line argument, which a second run hands to the window already
-//! open, or over the control socket's `uri` method.
+//! shows one vault per window and does not switch under a URI. The desktop
+//! registers `tft://`; a second launch forwards the request to the window
+//! already open, or it can arrive through the control socket's `uri` method.
 
 /// One parsed URI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,13 +60,12 @@ impl Uri {
     }
 }
 
-/// Parses an `obsidian://` (or `tft://`) URI, or says why it could not.
+/// Parses a `tft://` URI, or says why it could not.
 pub fn parse(uri: &str) -> Result<Uri, String> {
     let trimmed = uri.trim();
     let rest = trimmed
-        .strip_prefix("obsidian://")
-        .or_else(|| trimmed.strip_prefix("tft://"))
-        .ok_or_else(|| format!("not an obsidian:// URI: {uri}"))?;
+        .strip_prefix("tft://")
+        .ok_or_else(|| format!("not a tft:// URI: {uri}"))?;
     let (action, query) = match rest.split_once('?') {
         Some((action, query)) => (action, query),
         None => (rest, ""),
@@ -117,7 +110,7 @@ pub fn parse(uri: &str) -> Result<Uri, String> {
         "daily" => Uri::Daily {
             vault: get("vault"),
         },
-        other => return Err(format!("unknown obsidian:// action: {other}")),
+        other => return Err(format!("unknown tft:// action: {other}")),
     })
 }
 
@@ -151,18 +144,15 @@ pub fn names_vault(vault: Option<&str>, vault_name: &str) -> bool {
     }
 }
 
-/// What `workspace:copy-url` ("Copy Obsidian URL for current file") puts
+/// What `workspace:copy-url` ("Copy TFT URL for current file") puts
 /// on the clipboard for the vault-relative `path` in the vault folder
-/// `vault_name`: `obsidian://open?vault=<name>&file=<path>`, both values
+/// `vault_name`: `tft://open?vault=<name>&file=<path>`, both values
 /// encoded the way JavaScript's `encodeURIComponent` encodes them, and the
-/// path's `.md` dropped while any other extension stays (Obsidian 1.15.0,
-/// `tools/obsidian-probe/results/2026-11-09-app-window-commands.json`).
-/// The scheme is Obsidian's own: the URL is for pasting where Obsidian, or
-/// a TFT registered for the scheme, will open it.
+/// path's `.md` dropped while any other extension stays.
 pub fn open_url(vault_name: &str, path: &str) -> String {
     let file = path.strip_suffix(".md").unwrap_or(path);
     format!(
-        "obsidian://open?vault={}&file={}",
+        "tft://open?vault={}&file={}",
         encode_component(vault_name),
         encode_component(file)
     )
@@ -201,19 +191,19 @@ mod tests {
     fn the_copied_url_encodes_both_parts_and_drops_only_md() {
         assert_eq!(
             open_url("Probe Vault", "Sub/My Note.md"),
-            "obsidian://open?vault=Probe%20Vault&file=Sub%2FMy%20Note"
+            "tft://open?vault=Probe%20Vault&file=Sub%2FMy%20Note"
         );
         assert_eq!(
             open_url("Probe Vault", "Sub/Caf\u{e9} & Bar #2.md"),
-            "obsidian://open?vault=Probe%20Vault&file=Sub%2FCaf%C3%A9%20%26%20Bar%20%232"
+            "tft://open?vault=Probe%20Vault&file=Sub%2FCaf%C3%A9%20%26%20Bar%20%232"
         );
         assert_eq!(
             open_url("Probe Vault", "Note A.md"),
-            "obsidian://open?vault=Probe%20Vault&file=Note%20A"
+            "tft://open?vault=Probe%20Vault&file=Note%20A"
         );
         assert_eq!(
             open_url("Probe Vault", "img/pic.png"),
-            "obsidian://open?vault=Probe%20Vault&file=img%2Fpic.png"
+            "tft://open?vault=Probe%20Vault&file=img%2Fpic.png"
         );
     }
 
@@ -237,7 +227,7 @@ mod tests {
     #[test]
     fn open_takes_a_file_or_a_path_and_decodes_percent_escapes() {
         assert_eq!(
-            parse("obsidian://open?vault=my%20vault&file=Daily%20notes%2F2026-11-02").unwrap(),
+            parse("tft://open?vault=my%20vault&file=Daily%20notes%2F2026-11-02").unwrap(),
             Uri::Open {
                 vault: Some("my vault".into()),
                 file: Some("Daily notes/2026-11-02".into()),
@@ -245,7 +235,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse("obsidian://open?path=Rocks%2FBasalt.md").unwrap(),
+            parse("tft://open?path=Rocks%2FBasalt.md").unwrap(),
             Uri::Open {
                 vault: None,
                 file: None,
@@ -254,7 +244,7 @@ mod tests {
         );
         // A `+` is itself, and an empty value is no value.
         assert_eq!(
-            parse("obsidian://open?file=a+b&vault=").unwrap(),
+            parse("tft://open?file=a+b&vault=").unwrap(),
             Uri::Open {
                 vault: None,
                 file: Some("a+b".into()),
@@ -266,7 +256,7 @@ mod tests {
     #[test]
     fn new_carries_its_content_and_flags() {
         let uri =
-            parse("obsidian://new?vault=v&name=Ideas&content=Hello%0Aworld&append&silent").unwrap();
+            parse("tft://new?vault=v&name=Ideas&content=Hello%0Aworld&append&silent").unwrap();
         assert_eq!(
             uri,
             Uri::New {
@@ -282,7 +272,7 @@ mod tests {
         );
         // `file` is the older spelling of `name`.
         assert!(matches!(
-            parse("obsidian://new?file=Later").unwrap(),
+            parse("tft://new?file=Later").unwrap(),
             Uri::New { name: Some(n), .. } if n == "Later"
         ));
     }
@@ -290,43 +280,42 @@ mod tests {
     #[test]
     fn search_daily_and_the_refusals() {
         assert_eq!(
-            parse("obsidian://search?query=tag%3A%23rock").unwrap(),
+            parse("tft://search?query=tag%3A%23rock").unwrap(),
             Uri::Search {
                 vault: None,
                 query: Some("tag:#rock".into()),
             }
         );
         assert_eq!(
-            parse("obsidian://daily?vault=x").unwrap(),
+            parse("tft://daily?vault=x").unwrap(),
             Uri::Daily {
                 vault: Some("x".into())
             }
         );
-        assert!(parse("obsidian://hook-get-address").is_err());
+        assert!(parse("tft://hook-get-address").is_err());
     }
 
     #[test]
-    fn tft_is_the_same_scheme_under_its_own_name() {
+    fn tft_scheme_opens_a_note() {
         assert_eq!(
             parse("tft://open?vault=rocks&file=Basalt").unwrap(),
-            parse("obsidian://open?vault=rocks&file=Basalt").unwrap()
+            Uri::Open {
+                vault: Some("rocks".into()),
+                file: Some("Basalt".into()),
+                path: None,
+            }
         );
-        assert!(parse("https://obsidian.md/open?file=Basalt").is_err());
+        assert!(parse("https://example.invalid/open?file=Basalt").is_err());
     }
 
     #[test]
     fn the_vault_parameter_is_readable_for_routing() {
         assert_eq!(
-            parse("obsidian://open?vault=rocks&file=Basalt")
-                .unwrap()
-                .vault(),
+            parse("tft://open?vault=rocks&file=Basalt").unwrap().vault(),
             Some("rocks")
         );
-        assert_eq!(
-            parse("obsidian://daily?vault=x").unwrap().vault(),
-            Some("x")
-        );
-        assert_eq!(parse("obsidian://open?file=Basalt").unwrap().vault(), None);
+        assert_eq!(parse("tft://daily?vault=x").unwrap().vault(), Some("x"));
+        assert_eq!(parse("tft://open?file=Basalt").unwrap().vault(), None);
         assert!(parse("https://example.invalid").is_err());
         assert!(names_vault(None, "Any"));
         assert!(names_vault(Some("demo"), "Demo"));

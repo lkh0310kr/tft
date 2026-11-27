@@ -3,81 +3,51 @@
 //! TFT's GPUI application: a vault, its Files dock, tabs and reading/editor
 //! views. The command line lives in `cli`; `--control` exposes the socket.
 
-pub use tft_app::{assets, text_input, theme, ui};
+pub use tft_app::{assets, keymap, text_input, theme, ui};
 pub use tft_app::{
     editor, fixed, fold, gutter, inline_field, math, media, mermaid, preview, properties, reading,
-    rtl, spellcheck, suggest, title_field,
+    rtl, suggest, title_field,
 };
 mod canvas;
 pub use tft_app::pdf;
-#[cfg(feature = "desktop-native")]
 mod chooser;
-#[cfg(feature = "desktop-native")]
 mod clipboard_extra;
-#[cfg(feature = "desktop-native")]
 mod control;
-#[cfg(feature = "desktop-native")]
 mod copy_results;
-#[cfg(feature = "desktop-native")]
 mod debug_info;
-#[cfg(feature = "desktop-native")]
 mod explorer;
-#[cfg(feature = "desktop-native")]
 mod export_modals;
-#[cfg(feature = "desktop-native")]
 mod file_menu;
-#[cfg(feature = "desktop-native")]
 mod graph;
-#[cfg(feature = "desktop-native")]
 mod hover_preview;
-#[cfg(feature = "desktop-native")]
 mod migrate_modal;
-#[cfg(feature = "desktop-native")]
+mod palette;
 mod popout;
-#[cfg(feature = "desktop-native")]
 mod prompt;
 mod remote;
-#[cfg(feature = "desktop-native")]
 mod search;
-#[cfg(feature = "desktop-native")]
 mod settings;
-#[cfg(feature = "desktop-native")]
 mod suggestion_source;
-#[cfg(feature = "desktop-native")]
 mod switcher;
-#[cfg(feature = "desktop-native")]
 mod uri;
-#[cfg(feature = "desktop-native")]
-mod vaults;
-#[cfg(feature = "desktop-native")]
 mod watch;
-#[cfg(feature = "desktop-native")]
 mod workspace;
-#[cfg(feature = "desktop-native")]
 mod zoom;
 
 use gpui::{
     actions, point, prelude::*, px, size, App, Bounds, Focusable, KeyBinding, TitlebarOptions,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowOptions,
 };
-#[cfg(feature = "desktop-native")]
 use std::fmt::Write as _;
-#[cfg(feature = "desktop-native")]
 use std::sync::Arc;
-#[cfg(feature = "desktop-native")]
 use tft_cli::{instance, Args, Forward, Target};
-#[cfg(feature = "desktop-native")]
 use tft_commands::CommandRegistry;
-#[cfg(feature = "desktop-native")]
 use theme::Theme;
-#[cfg(feature = "desktop-native")]
 use workspace::{Commands, ViewMode, Workspace};
 
-#[cfg(feature = "desktop-native")]
 actions!(tft, [Quit]);
 
 /// Constructs the shared Editor with the Desktop-only clipboard side channel installed.
-#[cfg(feature = "desktop-native")]
 pub fn new_editor(
     window: &mut gpui::Window,
     cx: &mut gpui::Context<editor::Editor>,
@@ -95,7 +65,6 @@ pub fn bind_web_keys(cx: &mut App) {
 
 /// A deterministic note of `lines` lines exercising headings, wikilinks,
 /// tags, emphasis, code, lists, and callouts, for the 50k-line spike.
-#[cfg(feature = "desktop-native")]
 fn synthetic_note(lines: usize) -> String {
     const WORDS: &[&str] = &[
         "vault", "note", "link", "graph", "heading", "callout", "tag", "cursor", "scroll",
@@ -172,7 +141,6 @@ fn synthetic_note(lines: usize) -> String {
 }
 
 /// What the command line asked this process to do.
-#[cfg(feature = "desktop-native")]
 enum Startup {
     /// Open a window with these arguments.
     Run(Box<Args>),
@@ -190,7 +158,6 @@ enum Startup {
 /// The exit statuses are the usual ones — 2 for a command line that could
 /// not be used, 1 for a handover that was refused — so a script can tell a
 /// typo from a vault that answered.
-#[cfg(feature = "desktop-native")]
 fn startup() -> Startup {
     let mut args = match tft_cli::parse(std::env::args().skip(1)) {
         Ok(args) => args,
@@ -226,7 +193,7 @@ fn startup() -> Startup {
             }
         }
     }
-    // `obsidian://open?vault=Rocks` is for the window showing Rocks, and
+    // `tft://open?vault=Rocks` is for the window showing Rocks, and
     // the app refuses a URI meant for another vault, so the vault the URI
     // names is what routes it.
     let named = args
@@ -249,7 +216,6 @@ fn startup() -> Startup {
 /// is what Obsidian's "Hidden" frame style means and its default on Linux
 /// and Windows. Answered once: the window asks on the way up, and the
 /// workspace asks again on every frame.
-#[cfg(feature = "desktop-native")]
 pub fn hidden_frame() -> bool {
     static HIDDEN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *HIDDEN.get_or_init(|| frame_style() != "native")
@@ -261,12 +227,10 @@ pub fn hidden_frame() -> bool {
 /// the stored value is the registry's (`VaultRegistry::frame`); the flag
 /// and the variable are a way to try the other style for one run without
 /// changing what the next run gets.
-#[cfg(feature = "desktop-native")]
 fn frame_style() -> String {
     // Parsed again rather than threaded through: `hidden_frame` is asked
     // from inside a paint, where there is no `Args` to hand it, and the
     // answer is kept in a `OnceLock` either way.
-    #[cfg(feature = "desktop-native")]
     if let Some(frame) = tft_cli::parse(std::env::args().skip(1))
         .ok()
         .and_then(|args| args.frame)
@@ -281,7 +245,6 @@ fn frame_style() -> String {
 
 /// The frame style `tft.json` holds, or `hidden`. Read once: the file is
 /// what the next start reads, and nothing in the app writes it any more.
-#[cfg(feature = "desktop-native")]
 pub fn stored_frame_style() -> String {
     static STORED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     STORED
@@ -298,7 +261,6 @@ pub fn stored_frame_style() -> String {
 /// Every key binding in the app, from scratch: the views' own and the
 /// registry's hotkeys. Called at startup and again whenever `hotkeys.json`
 /// changes, since a binding made from the old registry would otherwise stay.
-#[cfg(feature = "desktop-native")]
 pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     cx.clear_key_bindings();
     editor::bind_keys(cx);
@@ -310,16 +272,15 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     explorer::bind_keys(cx);
     file_menu::bind_keys(cx);
     settings::bind_keys(cx);
-    vaults::bind_keys(cx);
     prompt::bind_keys(cx);
     copy_results::bind_keys(cx);
     debug_info::bind_keys(cx);
     migrate_modal::bind_keys(cx);
     export_modals::bind_keys(cx);
-    cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+    // Quit: Cmd+Q on macOS, Ctrl+Q elsewhere.
+    cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);
 }
 
-#[cfg(feature = "desktop-native")]
 pub fn run() {
     let args = match startup() {
         Startup::Run(args) => args,
@@ -439,8 +400,7 @@ pub fn run() {
         // desktop, which is Obsidian's default and what a vault with no
         // theme key means.
         if let Some(a) = appearance {
-            let follows_system =
-                !matches!(a.theme.as_deref(), Some("moonstone") | Some("obsidian"));
+            let follows_system = !matches!(a.theme.as_deref(), Some("light") | Some("dark"));
             if follows_system {
                 let dark = window
                     .update(cx, |_, window, _| {

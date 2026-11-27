@@ -5,28 +5,29 @@
 use crate::fold::{self, Foldable};
 use crate::gutter;
 use crate::inline_field;
+use crate::keymap;
 use crate::math::SpaceWidths;
 use crate::preview::{self, DisplayLine, Piece};
 use crate::properties::{self, Field, Part, PillStep, Target};
 use crate::reading::model::{
-    build_widgets, BuildOptions, EmbedSource, InlineStyle, LinkTarget, RBlock, Script, Widget,
+    BuildOptions, EmbedSource, InlineStyle, LinkTarget, RBlock, Script, Widget, build_widgets,
 };
 use crate::reading::view::{LinkHandler, Renderer, ToggleHandler};
 use crate::reading::view::{PropertiesHost, PropertyAction};
 use crate::reading::view::{TableAction, TableAxis, TableDragView, TableHost, TableSelect};
-use crate::rtl::{rtl_row_origin, rtl_rows, RtlRows};
+use crate::rtl::{RtlRows, rtl_row_origin, rtl_rows};
 use crate::suggest::{Anchor, SuggestState};
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, size, AnyElement, App, AvailableSpace,
-    Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase, Element, ElementId,
-    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font,
-    FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle, Style, Subscription, Task,
-    TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle, Window, WindowTextSystem,
-    WrappedLine,
+    AnyElement, App, AvailableSpace, Bounds, ClipboardItem, Context, CursorStyle, DispatchPhase,
+    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    InspectorElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString, StrikethroughStyle,
+    Style, Subscription, Task, TextAlign, TextRun, TextStyle, UTF16Selection, UnderlineStyle,
+    Window, WindowTextSystem, WrappedLine, actions, div, fill, point, prelude::*, px, relative,
+    size,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -35,13 +36,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tft_formats::config::PropertyTypes;
 use tft_formats::properties::{self as props, PropertiesInDocument};
-use tft_markdown::highlight::{flatten, highlight_lines, HighlightKind, HighlightSpan};
+use tft_markdown::highlight::{HighlightKind, HighlightSpan, flatten, highlight_lines};
 use tft_markdown::{Block, BlockKind, Document};
 use tft_suggest::{self as suggest, Accept, Item as SuggestionItem, Suggestion, Triggered};
 use tft_text::table::{self, TableCommand};
 use tft_text::{
-    autopair, find, shifted, wrap, BlockInsert, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax,
-    Sel, TextBuffer,
+    BlockInsert, Cursor, Cursors, EditKind, LinePrefix, LinkSyntax, Sel, TextBuffer, autopair,
+    find, shifted, wrap,
 };
 use web_time::Instant;
 
@@ -128,43 +129,25 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", MoveRight, ctx),
         KeyBinding::new("up", MoveUp, ctx),
         KeyBinding::new("down", MoveDown, ctx),
-        KeyBinding::new("ctrl-left", MoveWordLeft, ctx),
-        KeyBinding::new("ctrl-right", MoveWordRight, ctx),
         KeyBinding::new("home", LineStart, ctx),
         KeyBinding::new("end", LineEnd, ctx),
         KeyBinding::new("pageup", PageUp, ctx),
         KeyBinding::new("pagedown", PageDown, ctx),
-        KeyBinding::new("ctrl-home", DocumentStart, ctx),
-        KeyBinding::new("ctrl-end", DocumentEnd, ctx),
         KeyBinding::new("shift-left", SelectLeft, ctx),
         KeyBinding::new("shift-right", SelectRight, ctx),
         KeyBinding::new("shift-up", SelectUp, ctx),
         KeyBinding::new("shift-down", SelectDown, ctx),
-        KeyBinding::new("ctrl-shift-left", SelectWordLeft, ctx),
-        KeyBinding::new("ctrl-shift-right", SelectWordRight, ctx),
         KeyBinding::new("shift-home", SelectLineStart, ctx),
         KeyBinding::new("shift-end", SelectLineEnd, ctx),
         KeyBinding::new("shift-pageup", SelectPageUp, ctx),
         KeyBinding::new("shift-pagedown", SelectPageDown, ctx),
-        KeyBinding::new("ctrl-shift-home", SelectDocumentStart, ctx),
-        KeyBinding::new("ctrl-shift-end", SelectDocumentEnd, ctx),
-        KeyBinding::new("ctrl-a", SelectAll, ctx),
         KeyBinding::new("backspace", Backspace, ctx),
         KeyBinding::new("shift-backspace", Backspace, ctx),
         KeyBinding::new("delete", Delete, ctx),
-        KeyBinding::new("ctrl-backspace", DeleteWordLeft, ctx),
-        KeyBinding::new("ctrl-delete", DeleteWordRight, ctx),
         KeyBinding::new("enter", Newline, ctx),
         KeyBinding::new("shift-enter", NewlinePlain, ctx),
         KeyBinding::new("tab", Tab, ctx),
         KeyBinding::new("shift-tab", Outdent, ctx),
-        KeyBinding::new("ctrl-z", Undo, ctx),
-        KeyBinding::new("ctrl-shift-z", Redo, ctx),
-        KeyBinding::new("ctrl-y", Redo, ctx),
-        KeyBinding::new("ctrl-c", Copy, ctx),
-        KeyBinding::new("ctrl-x", Cut, ctx),
-        KeyBinding::new("ctrl-v", Paste, ctx),
-        KeyBinding::new("ctrl-shift-v", PastePlain, ctx),
         KeyBinding::new("escape", CloseFind, ctx),
         KeyBinding::new("shift-enter", FindPrevious, Some("FindPanel")),
         KeyBinding::new("alt-enter", FindAll, Some("FindPanel")),
@@ -175,27 +158,45 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-n", MoveDown, Some("SuggestPopup")),
         KeyBinding::new("ctrl-p", MoveUp, Some("SuggestPopup")),
     ]);
-    #[cfg(target_arch = "wasm32")]
+    // Mod: Cmd on macOS, Ctrl elsewhere (see `keymap`).
+    keymap::bind_mod(cx, ctx, "a", SelectAll);
+    keymap::bind_mod(cx, ctx, "c", Copy);
+    keymap::bind_mod(cx, ctx, "x", Cut);
+    keymap::bind_mod(cx, ctx, "v", Paste);
+    keymap::bind_mod(cx, ctx, "shift-v", PastePlain);
+    keymap::bind_mod(cx, ctx, "z", Undo);
+    keymap::bind_mod(cx, ctx, "shift-z", Redo);
+    keymap::bind_mod(cx, ctx, "y", Redo);
+    // Word movement and deletion: Option on macOS, Ctrl elsewhere.
+    keymap::bind_word(cx, ctx, "left", MoveWordLeft);
+    keymap::bind_word(cx, ctx, "right", MoveWordRight);
+    keymap::bind_word(cx, ctx, "shift-left", SelectWordLeft);
+    keymap::bind_word(cx, ctx, "shift-right", SelectWordRight);
+    keymap::bind_word(cx, ctx, "backspace", DeleteWordLeft);
+    keymap::bind_word(cx, ctx, "delete", DeleteWordRight);
+    // Line ends: Cmd+←/→ on macOS (and in a Mac browser). Home and End above
+    // stay literal, as they are on every platform.
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
     cx.bind_keys([
-        KeyBinding::new("cmd-a", SelectAll, ctx),
-        KeyBinding::new("cmd-z", Undo, ctx),
-        KeyBinding::new("cmd-shift-z", Redo, ctx),
-        KeyBinding::new("cmd-c", Copy, ctx),
-        KeyBinding::new("cmd-x", Cut, ctx),
-        KeyBinding::new("cmd-v", Paste, ctx),
-        KeyBinding::new("cmd-shift-v", PastePlain, ctx),
         KeyBinding::new("cmd-left", LineStart, ctx),
         KeyBinding::new("cmd-right", LineEnd, ctx),
-        KeyBinding::new("cmd-up", DocumentStart, ctx),
-        KeyBinding::new("cmd-down", DocumentEnd, ctx),
-        KeyBinding::new("alt-left", MoveWordLeft, ctx),
-        KeyBinding::new("alt-right", MoveWordRight, ctx),
         KeyBinding::new("cmd-shift-left", SelectLineStart, ctx),
         KeyBinding::new("cmd-shift-right", SelectLineEnd, ctx),
+    ]);
+    // Document ends: Cmd+↑/↓ on macOS, Ctrl+Home/End elsewhere.
+    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    cx.bind_keys([
+        KeyBinding::new("cmd-up", DocumentStart, ctx),
+        KeyBinding::new("cmd-down", DocumentEnd, ctx),
         KeyBinding::new("cmd-shift-up", SelectDocumentStart, ctx),
         KeyBinding::new("cmd-shift-down", SelectDocumentEnd, ctx),
-        KeyBinding::new("alt-shift-left", SelectWordLeft, ctx),
-        KeyBinding::new("alt-shift-right", SelectWordRight, ctx),
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([
+        KeyBinding::new("ctrl-home", DocumentStart, ctx),
+        KeyBinding::new("ctrl-end", DocumentEnd, ctx),
+        KeyBinding::new("ctrl-shift-home", SelectDocumentStart, ctx),
+        KeyBinding::new("ctrl-shift-end", SelectDocumentEnd, ctx),
     ]);
 }
 
@@ -209,6 +210,12 @@ const READABLE_WIDTH: f32 = 700.0;
 const SCROLLBAR_WIDTH: f32 = 12.0;
 /// The thumb never shrinks below this, so it can still be grabbed.
 const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+/// Blank space kept under the last line, as a share of the view. It lets the
+/// note's end be scrolled up from the bottom edge, so the caret can sit at a
+/// comfortable height while writing the tail of a note instead of pinned to
+/// the bottom. Obsidian leaves a similar band; 65% is the middle of the
+/// 60–70% range editors commonly use.
+const END_SPACE: f32 = 0.65;
 
 pub enum EditorEvent {
     /// The buffer changed; the owner schedules a save.
@@ -224,8 +231,6 @@ pub enum EditorEvent {
         selection: String,
         selected: bool,
         link: Option<LinkTarget>,
-        /// The misspelled word clicked, with its corrections.
-        spelling: Option<crate::spellcheck::SpellHit>,
     },
     /// Enter in the note's inline title: the file takes the typed name; the workspace renames.
     RenameTo(String),
@@ -697,10 +702,6 @@ pub struct Editor {
     thumb_drag: Option<Pixels>,
     find: FindState,
     _subscriptions: Vec<Subscription>,
-    /// The note's misspelled words, from the same parse as the highlights.
-    spelling: crate::spellcheck::NoteSpelling,
-    /// The caret right after a typed letter: the word ending there is still being typed.
-    spell_typing: Option<usize>,
     highlights: Arc<Vec<Vec<HighlightSpan>>>,
     /// Syntax highlighting inside fenced blocks, per line, from the same parse.
     code_runs: Arc<Vec<Vec<CodeRun>>>,
@@ -798,8 +799,6 @@ pub struct Editor {
     pub frame_samples: Sample,
     /// Parse time per completed decoration pass since the note was opened.
     pub parse_samples: Sample,
-    /// The spellcheck's share of each pass (inside `parse_samples`).
-    pub spell_samples: Sample,
     /// Edit-to-decoration latency, including waiting for the background thread.
     pub parse_latency: Sample,
     /// What the host draws under the note's last line, such as the in-document backlinks block;
@@ -838,8 +837,6 @@ impl Editor {
                         InputEvent::Changed | InputEvent::Up | InputEvent::Down => {}
                     },
                 ),
-                // Languages, custom words or the setting changed: recheck.
-                cx.observe_global::<crate::spellcheck::Spelling>(|this, cx| this.request_parse(cx)),
             ];
         Editor {
             focus_handle: cx.focus_handle(),
@@ -853,8 +850,6 @@ impl Editor {
                 current: None,
             },
             _subscriptions: subscriptions,
-            spelling: Default::default(),
-            spell_typing: None,
             // A view with no file yet belongs to none; a placeholder name would make the shell
             // mount this editor on launch and take typing that nothing saves.
             name: SharedString::default(),
@@ -921,7 +916,6 @@ impl Editor {
             chrome: gutter::Chrome::default(),
             frame_samples: Sample::default(),
             parse_samples: Sample::default(),
-            spell_samples: Sample::default(),
             parse_latency: Sample::default(),
         }
     }
@@ -951,7 +945,6 @@ impl Editor {
         self.scroll_px = px(0.);
         self.frame_samples = Sample::default();
         self.parse_samples = Sample::default();
-        self.spell_samples = Sample::default();
         self.parse_latency = Sample::default();
         // The matches point into the note that was open; drop them rather
         // than let the panel count or step through another note's offsets.
@@ -1325,15 +1318,6 @@ impl Editor {
         }
     }
 
-    /// `editor:follow-link`: opens the link the cursor is in, like Ctrl+click.
-    pub fn follow_link_at_cursor(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(target) = self.link_target_at_cursor() else {
-            return false;
-        };
-        cx.emit(EditorEvent::OpenLink(target));
-        true
-    }
-
     /// The link under the cursor, for a caller that opens it somewhere else.
     pub fn link_target_at_cursor(&self) -> Option<LinkTarget> {
         let cursor = self.cursor();
@@ -1468,15 +1452,13 @@ impl Editor {
     /// Summary of the stress run for the terminal.
     pub fn report(&self) -> String {
         format!(
-            "frames {}: shape mean {:.2} ms, max {:.2} ms\nparses {}: parse mean {:.1} ms, max {:.1} ms (spellcheck mean {:.1} ms, max {:.1} ms)\nedit-to-decoration latency mean {:.1} ms, max {:.1} ms\n{} lines, {} KB, {} spans",
+            "frames {}: shape mean {:.2} ms, max {:.2} ms\nparses {}: parse mean {:.1} ms, max {:.1} ms\nedit-to-decoration latency mean {:.1} ms, max {:.1} ms\n{} lines, {} KB, {} spans",
             self.frame_samples.count,
             self.frame_samples.mean_ms(),
             self.frame_samples.max_ms,
             self.parse_samples.count,
             self.parse_samples.mean_ms(),
             self.parse_samples.max_ms,
-            self.spell_samples.mean_ms(),
-            self.spell_samples.max_ms,
             self.parse_latency.mean_ms(),
             self.parse_latency.max_ms,
             self.line_count(),
@@ -1528,8 +1510,6 @@ impl Editor {
             "line_count": self.buf.line_count(),
             "folds": self.folds.record(&self.foldables).iter().map(|(from, to)| serde_json::json!({"from": from, "to": to})).collect::<Vec<_>>(),
             "foldable_lines": self.foldables.iter().map(|f| f.line).collect::<Vec<_>>(),
-            // The squiggled words, as text, in order.
-            "misspelled": self.spelling.ranges.iter().filter_map(|r| self.buf.text().get(r.clone())).collect::<Vec<_>>(),
             "field": self.field_kind(),
             "parsing": self.is_parsing(),
             "find": {
@@ -1681,6 +1661,10 @@ impl Editor {
     // ----- shaping outside a frame ----------------------------------------------
 
     /// The parts of the selections on `line`, line-relative; Live Preview reveals what they touch.
+    ///
+    /// A construct that crosses a soft line break is one span per line with
+    /// one id, so a selection on one of its lines also reveals the others:
+    /// the closing `*` of `*a\nb*` shows while the cursor is on `a`.
     fn touches_on_line(&self, line: usize) -> Vec<Range<usize>> {
         let range = self.buf.line_range(line);
         let mut out = Vec::new();
@@ -1689,7 +1673,27 @@ impl Editor {
             head: self.buf.head,
             goal: None,
         };
-        for s in std::iter::once(&primary).chain(self.buf.extra.iter()) {
+        let selections: Vec<Sel> = std::iter::once(primary)
+            .chain(self.buf.extra.iter().copied())
+            .collect();
+        let mut touched: Vec<usize> = Vec::new();
+        for s in &selections {
+            let sel = s.range();
+            let first = self.buf.cursor_at(sel.start).line;
+            let last = self.buf.cursor_at(sel.end).line;
+            for l in first..=last {
+                let lr = self.buf.line_range(l);
+                let local = sel.start.max(lr.start) - lr.start..sel.end.min(lr.end) - lr.start;
+                for span in self.highlights.get(l).map(Vec::as_slice).unwrap_or(&[]) {
+                    if preview::touches(std::slice::from_ref(&local), &span.range)
+                        && !touched.contains(&span.id)
+                    {
+                        touched.push(span.id);
+                    }
+                }
+            }
+        }
+        for s in &selections {
             let sel = s.range();
             if sel.end < range.start || sel.start > range.end {
                 continue;
@@ -1697,6 +1701,11 @@ impl Editor {
             out.push(
                 sel.start.max(range.start) - range.start..sel.end.min(range.end) - range.start,
             );
+        }
+        for span in self.highlights.get(line).map(Vec::as_slice).unwrap_or(&[]) {
+            if touched.contains(&span.id) {
+                out.push(span.range.clone());
+            }
         }
         out
     }
@@ -2030,7 +2039,7 @@ impl Editor {
 
     /// Whether `line` runs right to left: its first strong character, else the line above's, else setting.
     fn line_is_rtl(&self, line: usize) -> bool {
-        use tft_text::bidi::{line_direction, Direction};
+        use tft_text::bidi::{Direction, line_direction};
         if line >= self.line_count() {
             return false;
         }
@@ -2087,21 +2096,31 @@ impl Editor {
         }
     }
 
+    /// The blank band [`END_SPACE`] asks for under the last line, in pixels.
+    /// It never takes the whole view: at least one line's height stays.
+    fn end_space(&self) -> Pixels {
+        let h = self.layout.bounds.size.height;
+        let lh = self.layout.line_height;
+        (h * END_SPACE).min((h - lh).max(px(0.)))
+    }
+
     /// The last line the view can start at: scrolled there, the note's end
-    /// sits at the bottom of the view (what `clamp_scroll_end` enforces).
-    /// Zero when the whole note fits. Walks back from the end over one
-    /// screenful of lines, so it costs what the visible lines do.
+    /// sits [`END_SPACE`] above the bottom of the view (what
+    /// `clamp_scroll_end` enforces). Zero when the whole note fits. Walks
+    /// back from the end over one screenful of lines, so it costs what the
+    /// visible lines do.
     fn last_top_line(&self, window: &mut Window) -> usize {
         let h = self.layout.bounds.size.height;
         if h <= px(0.) {
             return 0;
         }
+        let target = h - self.end_space();
         let mut filled = px(0.);
         let mut line = self.line_count();
         while line > 0 {
             line -= 1;
             filled += self.height_of(window, line);
-            if filled >= h {
+            if filled >= target {
                 return line;
             }
         }
@@ -2138,21 +2157,23 @@ impl Editor {
         }
     }
 
-    /// Keeps the last line from scrolling above the bottom of the view.
+    /// Keeps the last line from scrolling above the bottom of the view,
+    /// less the [`END_SPACE`] band below it.
     fn clamp_scroll_end(&mut self, window: &mut Window) {
         let lh = self.layout.line_height;
         let h = self.layout.bounds.size.height;
         if lh <= px(0.) || h <= px(0.) {
             return;
         }
+        let target = h - self.end_space();
         let mut filled = -self.scroll_px;
         let mut line = self.scroll_line;
-        while line < self.line_count() && filled < h {
+        while line < self.line_count() && filled < target {
             filled += self.height_of(window, line);
             line += 1;
         }
-        if filled < h {
-            self.scroll_px -= h - filled;
+        if filled < target {
+            self.scroll_px -= target - filled;
             self.normalize_scroll(window);
         }
     }
@@ -2348,11 +2369,6 @@ impl Editor {
     fn type_char(&mut self, s: &str, kind: EditKind, window: &mut Window, cx: &mut Context<Self>) {
         let opts = self.auto_pair();
         if Self::type_char_in(&mut self.buf, s, kind, opts) {
-            // A letter extends the word at the caret, which waits to be checked until a space ends it.
-            self.spell_typing = s
-                .chars()
-                .all(char::is_alphanumeric)
-                .then_some(self.buf.head);
             self.after_edit(Some(window), cx);
         }
     }
@@ -2419,8 +2435,6 @@ impl Editor {
         let live = self.live_preview;
         let path = self.name.to_string();
         let fold_options = self.fold_options();
-        let speller = crate::spellcheck::active(cx);
-        let typing = self.spell_typing.filter(|&t| t == self.buf.head);
         self.pending_parse = Some(cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -2430,9 +2444,6 @@ impl Editor {
                     let lines = highlight_lines(&doc);
                     let code = code_highlights(&doc);
                     let foldables = fold::foldables(&doc, &text, fold_options);
-                    let spelling = speller
-                        .map(|s| crate::spellcheck::NoteSpelling::check(&s, &doc, typing))
-                        .unwrap_or_default();
                     let widgets = match &widget_source {
                         Some(source) => {
                             let built = build_widgets(&path, &doc, source.as_ref(), build_options);
@@ -2455,7 +2466,6 @@ impl Editor {
                         flairs,
                         foldables,
                         code,
-                        spelling,
                     )
                 })
                 .await;
@@ -2464,10 +2474,6 @@ impl Editor {
                 // A slightly stale decoration set is better than none while typing.
                 editor.highlights = Arc::new(result.0);
                 editor.code_runs = Arc::new(result.7);
-                editor.spelling = result.8;
-                if editor.spelling.check_ms > 0. {
-                    editor.spell_samples.add(editor.spelling.check_ms);
-                }
                 let widgets = result.4;
                 editor
                     .widget_heights
@@ -2586,11 +2592,7 @@ impl Editor {
             let left = left != this.line_is_rtl(this.buf.cursor_at(s.head).line);
             let target = if !select && !s.is_empty() {
                 // A plain arrow collapses the selection to its edge.
-                if left {
-                    sel.start
-                } else {
-                    sel.end
-                }
+                if left { sel.start } else { sel.end }
             } else if left {
                 this.buf.prev_char_boundary(s.head)
             } else {
@@ -5164,21 +5166,10 @@ impl Editor {
         let Some(at) = self.offset_at_point(window, event.position) else {
             return;
         };
-        let mut selection = self.buf.clipboard_text(&[self.buf.selection()]);
+        let selection = self.buf.clipboard_text(&[self.buf.selection()]);
         let selected = self.buf.selection();
-        let mut keep = !selected.is_empty() && selected.start <= at && at <= selected.end;
-        // A misspelled word under the pointer is selected, the caret at its
-        // end, and the menu leads with its corrections (Chromium's way).
-        let spelling = self.misspelling_at(at, cx);
-        if let Some(hit) = &spelling {
-            self.buf.collapse_cursors();
-            self.buf.goal = None;
-            self.buf.marked = None;
-            self.buf.anchor = hit.range.start;
-            self.buf.head = hit.range.end;
-            selection = hit.word.clone();
-            keep = true;
-        } else if !keep {
+        let keep = !selected.is_empty() && selected.start <= at && at <= selected.end;
+        if !keep {
             self.buf.collapse_cursors();
             self.buf.goal = None;
             self.buf.marked = None;
@@ -5195,7 +5186,6 @@ impl Editor {
             selection,
             selected: keep,
             link,
-            spelling,
         });
         cx.notify();
     }
@@ -5229,50 +5219,8 @@ impl Editor {
             selection,
             selected,
             link,
-            spelling: None,
         });
         true
-    }
-
-    /// The misspelled word at byte `at`, from the last check, with the
-    /// speller's corrections; `None` when the spellchecker is off or the
-    /// word has changed since.
-    fn misspelling_at(&self, at: usize, cx: &App) -> Option<crate::spellcheck::SpellHit> {
-        let speller = crate::spellcheck::active(cx)?;
-        let range = self.spelling.at(at)?;
-        let word = self.buf.text().get(range.clone())?.to_string();
-        if speller.check(&word) {
-            return None;
-        }
-        let suggestions = speller.suggest(&word);
-        Some(crate::spellcheck::SpellHit {
-            range,
-            word,
-            suggestions,
-        })
-    }
-
-    /// A correction picked from the menu: the word replaced, the caret
-    /// after it, one undo step. Nothing happens when the text there is no
-    /// longer the word the menu was opened on.
-    pub fn replace_misspelling(
-        &mut self,
-        hit: &crate::spellcheck::SpellHit,
-        with: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.buf.text().get(hit.range.clone()) != Some(hit.word.as_str()) {
-            return;
-        }
-        let end = hit.range.start + with.len();
-        self.edit_many(
-            vec![(hit.range.clone(), with.to_string())],
-            end,
-            None,
-            window,
-            cx,
-        );
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -5485,7 +5433,7 @@ fn widget_lines(text: &str, widgets: Vec<Widget>) -> Vec<(Range<usize>, Widget)>
 /// mode draws none at all, and an indented code block, having no fence
 /// line to carry one, gets none either: a note of eight blocks whose only
 /// indented one was the fifth showed seven flairs. Observed 2026-10-25,
-/// `docs/tft/Specification.md`.
+/// `docs/Specification.md`.
 #[derive(Debug, Clone, PartialEq)]
 struct Flair {
     /// The line the opening fence is on.
@@ -6079,13 +6027,15 @@ fn run_for(
         match kind {
             HighlightKind::Heading(h) => {
                 // The setext underline row is the heading's markup: it keeps
-                // the heading colour and its own line, but body weight and
-                // body size (`line_block`), which is what Obsidian computes
-                // for `cm-formatting-header` — 16 px at 400.
+                // its own line, but body weight and body size (`line_block`),
+                // which is what Obsidian computes for
+                // `cm-formatting-header` — 16 px at 400.
+                //
+                // Headings stay the body's colour: TFT's primary accent on
+                // every `#`/`##` row was too loud against the text.
                 if !h.underline {
                     font.weight = FontWeight::BOLD;
                 }
-                color = p.accent;
             }
             HighlightKind::Wikilink | HighlightKind::Embed | HighlightKind::Link => {
                 color = p.link;
@@ -7532,7 +7482,6 @@ impl Element for EditorElement {
         let palette = self.editor.read(cx).palette.clone();
         let text_color = palette.text;
         let text_font = window.text_style().font();
-        let spell_lines = self.editor.read(cx).spelling.lines.clone();
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
             for quad in prepaint.decor.drain(..) {
                 window.paint_quad(quad);
@@ -7689,20 +7638,6 @@ impl Element for EditorElement {
                     &palette,
                     window,
                 );
-                if let Some(misspelled) = spell_lines.get(visible.line) {
-                    let rtl_boxes = |s: usize, e: usize| shaped.range_boxes(s, e, px(0.));
-                    crate::spellcheck::paint_line(
-                        misspelled,
-                        &shaped.display,
-                        &shaped.line,
-                        shaped
-                            .is_rtl()
-                            .then_some(&rtl_boxes as &crate::spellcheck::RowBoxes<'_>),
-                        origin,
-                        visible.row_height,
-                        window,
-                    );
-                }
             }
             for w in prepaint.widgets.iter_mut() {
                 if let Some((origin, shaped)) = &w.prefix {
@@ -7896,7 +7831,7 @@ impl Element for EditorElement {
 /// at `left` on a line box from `top` to `bottom`. Obsidian 1.15.0 opened
 /// it 1 to 2 px right of and below the caret's left and its line's middle
 /// (not under the line), which over the five readings of
-/// `tools/obsidian-probe/results/2026-11-09-app-window-commands.json` is
+/// `tools/reference-probe/results/2026-11-09-app-window-commands.json` is
 /// that point a pixel on, rounded up.
 fn caret_menu_point(left: f32, top: f32, bottom: f32) -> (f32, f32) {
     let middle = (top + bottom) / 2.;
@@ -8072,7 +8007,7 @@ mod tests {
     }
 
     #[test]
-    fn a_flair_per_fence_with_obsidians_label() {
+    fn a_flair_per_fence_with_references_label() {
         // The six display names that were read out of a running Obsidian,
         // an unregistered info string kept verbatim, and a fence with none
         // at all, whose flair is there with an empty label.
@@ -8191,7 +8126,7 @@ mod tests {
 
     #[test]
     fn the_editor_reserves_the_reading_views_header_above_line_zero() {
-        use crate::reading::view::{header_height, HEADER_TOP};
+        use crate::reading::view::{HEADER_TOP, header_height};
         // The reading view's header row and the editor's lead above line 0
         // come from the same function, so a mode switch leaves the first
         // line where it was: 24 px of padding, and under `showInlineTitle`

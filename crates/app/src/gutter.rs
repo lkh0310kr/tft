@@ -5,7 +5,7 @@
 //! a line's direction — are `tft_text::gutter` and `tft_text::bidi`;
 //! this module turns them into geometry and paint.
 //!
-//! Measured in Obsidian 1.15.0 (`tools/obsidian-probe/gutter-guides-rtl.mjs`,
+//! Measured in Obsidian 1.15.0 (`tools/reference-probe/gutter-guides-rtl.mjs`,
 //! 2026-11-15): the gutter sits at the start edge of the text column (the
 //! 700 px readable column, or the whole pane) and the text moves over by
 //! its width plus a 24 px margin, so the column keeps its width and the
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_obsidians() {
+    fn the_defaults_are_references() {
         let c = Chrome::default();
         assert!(!c.line_numbers && c.indent_guides && !c.right_to_left);
     }

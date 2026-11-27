@@ -14,7 +14,7 @@
 //! regex after it. Unknown prefixes stay part of the word.
 //!
 //! Half-typed input is read as far as it goes, and Obsidian is not uniform
-//! about it (`docs/tft/Specification.md`, "A half-typed query: tolerated,
+//! about it (`docs/Specification.md`, "A half-typed query: tolerated,
 //! or nothing at all"): a dangling `OR` or `-`, a stray `)`, a leading `(`
 //! and an unclosed quote all match as if they were not there, while a
 //! dangling `AND` and an unclosed trailing `(` make the whole query match
@@ -698,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_uses_obsidians_labels() {
+    fn explain_uses_references_labels() {
         let q = parse(r#"-file:draft (tag:#work OR "exact one") match-case:Case /re/ [p:>3]"#);
         assert_eq!(
             q.explain(),

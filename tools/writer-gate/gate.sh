@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # The Writer gate, phase 3: "the vault round-trips byte-identical after a week
-# of mixed use in both apps" (docs/tft/Development.md, [[#Writer (phase 3)]]).
+# of mixed use in both apps" (docs/Development.md, [[#Writer (phase 3)]]).
 #
 # The harness half -- every path from a keystroke to a file's bytes -- is
 # `cargo test -p text --test writer_roundtrip`. This script is the other
@@ -14,7 +14,7 @@
 #
 #   the gate vault  the deciding vault. Only TFT and Obsidian ever write to it,
 #              so a moved byte has exactly two suspects. Snapshot and diff.
-#   docs/tft the vault that is actually lived in, watched through git --
+#   docs the vault that is actually lived in, watched through git --
 #              free evidence, but repo tooling writes there too, so a moved
 #              byte has three suspects and the verdict never rests on it.
 #
@@ -32,7 +32,7 @@ set -euo pipefail
 GATE_DIR="${TFT_GATE_DIR:-$HOME/.local/share/tft-gate}"
 VAULT="${TFT_GATE_VAULT:?set TFT_GATE_VAULT to the gate vault (the real vault the gate runs on)}"
 REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
-DOCS="$REPO/docs/tft"
+DOCS="$REPO/docs"
 EXCLUDE=workspace.json
 NAME="$(basename "$VAULT")"
 SLUG="$(printf %s "$NAME" | tr "[:upper:] " "[:lower:]-")"
@@ -76,11 +76,11 @@ cmd_baseline() {
     printf 'snapshot  %s  (%s files)\n' "$dest" "$(find "$dest" -type f | wc -l)"
     printf 'manifest  %s\n' "$GATE_DIR/$SLUG-$date.sha256"
 
-    # docs/tft needs no copy: git holds every byte. Record the commit the
+    # docs needs no copy: git holds every byte. Record the commit the
     # day started on, so a later diff has something to name.
     local head
     head="$(git -C "$REPO" rev-parse --short HEAD)"
-    printf '%s  %s  docs/tft at %s\n' "$date" "$(date +%T)" "$head" \
+    printf '%s  %s  docs at %s\n' "$date" "$(date +%T)" "$head" \
         >> "$GATE_DIR/docs-tft-heads.txt"
     printf 'docs vault  at %s' "$head"
     if [ -n "$(git -C "$REPO" status --porcelain -- "$DOCS")" ]; then
@@ -120,7 +120,7 @@ Only the second kind fails the gate.
 NOTE
     fi
 
-    rule "docs/tft (git)"
+    rule "docs (git)"
     if [ -n "$(git -C "$REPO" status --porcelain -- "$DOCS")" ]; then
         git -C "$REPO" status --porcelain -- "$DOCS"
         git -C "$REPO" diff --stat -- "$DOCS" || true

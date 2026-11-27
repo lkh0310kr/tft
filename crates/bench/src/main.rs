@@ -542,7 +542,7 @@ fn generate_vault(dir: &Path, notes: usize, seed: u64) -> Result<GenerateStats, 
         .map(|p| dir.join(p.path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")))
         .collect();
     dirs.push(dir.join("Attachments"));
-    dirs.push(dir.join(".obsidian"));
+    dirs.push(dir.join(".tft"));
     dirs.sort();
     dirs.dedup();
     for d in &dirs {
@@ -561,7 +561,7 @@ fn generate_vault(dir: &Path, notes: usize, seed: u64) -> Result<GenerateStats, 
     (0..attachments)
         .into_par_iter()
         .try_for_each(|i| io(&dir.join(format!("Attachments/img-{i}.png")), &png))?;
-    io(&dir.join(".obsidian/app.json"), b"{}\n")?;
+    io(&dir.join(".tft/app.json"), b"{}\n")?;
 
     Ok(GenerateStats {
         notes: plans.len(),

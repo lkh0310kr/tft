@@ -1,6 +1,6 @@
 //! Excluded files: the `userIgnoreFilters` list of `app.json`, as
 //! Obsidian 1.15.1's `metadataCache.isUserIgnored` reads it (observed
-//! 2026-11-16, `tools/obsidian-probe/excluded-files.mjs`).
+//! 2026-11-16, `tools/reference-probe/excluded-files.mjs`).
 //!
 //! Each entry is trimmed first. One that then starts and ends with `/` and
 //! has something between is a regular expression, searched for anywhere in
@@ -189,7 +189,7 @@ mod tests {
     /// Every row of `results/2026-11-16-excluded-files.json` step s01: the
     /// filter list and the paths Obsidian 1.15.1 called ignored.
     #[test]
-    fn matches_obsidians_table() {
+    fn matches_references_table() {
         let all_archive = [
             "Archive/Old.md",
             "Archive/Deep/Deepest.md",

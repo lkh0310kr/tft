@@ -1,18 +1,18 @@
-//! The ratchets: Obsidian's own output, and Prism's, token for token.
+//! The ratchets: 기준 앱's own output, and Prism's, token for token.
 //!
-//! `tests/corpus/obsidian-1.14.5.json` holds, per language, a sample of
-//! source and the exact `innerHTML` Obsidian 1.14.5 rendered it to — read
-//! off a real Obsidian by `tools/obsidian-probe/code-highlight.mjs` on
+//! `tests/corpus/reference-app-1.14.5.json` holds, per language, a sample of
+//! source and the exact `innerHTML` 기준 앱 1.14.5 rendered it to — read
+//! off a real 기준 앱 by `tools/reference-probe/code-highlight.mjs` on
 //! 2026-11-02. A ported grammar is correct when its HTML is identical, and
 //! that is a strong test: it compares every token's name, its aliases, its
 //! nesting and its boundaries at once.
 //!
 //! `tests/corpus/prism-1.29.0.json` is the same thing with Prism itself as
-//! the renderer: `tools/prism-port/port.js` loads Prism the way Obsidian's
-//! copy is loaded — with that order it reproduces every Obsidian sample
+//! the renderer: `tools/prism-port/port.js` loads Prism the way 기준 앱's
+//! copy is loaded — with that order it reproduces every 기준 앱 sample
 //! above byte for byte — and renders the longer samples in
 //! `tools/prism-port/samples/`, one per ported language. It is what holds
-//! the languages the Obsidian probe has no sample for.
+//! the languages the 기준 앱 probe has no sample for.
 //!
 //! A language with no grammar yet is listed as unported rather than failed,
 //! so a corpus can hold more samples than the crate has languages.
@@ -30,8 +30,8 @@ fn corpus(text: &str) -> BTreeMap<String, Sample> {
     serde_json::from_str(text).expect("the corpus parses")
 }
 
-fn obsidian() -> BTreeMap<String, Sample> {
-    corpus(include_str!("corpus/obsidian-1.14.5.json"))
+fn reference() -> BTreeMap<String, Sample> {
+    corpus(include_str!("corpus/reference-app-1.14.5.json"))
 }
 
 fn prism() -> BTreeMap<String, Sample> {
@@ -76,10 +76,10 @@ fn check(name: &str, corpus: &BTreeMap<String, Sample>) -> Vec<String> {
     checked
 }
 
-/// Every ported language renders exactly as Obsidian rendered it.
+/// Every ported language renders exactly as 기준 앱 rendered it.
 #[test]
-fn the_ported_languages_match_obsidian() {
-    check("Obsidian", &obsidian());
+fn the_ported_languages_match_reference() {
+    check("Reference", &reference());
 }
 
 /// Every ported language renders exactly as Prism renders it.
@@ -106,7 +106,7 @@ fn every_ported_language_has_a_prism_sample() {
 /// fails this was recorded wrong and would make the tests above a lie.
 #[test]
 fn every_sample_s_html_carries_its_own_source() {
-    for (lang, sample) in obsidian().into_iter().chain(prism()) {
+    for (lang, sample) in reference().into_iter().chain(prism()) {
         let text = strip_tags(&sample.html);
         assert_eq!(
             text, sample.source,
@@ -115,10 +115,10 @@ fn every_sample_s_html_carries_its_own_source() {
     }
 }
 
-/// The Obsidian probe's own record of each block: the class Obsidian gave
+/// The 기준 앱 probe's own record of each block: the class 기준 앱 gave
 /// the `code` element, and how many tokens it counted.
 #[test]
-fn the_obsidian_samples_are_what_the_probe_saw() {
+fn the_reference_samples_are_what_the_probe_saw() {
     #[derive(serde::Deserialize)]
     struct Probe {
         html: String,
@@ -128,7 +128,7 @@ fn the_obsidian_samples_are_what_the_probe_saw() {
         token_count: usize,
     }
     let probes: BTreeMap<String, Probe> =
-        serde_json::from_str(include_str!("corpus/obsidian-1.14.5.json")).unwrap();
+        serde_json::from_str(include_str!("corpus/reference-app-1.14.5.json")).unwrap();
     for (lang, sample) in probes {
         assert!(
             sample.code_class.contains(&format!("language-{lang}"))

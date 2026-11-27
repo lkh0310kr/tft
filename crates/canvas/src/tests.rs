@@ -593,7 +593,7 @@ fn arrow_heads_point_along_the_direction() {
 }
 
 #[test]
-fn edge_ends_apply_obsidians_defaults() {
+fn edge_ends_apply_references_defaults() {
     let mut e = Edge::new("e", "a", "b");
     assert_eq!(edge_ends(&e), (false, true), "an arrow at the end only");
     e.from_end = Some(EndStyle::Arrow);
@@ -1868,7 +1868,7 @@ fn scene_from(text: &str) -> Scene {
 }
 
 #[test]
-fn a_file_obsidian_wrote_comes_back_byte_identical_without_edits() {
+fn a_file_reference_wrote_comes_back_byte_identical_without_edits() {
     for (name, text) in [
         ("order", ORDER_OUT),
         ("scrambled", SCRAMBLED_OUT),
@@ -1881,7 +1881,7 @@ fn a_file_obsidian_wrote_comes_back_byte_identical_without_edits() {
 }
 
 #[test]
-fn moving_a_node_writes_what_obsidian_wrote() {
+fn moving_a_node_writes_what_reference_wrote() {
     let mut scene = scene_from(ORDER_IN);
     scene.selection = Selection::only_node("t3");
     scene.begin();
@@ -1900,7 +1900,7 @@ fn moving_a_node_writes_what_obsidian_wrote() {
 }
 
 #[test]
-fn a_move_and_an_undo_leave_obsidians_bytes_alone() {
+fn a_move_and_an_undo_leave_references_bytes_alone() {
     for text in [ORDER_OUT, SCRAMBLED_OUT, NOEDGES_OUT] {
         let mut scene = scene_from(text);
         scene.select_all();
@@ -1933,7 +1933,7 @@ fn a_set_of_edits_undone_one_by_one_returns_to_the_file() {
 }
 
 #[test]
-fn control_points_reach_half_the_span_within_obsidians_bounds() {
+fn control_points_reach_half_the_span_within_references_bounds() {
     // Observed 2026-10-21: two 160 by 60 cards, right side to left side.
     let a = Rect::new(980.0, 0.0, 160.0, 60.0);
     let close_by = Rect::new(1320.0, 50.0, 160.0, 60.0);

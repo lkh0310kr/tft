@@ -1,6 +1,6 @@
 [package]
 name = "commands"
-description = "Command registry mirroring Obsidian's command ids and default hotkeys"
+description = "Command registry TFT command IDs and default hotkeys"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

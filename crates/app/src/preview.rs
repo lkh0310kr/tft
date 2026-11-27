@@ -298,6 +298,34 @@ pub fn touches(touch: &[Range<usize>], range: &Range<usize>) -> bool {
         .any(|t| t.start <= range.end && t.end >= range.start)
 }
 
+/// Hides the delimiters an inline construct carries at either end of its
+/// span: `**`/`__` for strong, `*`/`_` for emphasis, and so on.
+///
+/// The two ends are independent because a construct may cross a soft line
+/// break: `*italic across` on one line carries the opener, and the closer
+/// `*` is on the line that ends it. Each line's span is the clipped part of
+/// the construct, so it has only its own end's delimiter — requiring both
+/// on the same span (the old rule) left both lines raw.
+fn hide_edges(
+    t: &str,
+    r: &Range<usize>,
+    delimiters: &[&str],
+    kind: HighlightKind,
+    hides: &mut Vec<(Range<usize>, Cow<'static, str>, HighlightKind)>,
+) {
+    let hide = |range: Range<usize>, hides: &mut Vec<_>| {
+        if !range.is_empty() {
+            hides.push((range, Cow::Borrowed(""), kind));
+        }
+    };
+    if let Some(d) = delimiters.iter().find(|d| t.starts_with(*d)) {
+        hide(r.start..r.start + d.len(), hides);
+    }
+    if let Some(d) = delimiters.iter().find(|d| t.ends_with(*d)) {
+        hide(r.end - d.len()..r.end, hides);
+    }
+}
+
 /// Builds the Live Preview text of `line`. `touch` holds the parts of the
 /// selections on this line (collapsed cursors included), line-relative;
 /// any construct one of them touches keeps its source.
@@ -364,6 +392,14 @@ pub fn display_line_scripted(
     script: &ScriptPlaceholder<'_>,
 ) -> DisplayLine {
     let (scale, mut decor) = line_block(spans);
+    // The rule stands in for the `---` source. When a cursor reveals that
+    // source, the rule has to go with it, or the raw line and the preview
+    // are drawn on top of each other.
+    if decor.rule {
+        decor.rule = spans
+            .iter()
+            .any(|s| s.kind == HighlightKind::ThematicBreak && !touches(touch, &s.range));
+    }
     let mut formulas: Vec<(Range<usize>, String, bool)> = Vec::new();
     decor.task_done = spans.iter().any(|s| {
         s.kind == HighlightKind::Task
@@ -382,16 +418,6 @@ pub fn display_line_scripted(
             continue;
         };
         let k = span.kind;
-        let both_ends =
-            |n: usize,
-             open: &[&str],
-             hides: &mut Vec<(Range<usize>, Cow<'static, str>, HighlightKind)>| {
-                if t.len() >= 2 * n && open.iter().any(|o| t.starts_with(o)) && t.ends_with(&t[..n])
-                {
-                    hides.push((r.start..r.start + n, "".into(), k));
-                    hides.push((r.end - n..r.end, "".into(), k));
-                }
-            };
         match k {
             // A setext underline is *not* hidden: the `=====` or `-----` row
             // keeps its characters and its own line, at body size and weight
@@ -412,10 +438,10 @@ pub fn display_line_scripted(
                     }
                 }
             }
-            HighlightKind::Strong => both_ends(2, &["**", "__"], &mut hides),
-            HighlightKind::Emphasis => both_ends(1, &["*", "_"], &mut hides),
-            HighlightKind::Strikethrough => both_ends(2, &["~~"], &mut hides),
-            HighlightKind::Highlight => both_ends(2, &["=="], &mut hides),
+            HighlightKind::Strong => hide_edges(t, &r, &["**", "__"], k, &mut hides),
+            HighlightKind::Emphasis => hide_edges(t, &r, &["*", "_"], k, &mut hides),
+            HighlightKind::Strikethrough => hide_edges(t, &r, &["~~"], k, &mut hides),
+            HighlightKind::Highlight => hide_edges(t, &r, &["=="], k, &mut hides),
             HighlightKind::Code => {
                 let n = t.bytes().take_while(|&b| b == b'`').count();
                 if n > 0 && t.len() >= 2 * n && t.ends_with(&t[..n]) {
@@ -781,6 +807,39 @@ mod tests {
         assert_eq!(render("**b** *c*", Some(5..5)).text, "**b** c");
         assert_eq!(render("**b** *c*", Some(0..0)).text, "**b** c");
         assert_eq!(render("**b** *c*", Some(6..6)).text, "b *c*");
+    }
+
+    /// A construct that crosses a soft line break carries its opener on the
+    /// first line and its closer on the last. Each line's span is the clipped
+    /// part, so each hides its own end; a middle line has no delimiter to
+    /// hide. This used to leave both lines raw, since `both_ends` wanted the
+    /// opener and the closer on one span.
+    #[test]
+    fn markers_across_a_soft_break_hide_on_their_own_lines() {
+        for (src, first, last) in [
+            ("*a\nb*", "a", "b"),
+            ("**a\nb**", "a", "b"),
+            ("~~a\nb~~", "a", "b"),
+            ("==a\nb==", "a", "b"),
+        ] {
+            assert_eq!(render_at(src, 0, None).text, first, "{src:?} first line");
+            assert_eq!(render_at(src, 1, None).text, last, "{src:?} last line");
+        }
+        assert_eq!(render_at("*a\nmid\nb*", 1, None).text, "mid");
+        // A cursor on one line keeps that line's source, as any construct's does.
+        assert_eq!(render_at("*a\nb*", 0, Some(0..0)).text, "*a");
+    }
+
+    /// The rule is the preview of `---`, so it yields to the raw source while
+    /// a cursor is on the line: drawing both put the rule through the text.
+    #[test]
+    fn a_revealed_thematic_break_drops_its_rule() {
+        let preview = render_at("a\n\n---", 2, None);
+        assert_eq!(preview.text, "");
+        assert!(preview.decor.rule);
+        let raw = render_at("a\n\n---", 2, Some(0..0));
+        assert_eq!(raw.text, "---");
+        assert!(!raw.decor.rule);
     }
 
     /// A `<sup>`, `<sub>` or `<small>` run inside an inline HTML element is

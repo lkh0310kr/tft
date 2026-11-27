@@ -16,10 +16,10 @@ target/
 .npmrc
 /.vscode
 /.idea
-/docs/tft/.obsidian/workspace.json
+/docs/.tft/workspace.json
 __pycache__/
 
-# Obsidian scratch in the dogfooded vaults: the trash it moves deletions to,
+# Temporary files created in the project Vaults: the trash it moves deletions to,
 # and the files it names for you when you make one from the ribbon.
 .trash/
 Untitled.md
@@ -33,4 +33,3 @@ Untitled [0-9]*.base
 /.claude/
 .serena
 .workspace
-

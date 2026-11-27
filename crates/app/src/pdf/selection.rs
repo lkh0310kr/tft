@@ -1,7 +1,7 @@
 //! Text selection in a PDF: where a point falls among a page's text items,
 //! what a selection covers, the text it copies and the link it names.
 //!
-//! What it does is observed (`tools/obsidian-probe/results/2026-11-15-pdf-selection.json`,
+//! What it does is observed (`tools/reference-probe/results/2026-11-15-pdf-selection.json`,
 //! Obsidian 1.15.0, written up in
 //! [[Specification#Observed PDF text selection, Obsidian 1.15.0]]): pdf.js's
 //! text layer is one span per text item, so a drag selects characters of
@@ -271,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn the_observed_multi_item_selection_reads_and_copies_as_obsidian_did() {
+    fn the_observed_multi_item_selection_reads_and_copies_as_reference_did() {
         let items = Arc::new(page());
         let pages = |p: usize| (p == 0).then(|| items.clone());
         let text = selected_text(pos(0, 2), pos(4, 3), &pages);

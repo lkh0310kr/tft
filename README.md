@@ -1,9 +1,7 @@
 # TFT
 
-TFT is a native knowledge base written in Rust on [GPUI](https://gpui.rs). It opens an existing
-[Obsidian](https://obsidian.md) vault in place: the same folder, the same `.obsidian` files, the
-same Markdown dialect and the same `.canvas` files. There is no import step, no conversion and no
-second copy of anything. TFT is an independent implementation and is not affiliated with Obsidian.
+TFT is a native Markdown knowledge base written in Rust on [GPUI](https://gpui.rs). It stores
+notes and app settings in the same vault folder and does not create a second copy of note files.
 
 > Keep a backup of any vault you open with it. Editing is newer code against files you cannot get
 > back.
@@ -12,7 +10,7 @@ second copy of anything. TFT is an independent implementation and is not affilia
 
 - **Vaults** are folders. TFT scans them, watches them, and preserves line endings, byte-order
   marks, JSON key order and unknown config keys. The vault is the source of truth.
-- **Reading**: CommonMark, the GitHub extensions Obsidian uses, wikilinks and embeds, callouts,
+- **Reading**: CommonMark, GitHub Markdown extensions, wikilinks and embeds, callouts,
   properties, tables, math, Mermaid diagrams, code highlighting, PDF pages and media. One
   Markdown parser feeds reading, editing, the metadata cache and link rewriting.
 - **Writing**: Live Preview and Source modes, find and replace, multiple cursors, auto-pairing,
@@ -20,20 +18,20 @@ second copy of anything. TFT is an independent implementation and is not affilia
   references, slash commands and autocompletion for `[[`, `![[` and `#`.
 - **Shell**: a frameless window with Files and Search, a horizontally scrolling tab strip,
   split tab groups, draggable tabs, popout windows, quick switcher and graph.
-- **Canvas and PDF**: `.canvas` pan/zoom/edit/undo in Obsidian's JSON bytes; PDF viewing,
+- **Canvas and PDF**: `.canvas` pan/zoom/edit/undo in JSON Canvas format; PDF viewing,
   thumbnails, search and text selection, including embedded `![[x.pdf]]`.
 - **Export**: Export to PDF and canvas Export as image.
-- **Automation**: Obsidian command ids and `hotkeys.json` bindings, a CLI that hands a second
+- **Automation**: command IDs and `hotkeys.json` bindings, a CLI that hands a second
   invocation to the running window, and an optional local control socket for tests and recordings.
 
 Settings is deliberately small: Appearance has Light / Dark / System, and Editor has spellcheck
 and its languages. Core plugins are always on; their separate settings pages and the old tabbed
-Settings sidebar are gone. See [docs/tft/Specification.md](docs/tft/Specification.md) for the
+Settings sidebar are gone. See [docs/Specification.md](docs/Specification.md) for the
 normative behavior and the deliberately deleted features.
 
 ## Running it
 
-The vault argument may be a folder, a file inside a vault, or an `obsidian://` URI:
+The vault argument may be a folder, a file inside a vault, or an `tft://` URI:
 
 ```sh
 cargo run --release -p desktop -- /path/to/vault
@@ -126,8 +124,8 @@ apps/web            GPUI WebAssembly app shell backed by Google Drive
 apps/web-leptos     preserved Leptos implementation (separate workspace)
 crates/app          shared app state/use cases and wasm-safe services
 crates/domain       VaultData graph, storage identities and invariants
-crates/vault        vault scanning, file kinds, .obsidian reads/writes
-crates/markdown     CommonMark + GFM + Obsidian syntax, one spanned tree
+crates/vault        vault scanning, file kinds, .tft reads/writes
+crates/markdown     CommonMark + GFM + TFT Markdown extensions, one spanned tree
 crates/cache        CachedMetadata and the link index/resolver
 crates/formats      on-disk formats: configs, canvas, properties
 crates/commands     command ids, registry, default hotkeys
@@ -151,13 +149,12 @@ crates/bench        synthetic vault generator and index timer
 ## Compatibility and security
 
 Vault and format compatibility come first: no conversion, no data loss. The Markdown parser is
-held to CommonMark's 652 examples and Obsidian's rendering corpus; the writer is held to
+held to CommonMark's 652 examples and the checked-in rendering corpus; the writer is held to
 byte-identical round trips. Theme compatibility is the two built-in palettes only, and there is
 no community-plugin runtime.
 
-Report security problems privately as described in [SECURITY.md](SECURITY.md). The app writes
-only inside the vault (apart from moving a deleted file to the system trash), never executes
-vault content, and its control socket is local and owner-only.
+The app writes only inside the vault (apart from moving a deleted file to the system trash),
+never executes vault content, and its control socket is local and owner-only.
 
 ## License
 

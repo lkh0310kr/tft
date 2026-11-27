@@ -1146,8 +1146,7 @@ mod tests {
     /// untouched and the other properties are not rewritten.
     #[test]
     fn a_pill_removed_in_the_reading_view_rewrites_only_its_line() {
-        let text =
-            "\u{feff}---\r\ntitle: Hi\r\ntags:\r\n  - one\r\n  - two\r\n  - three\r\n---\r\nbody\r\n";
+        let text = "\u{feff}---\r\ntitle: Hi\r\ntags:\r\n  - one\r\n  - two\r\n  - three\r\n---\r\nbody\r\n";
         let props = tft_cache::note_properties(text).expect("a block");
         let types = PropertyTypes::default();
         let mut id = 0;
@@ -1657,7 +1656,7 @@ mod tests {
 
     /// A text value selected whole, retyped and committed with Enter.
     #[test]
-    fn pane_retyping_a_text_value_writes_obsidians_bytes() {
+    fn pane_retyping_a_text_value_writes_references_bytes() {
         let rows = note_rows(PANE_SEED);
         let mut field = value_field(row(&rows, "title"));
         assert_eq!(field.text, "Old title");
@@ -1675,7 +1674,7 @@ mod tests {
 
     /// A tag typed into the input after the pills, and Enter.
     #[test]
-    fn pane_appending_a_tag_writes_obsidians_bytes() {
+    fn pane_appending_a_tag_writes_references_bytes() {
         let rows = note_rows(PANE_SEED);
         let mut field = value_field(row(&rows, "tags"));
         assert_eq!(field.text, "", "the input after the pills");

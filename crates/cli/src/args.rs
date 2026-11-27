@@ -9,7 +9,7 @@
 //! The parser is strict, which the old one was not: an unknown flag, a
 //! missing value and a third positional argument are errors with a message
 //! naming the flag, rather than a note name set to `--surce`. What it keeps
-//! is the shape — `tft <vault> [note]`, a bare `obsidian://` argument,
+//! is the shape — `tft <vault> [note]`, a bare `tft://` argument,
 //! and the flags that open the app in a given state for a screenshot.
 
 use std::path::PathBuf;
@@ -88,7 +88,7 @@ pub const FLAGS: &[Flag] = &[
         Some("<uri>"),
         None,
         OPENING,
-        "Act on an `obsidian://` (or `tft://`) URI once the vault has loaded; a bare argument of that scheme does the same",
+        "Act on an `tft://` URI once the vault has loaded; a bare argument of that scheme does the same",
     ),
     f(
         "--new-window",
@@ -109,7 +109,7 @@ pub const FLAGS: &[Flag] = &[
         Some("<style>"),
         None,
         WINDOW,
-        "`hidden` (the default, Obsidian's on Linux and Windows) or `native`, the desktop's own title bar",
+        "`hidden` (the default, 기준 앱's on Linux and Windows) or `native`, the desktop's own title bar",
     ),
     f(
         "--search",
@@ -219,18 +219,9 @@ pub const FLAGS: &[Flag] = &[
         DRIVING,
         "Run this many self-driven edits, print the timings and quit",
     ),
+    alias(f("--help", None, None, ABOUT, "Print this and exit"), "-h"),
     alias(
-        f("--help", None, None, ABOUT, "Print this and exit"),
-        "-h",
-    ),
-    alias(
-        f(
-            "--version",
-            None,
-            None,
-            ABOUT,
-            "Print the version and exit",
-        ),
+        f("--version", None, None, ABOUT, "Print the version and exit"),
         "-V",
     ),
 ];
@@ -271,7 +262,7 @@ pub struct Args {
     pub type_text: Option<String>,
     /// Press these keys, comma separated, after `--type`.
     pub accept: Option<String>,
-    /// An `obsidian://` URI to act on once the vault has loaded.
+    /// An `tft://` URI to act on once the vault has loaded.
     pub uri: Option<String>,
     /// Open this cell of the note's first table for editing, before
     /// `--type`, the way clicking one does.
@@ -285,7 +276,7 @@ pub struct Args {
     pub control: Option<PathBuf>,
     /// Window size in logical pixels, `--size 1400x900`.
     pub size: Option<(f32, f32)>,
-    /// `hidden` (the default, Obsidian's on Linux) or `native`.
+    /// `hidden` (the default, 기준 앱's on Linux) or `native`.
     pub frame: Option<String>,
     /// Start a second TFT rather than handing these arguments to the one
     /// already showing the vault.
@@ -392,10 +383,9 @@ where
 }
 
 /// Whether `arg` is a URI TFT acts on. `tft://` is the same scheme
-/// under TFT's own name, for a desktop that has Obsidian installed and
-/// so cannot give `obsidian://` away.
+/// under TFT's own name, for TFT deep links.
 pub fn is_uri(arg: &str) -> bool {
-    arg.starts_with("obsidian://") || arg.starts_with("tft://")
+    arg.starts_with("tft://")
 }
 
 /// Puts one parsed flag into [`Args`]. Every entry of [`FLAGS`] is handled
@@ -408,7 +398,7 @@ fn apply(args: &mut Args, spec: &Flag, value: Option<String>) -> Result<(), Stri
         "--reading" => args.reading = true,
         "--uri" => {
             if !is_uri(&text) {
-                return Err(format!("--uri wants an obsidian:// URI, not {text}"));
+                return Err(format!("--uri wants a tft:// URI, not {text}"));
             }
             args.uri = Some(text);
         }
@@ -440,7 +430,7 @@ fn apply(args: &mut Args, spec: &Flag, value: Option<String>) -> Result<(), Stri
         other => {
             return Err(format!(
                 "{other} is in the flag table but the parser ignores it"
-            ))
+            ));
         }
     }
     Ok(())
@@ -475,16 +465,16 @@ pub fn usage() -> String {
         .max()
         .unwrap_or(16);
     let mut out = format!(
-        "{} — a native knowledge base on Obsidian's own vault format\n\
+        "{} — a native Markdown knowledge base\n\
          \n\
          Usage:\n\
          \u{20} tft [options] [<vault>] [<note>]\n\
          \u{20} tft [options] <file>              a note, canvas, base or PDF; its vault is the\n\
-         \u{20}                                      nearest folder above it holding .obsidian\n\
-         \u{20} tft [options] obsidian://open?file=Note\n\
+         \u{20}                                      nearest folder above it holding .tft\n\
+         \u{20} tft [options] tft://open?file=Note\n\
          \n\
-         With no vault TFT opens the vault manager, which is also where \"Open folder as vault\"\n\
-         is. A second run on a vault that is already open hands it the note, file or URI and raises\n\
+         With no vault TFT opens an empty workspace; use the vault switcher to add one. A second\n\
+         run on a vault that is already open hands it the note, file or URI and raises its window\n\
          its window instead of starting again; --new-window opts out.\n",
         version()
     );
@@ -537,21 +527,21 @@ mod tests {
     #[test]
     fn a_uri_is_recognized_by_its_scheme_anywhere() {
         for line in [
-            vec!["obsidian://open?file=Basalt"],
-            vec!["--source", "obsidian://open?file=Basalt"],
-            vec!["--uri", "obsidian://open?file=Basalt"],
+            vec!["tft://open?file=Basalt"],
+            vec!["--source", "tft://open?file=Basalt"],
+            vec!["--uri", "tft://open?file=Basalt"],
         ] {
             assert_eq!(
                 args(&line).uri.as_deref(),
-                Some("obsidian://open?file=Basalt"),
+                Some("tft://open?file=Basalt"),
                 "{line:?}"
             );
             assert_eq!(args(&line).vault, None, "a URI is not a vault path");
         }
-        // TFT's own scheme, for a desktop where Obsidian owns the other.
+        // TFT's own scheme, for a desktop using TFT deep links.
         assert_eq!(args(&["tft://daily"]).uri.as_deref(), Some("tft://daily"));
-        let e = parse(["--uri", "https://obsidian.md"]).expect_err("refused");
-        assert!(e.contains("obsidian:// URI"), "{e}");
+        let e = parse(["--uri", "https://example.invalid"]).expect_err("refused");
+        assert!(e.contains("tft:// URI"), "{e}");
     }
 
     #[test]
@@ -635,7 +625,7 @@ mod tests {
         match flag.name {
             "--size" => "800x600",
             "--cell" | "--synthetic" | "--stress" => "3",
-            "--uri" => "obsidian://daily",
+            "--uri" => "tft://daily",
             _ => "x",
         }
     }

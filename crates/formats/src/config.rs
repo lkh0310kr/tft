@@ -1,6 +1,6 @@
-//! `.obsidian/*.json` configuration files.
+//! `.tft/*.json` configuration files.
 //!
-//! Obsidian writes these sparsely (only keys that differ from defaults), so every
+//! 기준 앱 writes these sparsely (only keys that differ from defaults), so every
 //! typed field is optional and unknown keys are kept in `extra`.
 
 use indexmap::IndexMap;
@@ -8,16 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Default name of the configuration directory; overridable per vault.
-pub const DEFAULT_CONFIG_DIR: &str = ".obsidian";
+pub const DEFAULT_CONFIG_DIR: &str = ".tft";
 
-/// `app.json`: Editor plus Files & links settings (key names exactly as Obsidian writes them).
+/// `app.json`: Editor plus Files & links settings (key names exactly as 기준 앱 writes them).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppConfig {
-    // Editor
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spellcheck: Option<bool>,
-    // Spellcheck languages live in `tft.json`, not here. Removed editor
-    // keys stay in `extra`; `apps/desktop/src/fixed.rs` fixes their values.
+    // Removed and unmodeled settings stay in `extra` to preserve them.
     /// `system` | `local` | `none`
     #[serde(
         default,
@@ -93,7 +89,7 @@ impl AppConfig {
             .unwrap_or(&[])
     }
 
-    /// Replaces the Excluded files rules the way Obsidian's Settings does:
+    /// Replaces the Excluded files rules the way 기준 앱's Settings does:
     /// deleting the last one leaves the key as `null`, not `[]`.
     pub fn set_ignore_filters(&mut self, filters: Vec<String>) {
         self.user_ignore_filters = Some((!filters.is_empty()).then_some(filters));
@@ -110,7 +106,7 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
-/// `app.json`'s `pdfExportSettings`, in the key order Obsidian writes:
+/// `app.json`'s `pdfExportSettings`, in the key order 기준 앱 writes:
 /// `includeName` (only once the toggle has been touched), `pageSize`,
 /// `landscape`, `margin` (a **string**: `"0"` Default, `"1"` None, `"2"`
 /// Minimal) and `downscalePercent`.
@@ -141,7 +137,7 @@ pub struct PdfExportSettings {
 /// `appearance.json`: the base color scheme only.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AppearanceConfig {
-    /// `obsidian` (dark) | `moonstone` (light) | `system`
+    /// `dark` | `light` | `system`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
     #[serde(flatten)]
@@ -158,7 +154,7 @@ pub struct Hotkey {
 }
 
 /// `hotkeys.json`: command id to its user overrides; an empty list unbinds
-/// the command. Insertion order is kept, like [`PropertyTypes`]: Obsidian
+/// the command. Insertion order is kept, like [`PropertyTypes`]: 기준 앱
 /// writes the file in the order the bindings were made, so a sorted map
 /// would reorder the whole file the first time TFT saved it.
 pub type Hotkeys = IndexMap<String, Vec<Hotkey>>;
@@ -166,7 +162,7 @@ pub type Hotkeys = IndexMap<String, Vec<Hotkey>>;
 /// `core-plugins.json`. Current builds write a map of id to enabled; older
 /// builds wrote an array of enabled ids. Both are accepted.
 ///
-/// The map keeps the file's order: Obsidian writes the plugins in its own
+/// The map keeps the file's order: 기준 앱 writes the plugins in its own
 /// registration order, not alphabetically, so a sorted map would rewrite
 /// every line the first time TFT saved the file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -313,22 +309,22 @@ pub struct SwitcherConfig {
     pub extra: Map<String, Value>,
 }
 
-// The other core-plugin option files Obsidian 1.14.5 writes from its own
-// options tabs, observed on 2026-10-30 (`tools/obsidian-probe/results/
+// The other core-plugin option files 기준 앱 1.14.5 writes from its own
+// options tabs, observed on 2026-10-30 (`tools/reference-probe/results/
 // 2026-10-30-editor-menus.json`, step `s04-plugin-tabs`: every toggle
 // clicked twice, every dropdown walked through its options and back, the
-// `.obsidian` folder diffed after each click).
+// `.tft` folder diffed after each click).
 //
 // Each is sparse and appears only once a control writes, each field is
-// named exactly as Obsidian names it, and the fields are declared in the
-// order Obsidian's own first write put them in. A row whose key the probe
+// named exactly as 기준 앱 names it, and the fields are declared in the
+// order 기준 앱's own first write put them in. A row whose key the probe
 // could not reach -- a file suggester, a slider, a textarea, a button --
 // has no field here, and TFT writes nothing for it rather than guessing
 // a name; `tft::settings::plugin_items` draws those rows tagged.
 
 /// `canvas.json`: the Canvas plugin's options.
 ///
-/// Obsidian's first write held both snap keys at once
+/// 기준 앱's first write held both snap keys at once
 /// (`{"snapToObjects": true, "snapToGrid": false}`), with each dropdown's
 /// key appended as it was picked. Two rows of the tab are not here: the
 /// folder name the `folder` option reveals, and the zoom threshold slider,
@@ -415,7 +411,7 @@ pub struct PagePreviewConfig {
 }
 
 /// A core plugin as the Core plugins tab lists it (names and descriptions
-/// observed in Obsidian 1.14.4) and whether a fresh vault has it on.
+/// observed in 기준 앱 1.14.4) and whether a fresh vault has it on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CorePlugin {
     pub id: &'static str,
@@ -426,13 +422,48 @@ pub struct CorePlugin {
 
 /// The core plugins in the order the Core plugins tab shows them.
 pub const CORE_PLUGINS: &[CorePlugin] = &[
-    CorePlugin { id: "canvas", name: "Canvas", description: "Arrange and connect notes on an infinite canvas.", default_on: true },
-    CorePlugin { id: "file-explorer", name: "Files", description: "Browse the files and folders in your vault.", default_on: true },
-    CorePlugin { id: "graph", name: "Graph view", description: "Visualize the relationships between your notes.", default_on: true },
-    CorePlugin { id: "page-preview", name: "Page preview", description: "Hover an internal link to preview its content. In editor mode, press Ctrl/Cmd while hovering.", default_on: true },
-    CorePlugin { id: "switcher", name: "Quick switcher", description: "Jump to other files with your keyboard.", default_on: true },
-    CorePlugin { id: "global-search", name: "Search", description: "Search for a keyword in all the notes.", default_on: true },
-    CorePlugin { id: "slash-command", name: "Slash commands", description: "Trigger commands in the editor by using the forward slash key.", default_on: false },
+    CorePlugin {
+        id: "canvas",
+        name: "Canvas",
+        description: "Arrange and connect notes on an infinite canvas.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "file-explorer",
+        name: "Files",
+        description: "Browse the files and folders in your vault.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "graph",
+        name: "Graph view",
+        description: "Visualize the relationships between your notes.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "page-preview",
+        name: "Page preview",
+        description: "Hover an internal link to preview its content. In editor mode, press Ctrl/Cmd while hovering.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "switcher",
+        name: "Quick switcher",
+        description: "Jump to other files with your keyboard.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "global-search",
+        name: "Search",
+        description: "Search for a keyword in all the notes.",
+        default_on: true,
+    },
+    CorePlugin {
+        id: "slash-command",
+        name: "Slash commands",
+        description: "Trigger commands in the editor by using the forward slash key.",
+        default_on: false,
+    },
 ];
 
 impl CorePlugins {
@@ -449,7 +480,7 @@ impl CorePlugins {
 
 /// `types.json`: property name to type.
 ///
-/// The map keeps insertion order because Obsidian writes the file that way,
+/// The map keeps insertion order because 기준 앱 writes the file that way,
 /// seeded with `aliases`, `cssclasses` and `tags` before any key the user
 /// assigns; a sorted map would rewrite the whole file on the first save.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -461,9 +492,9 @@ pub struct PropertyTypes {
 }
 
 impl PropertyTypes {
-    /// The entries Obsidian adds to `types.json` whenever it writes the file
+    /// The entries 기준 앱 adds to `types.json` whenever it writes the file
     /// and finds them missing: the built-in keys, each pinned to its reserved
-    /// type. Observed on the gate vault, Obsidian 1.15.0, 2026-11-09: a file
+    /// type. Observed on the gate vault, 기준 앱 1.15.0, 2026-11-09: a file
     /// TFT had written with one key came back as that key, then these
     /// three, then the keys the session assigned -- so they are appended
     /// after whatever the file holds, in this order, and before the new key.
@@ -475,7 +506,7 @@ impl PropertyTypes {
 
     /// Appends the missing defaults. Every writer of the file calls this
     /// first, so a new `types.json` opens with the three and an old one
-    /// gains them where Obsidian would put them.
+    /// gains them where 기준 앱 would put them.
     pub fn seed_defaults(&mut self) {
         for (key, ty) in Self::DEFAULTS {
             if !self.types.contains_key(key) {
@@ -485,10 +516,10 @@ impl PropertyTypes {
     }
 }
 
-/// The type names Obsidian 1.14.4 registers (`registeredTypeWidgets`), which
+/// The type names 기준 앱 1.14.4 registers (`registeredTypeWidgets`), which
 /// are the values `types.json` carries. `text`, `multitext`, `number`,
 /// `checkbox`, `date`, `datetime`, `tags` and `aliases` are the property
-/// types; `file`, `folder` and `property` are Obsidian's other widget types,
+/// types; `file`, `folder` and `property` are 기준 앱's other widget types,
 /// and the properties type menu does not offer them. There is no
 /// `cssclasses` type:
 /// that key infers as `multitext`.
@@ -581,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn pdf_export_settings_keep_obsidians_order_a_string_margin_and_unknown_keys() {
+    fn pdf_export_settings_keep_references_order_a_string_margin_and_unknown_keys() {
         let text = r#"{"spellcheck":true,"pdfExportSettings":{"includeName":true,"pageSize":"A4","landscape":false,"margin":"2","downscalePercent":80,"future":1}}"#;
         let app: AppConfig = serde_json::from_str(text).unwrap();
         let pdf = app.pdf_export_settings.clone().unwrap();
@@ -684,10 +715,10 @@ mod tests {
         assert!(!CorePlugins::is_enabled_or_default(Some(&off), plugin));
     }
 
-    /// Every core-plugin options file: the keys Obsidian 1.14.5 writes read
+    /// Every core-plugin options file: the keys 기준 앱 1.14.5 writes read
     /// into their own fields, an unknown key comes back where it was, and
     /// the bytes round trip exactly. The files the probe saw are the input,
-    /// each with one key Obsidian has never written appended.
+    /// each with one key 기준 앱 has never written appended.
     #[test]
     fn core_plugin_option_files_round_trip_with_an_unknown_key() {
         macro_rules! round_trip {
@@ -751,8 +782,8 @@ mod tests {
     }
 
     #[test]
-    fn types_json_is_seeded_the_way_obsidian_seeds_it() {
-        // The bytes Obsidian 1.15.0 left on the gate vault (2026-11-09) after
+    fn types_json_is_seeded_the_way_reference_seeds_it() {
+        // The bytes 기준 앱 1.15.0 left on the gate vault (2026-11-09) after
         // a session that found `status` alone in the file and assigned two
         // more keys: the one it found, the three defaults, the new ones.
         let observed = "{\n  \"types\": {\n    \"status\": \"date\",\n    \"aliases\": \"aliases\",\n    \"cssclasses\": \"multitext\",\n    \"tags\": \"tags\",\n    \"draft\": \"checkbox\",\n    \"tft\": \"multitext\"\n  }\n}";

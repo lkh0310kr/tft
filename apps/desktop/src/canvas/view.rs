@@ -4,6 +4,7 @@
 
 use crate::assets::icon;
 use crate::canvas::cards::{Cards, TaskOrigin};
+use crate::keymap;
 use crate::canvas::menu::{self, IconItem, ListItem};
 use crate::editor::{Editor, EditorEvent};
 use crate::reading::TaskMarker;
@@ -28,7 +29,7 @@ use tft_formats::canvas::{Canvas, Edge, Node, NodeType, Side};
 
 // ---- constants ----------------------------------------------------------------
 // Screen measurements observed in Obsidian 1.14.4 on 2026-10-21 (see
-// `docs/tft/Specification.md`, "Observed canvas view behavior"). Labels
+// `docs/Specification.md`, "Observed canvas view behavior"). Labels
 // and edges scale with the square root of the zoom: Obsidian draws them in
 // canvas space and counter-scales them by `1 / sqrt(scale)`.
 
@@ -121,28 +122,16 @@ actions!(
 );
 
 /// Key bindings for the canvas; called once at startup. The context is the
-/// view's own, beneath the workspace's, so Ctrl+Z here undoes a card move
+/// view's own, beneath the workspace's, so Mod+Z here undoes a card move
 /// rather than reaching the editor's undo command.
 pub fn bind_keys(cx: &mut App) {
     let ctx = Some("CanvasView");
     cx.bind_keys([
         KeyBinding::new("delete", DeleteSelection, ctx),
         KeyBinding::new("backspace", DeleteSelection, ctx),
-        KeyBinding::new("ctrl-a", SelectAll, ctx),
-        KeyBinding::new("ctrl-z", Undo, ctx),
-        KeyBinding::new("ctrl-shift-z", Redo, ctx),
-        KeyBinding::new("ctrl-y", Redo, ctx),
         KeyBinding::new("escape", ClearSelection, ctx),
-        KeyBinding::new("ctrl-=", ZoomIn, ctx),
-        KeyBinding::new("ctrl--", ZoomOut, ctx),
-        KeyBinding::new("ctrl-0", ResetZoom, ctx),
         KeyBinding::new("shift-1", ZoomToFit, ctx),
         KeyBinding::new("shift-2", ZoomToSelection, ctx),
-        KeyBinding::new("ctrl-c", Copy, ctx),
-        KeyBinding::new("ctrl-x", Cut, ctx),
-        KeyBinding::new("ctrl-v", Paste, ctx),
-        KeyBinding::new("ctrl-d", Duplicate, ctx),
-        KeyBinding::new("ctrl-g", GroupSelection, ctx),
         KeyBinding::new("left", NudgeLeft, ctx),
         KeyBinding::new("right", NudgeRight, ctx),
         KeyBinding::new("up", NudgeUp, ctx),
@@ -153,6 +142,19 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-down", NudgeDownFar, ctx),
         KeyBinding::new("enter", EditSelected, ctx),
     ]);
+    // Mod: Cmd on macOS, Ctrl elsewhere (see `tft_app::keymap`).
+    keymap::bind_mod(cx, ctx, "a", SelectAll);
+    keymap::bind_mod(cx, ctx, "z", Undo);
+    keymap::bind_mod(cx, ctx, "shift-z", Redo);
+    keymap::bind_mod(cx, ctx, "y", Redo);
+    keymap::bind_mod(cx, ctx, "=", ZoomIn);
+    keymap::bind_mod(cx, ctx, "-", ZoomOut);
+    keymap::bind_mod(cx, ctx, "0", ResetZoom);
+    keymap::bind_mod(cx, ctx, "c", Copy);
+    keymap::bind_mod(cx, ctx, "x", Cut);
+    keymap::bind_mod(cx, ctx, "v", Paste);
+    keymap::bind_mod(cx, ctx, "d", Duplicate);
+    keymap::bind_mod(cx, ctx, "g", GroupSelection);
 }
 
 // ---- state --------------------------------------------------------------------
@@ -165,6 +167,8 @@ pub enum CanvasEvent {
     /// A link inside a card was clicked; the workspace follows it the way
     /// it follows one in the reading view.
     OpenLink(crate::reading::LinkTarget),
+    /// A link inside an embedded editor was opened with the new-tab modifier.
+    OpenLinkInNewTab(crate::reading::LinkTarget),
     /// The view moved or zoomed: the tab records this `viewState` for
     /// `workspace.json`.
     Viewport(Value),
@@ -532,8 +536,11 @@ impl CanvasView {
                     this.scene.mark_dirty();
                     this.edited(cx);
                 }
-                EditorEvent::OpenLink(target) | EditorEvent::OpenLinkInNewTab(target) => {
+                EditorEvent::OpenLink(target) => {
                     cx.emit(CanvasEvent::OpenLink(target.clone()));
+                }
+                EditorEvent::OpenLinkInNewTab(target) => {
+                    cx.emit(CanvasEvent::OpenLinkInNewTab(target.clone()));
                 }
                 _ => {}
             },

@@ -1,4 +1,4 @@
-//! The Search view (Ctrl+Shift+F): Obsidian's `search-row` (the query
+//! The Search view (`Mod+Shift+F`): the query
 //! field with its Match case decorator and clear button, then the Search
 //! settings button), the "Explain search terms" block, the three settings
 //! toggles, the `search-results-info` bar (result count with its menu, the
@@ -10,31 +10,28 @@
 //! superseded runs. Changing the sort order re-sorts the list it has, the
 //! way Obsidian's `setSortOrder` does, without running the query again.
 //!
-//! The six keys Obsidian serialises for the leaf (`query`, `matchingCase`,
-//! `explainSearch`, `collapseAll`, `extraContext`, `sortOrder`) live here;
-//! the workspace reads and writes them through [`SearchPane::restore`] and
-//! [`SearchPane::leaf_state`].
+//! Search state remains in this session and is not restored from workspace layout.
 
 use crate::assets::icon;
 use crate::explorer::SortOrder;
 use crate::text_input::{InputEvent, TextInput};
-use crate::theme::{Theme, FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE};
+use crate::theme::{FONT_UI_SMALL, FONT_UI_SMALLER, ICON_SIZE, Theme};
 use crate::ui::{focus_ring, menu, menu_item, toggle, tooltip};
 use crate::workspace::VaultState;
 use gpui::{
-    anchored, deferred, div, list, prelude::*, px, relative, Anchor, App, ClickEvent, Context,
-    Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle, ListAlignment, ListState,
-    MouseButton, MouseDownEvent, Pixels, Point, SharedString, StyledText, Subscription, Window,
+    Anchor, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    ListAlignment, ListState, MouseButton, MouseDownEvent, Pixels, Point, SharedString, StyledText,
+    Subscription, Window, anchored, deferred, div, list, prelude::*, px, relative,
 };
 use rayon::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use tft_cache::CachedMetadata;
 pub(crate) use tft_search::inputs;
 use tft_search::{
-    context_window, match_lines, natural_cmp, parse, MatchLine, Query, Search, SearchFile,
+    MatchLine, Query, Search, SearchFile, context_window, match_lines, natural_cmp, parse,
 };
 
 #[derive(Debug, Clone)]
@@ -245,43 +242,6 @@ impl SearchPane {
     /// Runs the current query again, after the vault changed.
     pub fn rerun(&mut self, cx: &mut Context<Self>) {
         self.run(cx);
-    }
-
-    // ----- leaf state ---------------------------------------------------------
-
-    /// The leaf's `state` from `workspace.json`: the six keys Obsidian
-    /// writes, each at its default when missing or unreadable. The query
-    /// is set last so the search it starts sees the other five.
-    pub fn restore(&mut self, state: &Value, cx: &mut Context<Self>) {
-        let flag = |key: &str| state.get(key).and_then(Value::as_bool).unwrap_or(false);
-        self.matching_case = flag("matchingCase");
-        self.explain = flag("explainSearch");
-        self.collapse_all = flag("collapseAll");
-        self.extra_context = flag("extraContext");
-        self.sort = state
-            .get("sortOrder")
-            .and_then(Value::as_str)
-            .and_then(SortOrder::parse)
-            .unwrap_or_default();
-        let query = state
-            .get("query")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        self.set_query(&query, cx);
-        cx.notify();
-    }
-
-    /// The six keys, in the order Obsidian emits them.
-    pub fn leaf_state(&self, cx: &App) -> Vec<(&'static str, Value)> {
-        vec![
-            ("query", json!(self.input.read(cx).text())),
-            ("matchingCase", json!(self.matching_case)),
-            ("explainSearch", json!(self.explain)),
-            ("collapseAll", json!(self.collapse_all)),
-            ("extraContext", json!(self.extra_context)),
-            ("sortOrder", json!(self.sort.as_str())),
-        ]
     }
 
     /// What the pane is showing, for the control socket's state dump: the
@@ -1556,10 +1516,10 @@ mod tests {
     fn excluding_vault() -> (tempfile::TempDir, VaultState) {
         let dir = tempfile::tempdir().unwrap();
         let r = dir.path();
-        std::fs::create_dir_all(r.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(r.join(".tft")).unwrap();
         std::fs::create_dir_all(r.join("Archive")).unwrap();
         std::fs::write(
-            r.join(".obsidian/app.json"),
+            r.join(".tft/app.json"),
             r#"{"userIgnoreFilters":["Archive/"]}"#,
         )
         .unwrap();
@@ -1607,7 +1567,7 @@ mod tests {
     }
 
     #[test]
-    fn results_sort_the_way_obsidian_collates() {
+    fn results_sort_the_way_reference_collates() {
         let mut results: Vec<FileResult> = ["Note 10.md", "9 needle.md", "Note 2.md", "_needle.md"]
             .iter()
             .map(|p| result(p))

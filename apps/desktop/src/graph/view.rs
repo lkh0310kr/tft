@@ -10,7 +10,7 @@ use crate::theme::Theme;
 use crate::workspace::VaultState;
 use gpui::{
     actions, canvas, div, fill, point, prelude::*, px, size, App, Bounds, Context, DispatchPhase,
-    Entity, EventEmitter, FocusHandle, Focusable, HitboxBehavior, Hsla, KeyBinding, MouseButton,
+    Entity, EventEmitter, FocusHandle, Focusable, HitboxBehavior, Hsla, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, ScrollWheelEvent,
     SharedString, Subscription, Task, TextAlign, Window,
 };
@@ -298,11 +298,10 @@ actions!(graph, [ZoomIn, ZoomOut, ResetView]);
 
 pub fn bind_keys(cx: &mut App) {
     let ctx = Some("GraphView");
-    cx.bind_keys([
-        KeyBinding::new("ctrl-=", ZoomIn, ctx),
-        KeyBinding::new("ctrl--", ZoomOut, ctx),
-        KeyBinding::new("ctrl-0", ResetView, ctx),
-    ]);
+    // Mod: Cmd on macOS, Ctrl elsewhere (see `tft_app::keymap`).
+    crate::keymap::bind_mod(cx, ctx, "=", ZoomIn);
+    crate::keymap::bind_mod(cx, ctx, "-", ZoomOut);
+    crate::keymap::bind_mod(cx, ctx, "0", ResetView);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2593,10 +2592,10 @@ mod tests {
     fn excluded_files_leave_the_graph_and_the_local_graph() {
         let dir = tempfile::tempdir().unwrap();
         let r = dir.path();
-        std::fs::create_dir_all(r.join(".obsidian")).unwrap();
+        std::fs::create_dir_all(r.join(".tft")).unwrap();
         std::fs::create_dir_all(r.join("Archive")).unwrap();
         std::fs::write(
-            r.join(".obsidian/app.json"),
+            r.join(".tft/app.json"),
             r#"{"userIgnoreFilters":["Archive/"]}"#,
         )
         .unwrap();
@@ -2631,7 +2630,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_graph_json_has_obsidians_twenty_keys_in_its_order() {
+    fn a_fresh_graph_json_has_references_twenty_keys_in_its_order() {
         let doc = full_document(&GraphConfig::default());
         let keys: Vec<&str> = doc
             .as_object()
@@ -2671,7 +2670,7 @@ mod tests {
         );
         assert!(text.contains("\"repelStrength\": 10"), "{text}");
         assert!(text.contains("\"textFadeMultiplier\": 0,"), "{text}");
-        assert_eq!(text.len(), 494, "the bytes Obsidian wrote");
+        assert_eq!(text.len(), 494, "the expected bytes");
     }
 
     #[test]
@@ -2960,7 +2959,7 @@ mod tests {
     }
 
     #[test]
-    fn a_local_graph_opens_with_obsidians_defaults() {
+    fn a_local_graph_opens_with_references_defaults() {
         let d = LocalOptions::default();
         assert_eq!(
             d.describe(),

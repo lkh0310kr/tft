@@ -15,7 +15,27 @@
 //! no file and no history. Opening a note in it makes it a note's tab, as
 //! it does in Obsidian, and the leaf written for it is then the note's.
 
-use super::*;
+use super::{Workspace, leaf_id};
+use crate::reading::{self, ReadingView};
+use gpui::{Context, Entity};
+use serde_json::{Value, json};
+use std::cell::RefCell;
+use tft_app::{Tab, ViewMode};
+
+/// Dedicated reader entity and its currently loaded release version.
+pub(super) struct ReleaseNotesState {
+    pub(super) view: Entity<ReadingView>,
+    built: RefCell<Option<String>>,
+}
+
+impl ReleaseNotesState {
+    pub(super) fn new(view: Entity<ReadingView>) -> Self {
+        Self {
+            view,
+            built: RefCell::new(None),
+        }
+    }
+}
 
 /// The leaf's view type.
 pub(super) const VIEW_TYPE: &str = "release-notes";
@@ -54,7 +74,10 @@ pub(super) fn leaf(version: &str) -> Value {
 /// The version a tab shows release notes for, or `None` when it is not a
 /// release-notes tab. A leaf without `currentVersion` shows this build's.
 pub(super) fn version_of(tab: &Tab) -> Option<String> {
-    if tab.path.is_some() || !tab.history.is_empty() || tab.mode == ViewMode::Graph {
+    if tab.path.is_some()
+        || !tab.history.is_empty()
+        || matches!(tab.mode, ViewMode::Graph | ViewMode::Search)
+    {
         return None;
     }
     let state = tab.leaf.as_ref()?.get("state")?;
@@ -157,17 +180,19 @@ fn elements_at<'a>(html: &'a str, tag: &'a str) -> impl Iterator<Item = (usize, 
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
     let mut from = 0;
-    std::iter::from_fn(move || loop {
-        let at = from + html[from..].find(&open)? + open.len();
-        // `<p` must not match `<pre`.
-        if !html[at..].starts_with(['>', ' ', '\n', '\t']) {
-            from = at;
-            continue;
+    std::iter::from_fn(move || {
+        loop {
+            let at = from + html[from..].find(&open)? + open.len();
+            // `<p` must not match `<pre`.
+            if !html[at..].starts_with(['>', ' ', '\n', '\t']) {
+                from = at;
+                continue;
+            }
+            let body = at + html[at..].find('>')? + 1;
+            let end = body + html[body..].find(&close)?;
+            from = end + close.len();
+            return Some((body, &html[body..end]));
         }
-        let body = at + html[at..].find('>')? + 1;
-        let end = body + html[body..].find(&close)?;
-        from = end + close.len();
-        return Some((body, &html[body..end]));
     })
 }
 
@@ -319,11 +344,11 @@ impl Workspace {
     /// showing this build's notes.
     pub(super) fn show_release_notes(&mut self, cx: &mut Context<Self>) {
         self.flush_save(cx);
-        self.stash_active_tab();
+        self.active_group_state.stash_active_tab();
         let mut tab = Tab::empty(self.default_mode());
         tab.leaf = Some(leaf(VERSION));
-        self.tabs.push(tab);
-        self.active_tab = self.tabs.len() - 1;
+        self.active_group_state.tabs.push(tab);
+        self.active_group_state.active_tab = self.active_group_state.tabs.len() - 1;
         self.load_tab(cx);
     }
 
@@ -331,10 +356,14 @@ impl Workspace {
     /// release-notes tab. Its slot holds the leaf; the live fields hold
     /// the rest.
     pub(super) fn active_release_notes(&self) -> Option<String> {
-        let mut tab = self.tabs.get(self.active_tab)?.clone();
-        tab.path = self.current.clone();
-        tab.mode = self.mode;
-        tab.history = self.history.clone();
+        let mut tab = self
+            .active_group_state
+            .tabs
+            .get(self.active_group_state.active_tab)?
+            .clone();
+        tab.path = self.active_group_state.current.clone();
+        tab.mode = self.active_group_state.mode;
+        tab.history = self.active_group_state.history.clone();
         version_of(&tab)
     }
 
@@ -346,13 +375,13 @@ impl Workspace {
         version: &str,
         cx: &mut Context<Self>,
     ) -> Entity<ReadingView> {
-        let view = self.release_notes.clone();
-        if self.release_notes_built.borrow().as_deref() != Some(version) {
-            if let Some(state) = self.state.clone() {
+        let view = self.release_notes.view.clone();
+        if self.release_notes.built.borrow().as_deref() != Some(version) {
+            if let Some(state) = self.vault_session.state.clone() {
                 let text = notes(version);
                 let model = reading::build_with("", &text, state.as_ref(), state.build_options());
                 view.update(cx, |r, cx| r.set_note(None, model, cx));
-                *self.release_notes_built.borrow_mut() = Some(version.to_string());
+                *self.release_notes.built.borrow_mut() = Some(version.to_string());
             }
         }
         view
@@ -361,12 +390,14 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{leaf_json, tab_from_leaf};
     use super::*;
+    use tft_app::HistoryEntry;
 
     /// The leaf `app:show-release-notes` adds, in the shape Obsidian 1.15.0
     /// wrote (`results/2026-11-09-app-window-commands.json`, `s11`).
     #[test]
-    fn a_new_leaf_is_obsidians_shape_with_tfts_version() {
+    fn a_new_leaf_is_references_shape_with_tfts_version() {
         let leaf = leaf("0.5.0");
         assert_eq!(leaf["type"], json!("leaf"));
         assert!(leaf["id"].as_str().is_some_and(|id| id.len() == 16));
@@ -497,8 +528,11 @@ mod tests {
     #[test]
     fn an_unknown_version_says_the_page_has_no_notes() {
         let notes = notes_from("<section><h2>0.1.0</h2></section>", "9.9.9");
-        assert!(notes
-            .starts_with("# Release Notes 9.9.9\n\nThe releases page has no notes for 9.9.9.\n"));
+        assert!(
+            notes.starts_with(
+                "# Release Notes 9.9.9\n\nThe releases page has no notes for 9.9.9.\n"
+            )
+        );
     }
 
     #[test]

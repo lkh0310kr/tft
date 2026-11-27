@@ -5,20 +5,20 @@
 use crate::assets::icon;
 use crate::file_menu::{self, Menu, Pick, Target};
 use crate::inline_field;
-use crate::theme::{Theme, HEADER_HEIGHT, ICON_SIZE};
+use crate::theme::{ICON_SIZE, Theme};
 use gpui::{
-    actions, anchored, canvas, deferred, div, point, prelude::*, px, uniform_list, App, Bounds,
-    ClickEvent, Context, DragMoveEvent, ElementInputHandler, EntityInputHandler, EventEmitter,
+    App, Bounds, Context, DragMoveEvent, ElementInputHandler, EntityInputHandler, EventEmitter,
     FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point,
-    ScrollStrategy, SharedString, UTF16Selection, UniformListScrollHandle, Window,
+    ScrollStrategy, SharedString, UTF16Selection, UniformListScrollHandle, Window, actions, canvas,
+    div, prelude::*, px, uniform_list,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
 pub use tft_app::explorer::{
-    display_name, drop_folder, drop_moves, kind_name, move_into_label, FileTree, SortOrder,
+    FileTree, SortOrder, display_name, drop_folder, drop_moves, kind_name, move_into_label,
 };
 
 /// The font size of a row's extension tag.
@@ -230,23 +230,15 @@ fn event_for(pick: Pick, target: &Target) -> Option<ExplorerEvent> {
         | Pick::Copy
         | Pick::Paste
         | Pick::PastePlain
-        | Pick::SelectAll
-        | Pick::Correction(_)
-        | Pick::AddToDictionary => return None,
+        | Pick::SelectAll => return None,
     })
 }
 
 pub struct FileExplorer {
     tree: FileTree,
     active: Option<String>,
-    /// The leaf's `autoReveal`: whether opening a file expands its folders
-    /// and scrolls to its row, or only highlights the row if it is on
-    /// screen. Off in a fresh vault, as in Obsidian.
-    auto_reveal: bool,
     scroll: UniformListScrollHandle,
     menu: Option<Menu>,
-    /// The sort menu is open under its header button.
-    sort_menu_open: bool,
     /// The keyboard the open menu holds, and where it goes back to.
     menu_focus: file_menu::MenuFocus,
     focus_handle: FocusHandle,
@@ -296,10 +288,8 @@ impl FileExplorer {
         FileExplorer {
             tree: FileTree::default(),
             active: None,
-            auto_reveal: false,
             scroll: UniformListScrollHandle::new(),
             menu: None,
-            sort_menu_open: false,
             menu_focus: file_menu::MenuFocus::new(cx),
             focus_handle: cx.focus_handle(),
             focused: None,
@@ -332,7 +322,7 @@ impl FileExplorer {
 
     /// Turns a row's own label into a field with the whole name selected:
     /// what F2 on a focused row and the menu's "Rename..." both do in
-    /// Obsidian (`tools/obsidian-probe/results/2026-10-25-explorer-dnd.json`,
+    /// Obsidian (`tools/reference-probe/results/2026-10-25-explorer-dnd.json`,
     /// steps `s09` and `s11`). The name is the one the row shows, so a
     /// file's extension is neither selected nor typed over.
     pub fn start_rename(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -491,9 +481,7 @@ impl FileExplorer {
     /// expanded or scrolled, so a file written elsewhere in the vault does
     /// not move the list.
     pub fn set_tree(&mut self, mut tree: FileTree, cx: &mut Context<Self>) {
-        let expanded = self.tree.expanded_folders();
-        tree.expand_folders(&expanded);
-        tree.set_sort(self.tree.sort());
+        tree.preserve_view_from(&self.tree);
         self.tree = tree;
         // A row that is no longer in the tree cannot paint the field that
         // is on it, and a field nothing paints would hold the keyboard
@@ -574,58 +562,10 @@ impl FileExplorer {
         cx.notify();
     }
 
-    /// The leaf's state as `workspace.json` recorded it.
-    pub fn set_leaf_state(&mut self, sort: SortOrder, auto_reveal: bool, cx: &mut Context<Self>) {
-        self.tree.set_sort(sort);
-        self.auto_reveal = auto_reveal;
-        cx.notify();
-    }
-
-    pub fn sort_order(&self) -> SortOrder {
-        self.tree.sort()
-    }
-
-    pub fn auto_reveal(&self) -> bool {
-        self.auto_reveal
-    }
-
-    fn set_sort(&mut self, sort: SortOrder, cx: &mut Context<Self>) {
-        self.tree.set_sort(sort);
-        self.sort_menu_open = false;
-        cx.notify();
-    }
-
-    /// "Auto-reveal current file": switching it on reveals the open file
-    /// right away, as Obsidian does.
-    fn toggle_auto_reveal(&mut self, cx: &mut Context<Self>) {
-        self.auto_reveal = !self.auto_reveal;
-        if self.auto_reveal {
-            if let Some(active) = self.active.clone() {
-                self.reveal(&active, cx);
-            }
-        }
-        cx.notify();
-    }
-
-    /// "Expand all" opens every folder at every depth; "Collapse all", the
-    /// same button once any folder is open, closes them all.
-    fn toggle_all(&mut self, cx: &mut Context<Self>) {
-        if self.tree.any_expanded() {
-            self.tree.collapse_all();
-        } else {
-            self.tree.expand_all();
-        }
-        cx.notify();
-    }
-
-    /// The file that just became the open one: highlighted, and with
-    /// auto-reveal on, also expanded into view.
+    /// The file that just became the open one: mark it without changing
+    /// folder expansion or scrolling the tree.
     pub fn follow(&mut self, path: &str, cx: &mut Context<Self>) {
-        if self.auto_reveal {
-            self.reveal(path, cx);
-        } else {
-            self.set_active(path, cx);
-        }
+        self.set_active(path, cx);
     }
 
     /// Marks `path` as the open file without touching the tree: its row is
@@ -688,8 +628,6 @@ impl FileExplorer {
         json!({
             "active": self.active,
             "focused": self.focused,
-            "sort_order": self.tree.sort().as_str(),
-            "auto_reveal": self.auto_reveal,
             "any_expanded": self.tree.any_expanded(),
             "rows": shown,
             "rows_total": if total > shown.len() { Some(total) } else { None },
@@ -800,116 +738,6 @@ impl FileExplorer {
                 }
             },
         ))
-    }
-
-    fn render_header(&mut self, cx: &mut Context<Self>) -> gpui::Div {
-        let theme = cx.global::<Theme>().clone();
-        let any_expanded = self.tree.any_expanded();
-        let (fold_id, fold_icon, fold_label) = if any_expanded {
-            ("explorer-collapse-all", "chevrons-down-up", "Collapse all")
-        } else {
-            ("explorer-expand-all", "chevrons-up-down", "Expand all")
-        };
-        let sort_menu = self.render_sort_menu(&theme, cx);
-        div()
-            .flex_shrink_0()
-            .h(px(HEADER_HEIGHT))
-            .p(px(8.))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap(px(2.))
-            .child(
-                // The menu hangs off this wrapper, so it opens under the
-                // button wherever the dock is.
-                div()
-                    .relative()
-                    .child(
-                        crate::ui::header_button(
-                            "explorer-sort",
-                            "arrow-up-narrow-wide",
-                            "Change sort order",
-                            false,
-                            &theme,
-                        )
-                        .on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.sort_menu_open = !this.sort_menu_open;
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .children(sort_menu),
-            )
-            .child(
-                crate::ui::header_button(
-                    "explorer-auto-reveal",
-                    "gallery-vertical",
-                    "Auto-reveal current file",
-                    self.auto_reveal,
-                    &theme,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_auto_reveal(cx))),
-            )
-            .child(
-                crate::ui::header_button(fold_id, fold_icon, fold_label, false, &theme)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_all(cx))),
-            )
-    }
-
-    /// "Change sort order": the six orders in three pairs, a check against
-    /// the one in force.
-    fn render_sort_menu(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        if !self.sort_menu_open {
-            return None;
-        }
-        let current = self.tree.sort();
-        let focus = self.menu_focus.handle.clone();
-        let mut list = file_menu::menu_box(
-            crate::ui::menu_panel("explorer-sort-menu", theme)
-                .min_w(px(220.))
-                .py_1(),
-            &focus,
-            cx,
-            |this, cx| {
-                this.sort_menu_open = false;
-                cx.notify();
-            },
-        );
-        for (ix, order) in SortOrder::ALL.into_iter().enumerate() {
-            if ix > 0 && ix % 2 == 0 {
-                list = list.child(crate::ui::menu_separator(theme));
-            }
-            let checked = order == current;
-            list = list.child(
-                crate::ui::menu_row(("explorer-sort-item", ix), theme)
-                    .on_click(cx.listener(move |this, _, _, cx| this.set_sort(order, cx)))
-                    .child(
-                        div()
-                            .w(px(16.))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .children(checked.then(|| icon("check", 14., theme.tokens.text_muted))),
-                    )
-                    .child(order.label()),
-            );
-        }
-        Some(
-            deferred(
-                anchored()
-                    .offset(point(px(0.), px(26.)))
-                    .snap_to_window_with_margin(px(8.))
-                    .child(list),
-            )
-            .with_priority(1)
-            .into_any_element(),
-        )
     }
 
     /// The label of the row being renamed, painted as a shaped line so the
@@ -1048,21 +876,15 @@ impl FileExplorer {
                 };
                 let washed = in_block(&row.path);
                 let block_top = washed && self.drop.as_deref() == Some(row.path.as_str());
-                let block_end = washed
-                    && !self
-                        .tree
-                        .row(ix + 1)
-                        .is_some_and(|next| in_block(&next.path));
                 let drag = FileDrag {
                     path: row.path.clone(),
                     folder: row.is_folder,
                     name: row.name.clone().into(),
                     action: Rc::new(RefCell::new(None)),
                 };
-                // Obsidian's row: 13 px text in a 25 px row with an 8 px
-                // radius, `--nav-item-color` until it is active
-                // (`--nav-item-color-active` on `--nav-item-background-active`)
-                // or under the pointer (`-hover`).
+                // TFT's row: 13 px text in a 24 px row, square and edge to edge
+                // in the sidebar, which is Zed's tree rather than Obsidian's
+                // 25 px rows with an 8 px radius and a gap between them.
                 let t = &theme.tokens;
                 let row_el =
                     crate::ui::file_tree_row(("row", ix), row.depth, active, focused, &theme);
@@ -1125,9 +947,9 @@ impl FileExplorer {
                                 this.open_menu(ix, event.position, cx)
                             }),
                         )
-                        // The wash runs through the 2 px gap under every
-                        // row of the block but the last, so the block reads
-                        // as one box; the row's 2 px ring border is inside it.
+                        // The wash runs through the rows of the block, covering
+                        // each row's 2 px ring border, so the block reads as one
+                        // box; the rows themselves sit flush against each other.
                         .when(washed, |d| {
                             let mut wash = t.interactive_accent;
                             wash.a = 0.1;
@@ -1137,15 +959,13 @@ impl FileExplorer {
                                     .top(px(-2.))
                                     .left(px(-2.))
                                     .right(px(-2.))
-                                    .bottom(px(if block_end { -2. } else { -4. }))
-                                    .bg(wash)
-                                    .when(block_top, |d| d.rounded_t(px(4.)))
-                                    .when(block_end, |d| d.rounded_b(px(4.))),
+                                    .bottom(px(-2.))
+                                    .bg(wash),
                             )
                         })
                         .child(
                             div()
-                                .w(px(16.))
+                                .w(px(12.))
                                 .flex_shrink_0()
                                 .flex()
                                 .items_center()
@@ -1327,7 +1147,7 @@ impl Render for FileExplorer {
         let count = self.tree.len();
         // An open menu holds the keyboard, so Escape reaches it first; a
         // closed one hands the keyboard back where it was.
-        let menu_open = self.menu.is_some() || self.sort_menu_open;
+        let menu_open = self.menu.is_some();
         self.menu_focus.sync(menu_open, window, cx);
         // A row being renamed holds the keyboard under the crate's field
         // context, so Enter, Escape and the editing keys go to the field
@@ -1341,7 +1161,6 @@ impl Render for FileExplorer {
             self.drop_claim = None;
         }
         let menu = self.render_menu(cx);
-        let header = self.render_header(cx);
         let root = div()
             .size_full()
             .flex()
@@ -1365,7 +1184,6 @@ impl Render for FileExplorer {
             .on_action(cx.listener(Self::leave_tree))
             .on_action(cx.listener(Self::rename_focused))
             .on_action(cx.listener(Self::delete_focused))
-            .child(header)
             // The list is wrapped so that the space below the last row
             // takes a right-click of its own: `uniform_list` hands an event
             // outside every row straight through, and a row's own handler
@@ -1391,8 +1209,7 @@ impl Render for FileExplorer {
                     .child(
                         uniform_list("file-explorer", count, cx.processor(Self::render_rows))
                             .track_scroll(&self.scroll)
-                            .size_full()
-                            .px_1(),
+                            .size_full(),
                     ),
             )
             .children(menu)

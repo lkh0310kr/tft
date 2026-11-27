@@ -15,7 +15,7 @@
 // result rather than re-deriving the chain by hand is what keeps the order
 // right, and the order is load-bearing.
 //
-// The load order is Obsidian's as far as `tests/corpus/obsidian-1.14.5.json`
+// The load order is as far as `tests/corpus/reference-app-1.14.5.json`
 // can tell: `prism.js` (markup, css, clike, javascript) first, then every
 // other component through Prism's own loader — except `regex`, which comes
 // last and on its own. Obsidian's JavaScript has no `regex` inside its

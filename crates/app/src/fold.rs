@@ -2,7 +2,7 @@
 //! editor and the reading view share one set of folds, and the record kept
 //! outside the vault so a fold survives a reload and a relaunch.
 //!
-//! Every rule here is from `docs/tft/Specification.md`, "Observed heading
+//! Every rule here is from `docs/Specification.md`, "Observed heading
 //! fold behavior": a heading folds through the line before the next heading
 //! of the same or a higher level, trailing blank lines included, and the
 //! last heading folds to the end of the file; a list parent folds its own
