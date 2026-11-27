@@ -122,7 +122,6 @@ fn the_observed_app_and_window_commands_are_runnable() {
     for id in [
         "workspace:copy-path",
         "workspace:copy-full-path",
-        "workspace:copy-url",
         "workspace:show-trash",
         "open-with-default-app:open",
         "open-with-default-app:show",
@@ -135,8 +134,6 @@ fn the_observed_app_and_window_commands_are_runnable() {
         "window:zoom-in",
         "window:zoom-out",
         "window:reset-zoom",
-        "window:toggle-always-on-top",
-        "app:reload",
     ] {
         assert!(RUNNABLE.contains(&id), "{id} runnable");
         assert!(known.contains(&id), "{id} is a known command ID");
@@ -148,22 +145,6 @@ fn the_observed_app_and_window_commands_are_runnable() {
     }
 }
 
-/// The URL's vault is the folder's name, a relatively opened vault's
-/// too.
-#[test]
-fn the_copied_urls_vault_is_the_folders_name() {
-    assert_eq!(
-        vault_folder_name(Path::new("/tmp/x/Probe Vault")),
-        "Probe Vault"
-    );
-    let here = std::env::current_dir().unwrap();
-    let name = here.file_name().unwrap().to_string_lossy().into_owned();
-    assert_eq!(vault_folder_name(Path::new(".")), name);
-    assert_eq!(vault_folder_name(Path::new("")), name);
-}
-
-/// Show trash's notice with no `.trash` folder, the path in curly
-/// quotes, as Obsidian 1.15.0 wrote it.
 #[test]
 fn show_trash_names_the_missing_folder_in_curly_quotes() {
     assert_eq!(

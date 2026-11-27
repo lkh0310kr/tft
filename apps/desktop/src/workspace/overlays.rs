@@ -111,7 +111,7 @@ impl Workspace {
         here: Option<u64>,
         bottom: Pixels,
         theme: &Theme,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let open = |id| self.popout_open(id);
         let mut shown = self.feedback.notices.in_window(here, &open).peekable();

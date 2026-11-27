@@ -5326,6 +5326,27 @@ impl Editor {
         }
         self.buf.goal = None;
         self.buf.marked = None;
+        if !event.modifiers.alt && !event.modifiers.shift {
+            let line = self.buf.cursor_at(at).line;
+            if let Some(marker) = self
+                .highlights
+                .get(line)
+                .and_then(|spans| {
+                    spans
+                        .iter()
+                        .find(|span| span.kind == HighlightKind::ThematicBreak)
+                })
+            {
+                let start = self.buf.line_starts()[line] + marker.range.start;
+                let end = self.buf.line_starts()[line] + marker.range.end;
+                self.buf.collapse_cursors();
+                self.buf.anchor = start;
+                self.buf.head = end;
+                self.dragging = true;
+                cx.notify();
+                return;
+            }
+        }
         if event.modifiers.alt && event.click_count == 1 {
             // Alt+click adds a cursor (or removes the one it lands on).
             let mut cursors = self.buf.cursors();

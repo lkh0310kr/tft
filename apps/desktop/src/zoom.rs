@@ -48,20 +48,10 @@ pub fn stepped(level: f32, direction: i32) -> f32 {
 /// The zoom and the on-top flag of one window, shared between the
 /// [`ZoomWindow`] that applies them and [`REGISTRY`], which is how the
 /// workspace reaches them through a gpui `Window`.
-/// A desktop's own call that keeps a window on top (true) or stops;
-/// true when the desktop took the request.
-type OnTop = Box<dyn Fn(bool) -> bool>;
-
 #[derive(Default)]
 struct WindowState {
     /// The zoom level, 0 for none.
     level: Cell<f32>,
-    /// Whether the window was asked to stay above the others.
-    on_top: Cell<bool>,
-    /// Asks the native window to stay above (true) or not; set by the
-    /// wrapper when it opens the window, `None` where the desktop has no
-    /// way to say it.
-    apply_on_top: Option<OnTop>,
 }
 
 thread_local! {
@@ -164,22 +154,6 @@ fn write_level(path: &Path, level: f32) {
     let _ = std::fs::write(path, json.to_string());
 }
 
-/// Whether `window` was asked to stay above the others.
-pub fn always_on_top(window: &Window) -> bool {
-    state_of(id_of(window)).is_some_and(|s| s.on_top.get())
-}
-
-/// Asks the desktop to keep `window` above the others, or to stop. The
-/// flag is kept whether or not the desktop took it; the return value says
-/// whether it did.
-pub fn set_always_on_top(window: &Window, on: bool) -> bool {
-    let Some(state) = state_of(id_of(window)) else {
-        return false;
-    };
-    state.on_top.set(on);
-    state.apply_on_top.as_ref().is_some_and(|f| f(on))
-}
-
 /// The platform gpui runs on, with every window it opens wrapped in a
 /// [`ZoomWindow`]. Everything else is handed straight through.
 pub struct ZoomPlatform(Rc<dyn Platform>);
@@ -247,10 +221,7 @@ impl Platform for ZoomPlatform {
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
         let inner = self.0.open_window(handle, options)?;
-        let state = Rc::new(WindowState {
-            apply_on_top: native_on_top(inner.as_ref()),
-            ..WindowState::default()
-        });
+        let state = Rc::new(WindowState::default());
         let id = handle.window_id();
         REGISTRY.with(|r| r.borrow_mut().insert(id, state.clone()));
         Ok(Box::new(ZoomWindow { inner, state, id }))
@@ -741,114 +712,6 @@ impl PlatformWindow for ZoomWindow {
     }
 }
 
-/// The desktop's own "keep this window above the others" for `window`, or
-/// `None` where there is none to call. Each takes the native handle gpui's
-/// window holds; the call itself happens when the command runs.
-fn native_on_top(window: &dyn PlatformWindow) -> Option<OnTop> {
-    use raw_window_handle::RawWindowHandle;
-    let raw = window.window_handle().ok()?.as_raw();
-    match raw {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        RawWindowHandle::Xlib(h) => {
-            let id = h.window as u32;
-            Some(Box::new(move |on| x11_on_top(id, on).is_ok()))
-        }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        RawWindowHandle::Xcb(h) => {
-            let id = h.window.get();
-            Some(Box::new(move |on| x11_on_top(id, on).is_ok()))
-        }
-        #[cfg(target_os = "macos")]
-        RawWindowHandle::AppKit(h) => {
-            let view = h.ns_view.as_ptr() as usize;
-            Some(Box::new(move |on| macos_on_top(view, on)))
-        }
-        #[cfg(target_os = "windows")]
-        RawWindowHandle::Win32(h) => {
-            let hwnd = h.hwnd.get();
-            Some(Box::new(move |on| windows_on_top(hwnd, on)))
-        }
-        // Wayland: xdg-shell has no request for it, by design; the
-        // compositor alone decides what stays on top.
-        _ => None,
-    }
-}
-
-/// EWMH's way: a `_NET_WM_STATE` client message to the root window asking
-/// the window manager to add or remove `_NET_WM_STATE_ABOVE`, on a
-/// connection of its own (gpui's is private to it).
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn x11_on_top(window: u32, on: bool) -> Result<(), Box<dyn std::error::Error>> {
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xproto::{ClientMessageEvent, ConnectionExt as _, EventMask};
-    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None)?;
-    let root = conn.setup().roots[screen].root;
-    let state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
-    let above = conn
-        .intern_atom(false, b"_NET_WM_STATE_ABOVE")?
-        .reply()?
-        .atom;
-    // 1 adds, 0 removes; the last word is the source, 1 for an application.
-    let action = if on { 1 } else { 0 };
-    let event = ClientMessageEvent::new(32, window, state, [action, above, 0, 1, 0]);
-    // Checked, which is a round trip: a connection closed straight after
-    // its flush lost about one message in three under openbox.
-    conn.send_event(
-        false,
-        root,
-        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-        event,
-    )?
-    .check()?;
-    Ok(())
-}
-
-/// AppKit's way: the window's level, `NSFloatingWindowLevel` (3) above the
-/// normal windows and `NSNormalWindowLevel` (0) back, which is what
-/// Electron's `setAlwaysOnTop(true)` sets by default.
-#[cfg(target_os = "macos")]
-fn macos_on_top(view: usize, on: bool) -> bool {
-    use objc2::runtime::AnyObject;
-    let view = view as *mut AnyObject;
-    if view.is_null() {
-        return false;
-    }
-    // SAFETY: the pointer is the live NSView gpui made for this window and
-    // the call is on the main thread, where gpui runs.
-    unsafe {
-        let window: *mut AnyObject = objc2::msg_send![view, window];
-        if window.is_null() {
-            return false;
-        }
-        let level: isize = if on { 3 } else { 0 };
-        let _: () = objc2::msg_send![window, setLevel: level];
-    }
-    true
-}
-
-/// Win32's way: `SetWindowPos` with `HWND_TOPMOST`, or `HWND_NOTOPMOST`
-/// back, leaving the size and place alone.
-#[cfg(target_os = "windows")]
-fn windows_on_top(hwnd: isize, on: bool) -> bool {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    };
-    let after = if on { HWND_TOPMOST } else { HWND_NOTOPMOST };
-    // SAFETY: the handle is the live window gpui made for this window.
-    unsafe {
-        SetWindowPos(
-            HWND(hwnd as *mut _),
-            Some(after),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        )
-        .is_ok()
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -114,7 +114,7 @@ mod view_header;
 mod window_node;
 #[cfg(test)]
 use commands::{
-    any_markdown_leaf, full_path_text, missing_file_notice, vault_folder_name, TRASH_FOLDER,
+    any_markdown_leaf, full_path_text, missing_file_notice, TRASH_FOLDER,
 };
 #[cfg(test)]
 use control_api::vault_path_in;

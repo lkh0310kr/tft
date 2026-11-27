@@ -1,6 +1,6 @@
 //! Desktop Workspace actions initiated from a canvas.
 
-use super::{MainView, Modal, Workspace};
+use super::{Modal, Workspace};
 use crate::canvas::FilePick;
 use crate::chooser::Row as ChooserRow;
 use gpui::{Context, Window};

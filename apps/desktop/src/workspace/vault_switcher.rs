@@ -25,25 +25,6 @@ fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-/// Makes the sandbox vault at `root`: a welcome note that links to a
-/// second, so the editor, the links and the graph have something to show.
-/// The folder is new each time, so nothing already there is written over.
-fn write_sandbox(root: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(root)?;
-    std::fs::write(
-        root.join("Welcome.md"),
-        "---\ntags:\n  - sandbox\n---\n# Welcome to the sandbox\n\nThis vault is a scratch folder: try things here and nothing you keep is \
-touched. Link to [[Another note]], press Ctrl+O to switch notes, Ctrl+P \
-for the command palette, and Ctrl+E to flip between editing and reading.\n\n\
-- [ ] A task to tick\n- A list item with **bold** and *italic* text\n\n\
-> [!tip] Callouts\n> TFT callouts render here too.\n",
-    )?;
-    std::fs::write(
-        root.join("Another note.md"),
-        "# Another note\n\nIt links back to [[Welcome]], which the backlinks pane shows.\n",
-    )
-}
-
 impl Workspace {
     /// The active vault name toggles a menu of remembered vaults and actions.
     pub(super) fn toggle_vault_menu(&mut self, cx: &mut Context<Self>) {
@@ -60,20 +41,6 @@ impl Workspace {
     fn toggle_theme_menu(&mut self, cx: &mut Context<Self>) {
         self.vault_switcher_state.theme_menu_open = !self.vault_switcher_state.theme_menu_open;
         cx.notify();
-    }
-
-    /// "Open sandbox vault": a fresh temp folder with a note or two, loaded here and
-    /// left off the switcher's list.
-    pub(crate) fn open_sandbox_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.vault_switcher_state.menu_open = false;
-        let root = std::env::temp_dir().join(format!("TFT Sandbox {}", now_millis()));
-        if let Err(err) = write_sandbox(&root) {
-            self.report(format!("Could not make the sandbox vault: {err}"), cx);
-            return;
-        }
-        self.load_vault_with(root, false, window, cx);
-        // Opened once the vault is in, the way `--note` is.
-        self.active_group_state.current = Some("Welcome.md".into());
     }
 
     /// Puts `root` at the head of the switcher's list. The list lives

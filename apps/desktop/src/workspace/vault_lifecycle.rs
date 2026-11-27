@@ -1,4 +1,4 @@
-use super::{Changes, Commands, VaultState, Workspace};
+use super::{Changes, VaultState, Workspace};
 use crate::editor::Editor;
 use crate::explorer::FileTree;
 use crate::reading;
@@ -10,7 +10,6 @@ use gpui::{App, Context, Entity, SharedString, Window};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tft_commands::CommandRegistry;
 use tft_formats::properties::PropertiesInDocument;
 use tft_formats::FileKind;
 use tft_vault::FileChange;
@@ -231,17 +230,6 @@ impl Workspace {
             e.set_properties_in_document(properties);
             e.set_build_options(build_options, cx);
         });
-    }
-
-    /// Rebuilds the command registry and every key bound from it, with `hotkeys.json` applied.
-    fn rebuild_commands(&mut self, state: &VaultState, cx: &mut Context<Self>) {
-        let mut registry = CommandRegistry::with_known_ids();
-        if let Ok(hotkeys) = state.vault().hotkeys() {
-            registry.apply_overrides(&hotkeys);
-        }
-        let registry = Arc::new(registry);
-        crate::bind_all_keys(cx, &registry);
-        cx.set_global(Commands(registry));
     }
 
     pub(super) fn change_setting(&mut self, change: SettingChange, cx: &mut Context<Self>) {

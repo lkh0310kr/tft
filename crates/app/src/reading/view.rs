@@ -2360,7 +2360,7 @@ impl<'a> Renderer<'a> {
                             _ => d,
                         })
                         .map(|d| match editing {
-                            Some(field) => d.child(self.property_field(field, false)),
+                            Some(field) => d.child(self.property_field(field, false, true)),
                             None => d.child(self.rich(text)),
                         });
                     if handles {
@@ -3097,7 +3097,7 @@ impl<'a> Renderer<'a> {
                                     .text_color(t.tokens.text_faint)
                                     .child(SharedString::from("T")),
                             )
-                            .child(self.property_field(&field, false)),
+                            .child(self.property_field(&field, false, false)),
                     )
                 },
             )
@@ -3132,7 +3132,7 @@ impl<'a> Renderer<'a> {
     }
 
     /// The caret-bearing field a row shows while it is being typed into.
-    fn property_field(&self, field: &Field, wide: bool) -> AnyElement {
+    fn property_field(&self, field: &Field, wide: bool, table_cell: bool) -> AnyElement {
         let t = self.theme;
         let before = &field.text[..field.cursor];
         let after = &field.text[field.cursor..];
@@ -3141,6 +3141,14 @@ impl<'a> Renderer<'a> {
             .flex_row()
             .items_center()
             .when(wide, |d| d.flex_1())
+            .when(table_cell, |d| {
+                d.w_full()
+                    .flex_1()
+                    .border_1()
+                    .border_color(t.tokens.interactive_accent)
+                    .rounded(px(4.))
+                    .bg(t.tokens.background_primary)
+            })
             .min_w_0()
             .px_1()
             .rounded_sm()
@@ -3206,7 +3214,7 @@ impl<'a> Renderer<'a> {
                         }
                     })
                     .child(match self.open_field(&row, Part::Key) {
-                        Some(field) => self.property_field(field, true),
+                        Some(field) => self.property_field(field, true, false),
                         None => {
                             let cell = div()
                                 .flex_1()
@@ -3249,7 +3257,7 @@ impl<'a> Renderer<'a> {
                     .items_center()
                     .gap_1()
                     .child(match self.open_field(&row, Part::Value) {
-                        Some(field) => self.property_field(field, true),
+                        Some(field) => self.property_field(field, true, false),
                         None => self.property_value_cell(&row, host),
                     })
                     .when(row.mismatched, |d| {
@@ -3484,7 +3492,7 @@ impl<'a> Renderer<'a> {
         let item_field = |field: &Field| {
             div()
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(self.property_field(field, false))
+                .child(self.property_field(field, false, false))
                 .into_any_element()
         };
         let mut cells: Vec<AnyElement> = Vec::new();

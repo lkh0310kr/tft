@@ -4,10 +4,9 @@ use super::{
     ToggleMode, TreeActivate, TreeDown, TreeLeft, TreeRight, TreeUp, ViewMode, Workspace,
 };
 use crate::editor::Editor;
-use crate::popout::PopoutWindow;
 use crate::zoom;
 use gpui::{Action, App, ClipboardItem, Context, Entity, Focusable, Global, KeyBinding, Window};
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tft_app::SplitDirection;
 use tft_commands::{CommandRegistry, hotkey_label, keystroke};
@@ -87,6 +86,42 @@ pub const EDITOR_ONLY: &[&str] = &[
     "editor:unfold-all",
     "editor:unindent-list",
     "markdown:add-alias",
+];
+
+/// Runnable commands that are deliberately kept out of the palette and the
+/// slash popup: they belong to a context (a table, a split group, tab
+/// numbers) or are better reached by their hotkey, so listing them only
+/// buries the commands a reader wants.
+pub const PALETTE_HIDDEN: &[&str] = &[
+    "workspace:goto-tab-1",
+    "workspace:goto-tab-2",
+    "workspace:goto-tab-3",
+    "workspace:goto-tab-4",
+    "workspace:goto-tab-5",
+    "workspace:goto-tab-6",
+    "workspace:goto-tab-7",
+    "workspace:goto-tab-8",
+    "workspace:goto-last-tab",
+    "editor:table-row-before",
+    "editor:table-row-after",
+    "editor:table-row-up",
+    "editor:table-row-down",
+    "editor:table-row-copy",
+    "editor:table-row-delete",
+    "editor:table-col-before",
+    "editor:table-col-after",
+    "editor:table-col-left",
+    "editor:table-col-right",
+    "editor:table-col-copy",
+    "editor:table-col-delete",
+    "editor:table-col-align-left",
+    "editor:table-col-align-center",
+    "editor:table-col-align-right",
+    "editor:focus",
+    "editor:focus-left",
+    "editor:focus-right",
+    "editor:focus-top",
+    "editor:focus-bottom",
 ];
 
 /// The ids that act on the active file, offered only while one is open
@@ -756,6 +791,7 @@ impl Workspace {
         let registry = cx.global::<Commands>().0.clone();
         let entries = registry
             .iter()
+            .filter(|c| !PALETTE_HIDDEN.contains(&c.id.as_str()))
             .filter(|c| self.can_run(&c.id, window, cx))
             .map(|c| tft_suggest::CommandEntry {
                 id: c.id.clone(),
@@ -813,16 +849,6 @@ impl Workspace {
         // that case was observed (see [[Specification#`graph:open-local` is not offered with no file open]]).
         if id == "graph:open-local" {
             return self.active_group_state.current.is_some();
-        }
-        // Offered only while a global graph is the active leaf, not with a note active
-        // or a local graph.
-        if id == "graph:animate" {
-            return self.global_graph_active(cx);
-        }
-        // "Toggle window always on top" is offered only in a popout that is not maximized.
-        if id == "window:toggle-always-on-top" {
-            return window.window_handle().downcast::<PopoutWindow>().is_some()
-                && !window.is_maximized();
         }
         // The active file's commands are check callbacks: offered only with a note or image open.
         if ACTIVE_FILE_ONLY.contains(&id) {
@@ -928,12 +954,7 @@ impl Workspace {
             .is_some_and(|path| FileKind::from_path(path) == FileKind::Markdown)
     }
 
-    /// `graph:animate`'s check: a global graph is the active leaf.
-    fn global_graph_active(&self, cx: &App) -> bool {
-        self.main_view(cx) == MainView::Graph
-            && !self.radial_tree.active
-            && !self.graph.read(cx).is_local()
-    }
+
 
     pub(super) fn open_graph_action(
         &mut self,
@@ -971,25 +992,6 @@ pub(super) fn full_path_text(absolute: PathBuf) -> String {
 /// `trashOption: "local"` moves a deleted file.
 pub(super) const TRASH_FOLDER: &str = ".trash";
 
-/// The vault's name as `workspace:copy-url` writes it: its folder's name,
-/// read from the absolute root so a vault opened as `.` (or as the empty
-/// path, which is the working folder too) is still named. The last plain
-/// component is the name: `absolute` keeps a trailing `.`.
-pub(super) fn vault_folder_name(root: &Path) -> String {
-    let absolute = match root.as_os_str().is_empty() {
-        true => std::env::current_dir(),
-        false => std::path::absolute(root),
-    }
-    .unwrap_or_else(|_| root.to_path_buf());
-    absolute
-        .components()
-        .rev()
-        .find_map(|c| match c {
-            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
 
 /// Obsidian's notice for a path that is not there, as "Show trash" showed
 /// it with no `.trash` folder: the absolute path in curly quotes.

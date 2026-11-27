@@ -333,7 +333,7 @@ mod tests {
     fn ids_are_unique_and_well_formed() {
         let ids = known_ids();
         assert!(
-            ids.len() >= 170,
+            ids.len() >= 145,
             "expected the full inventory, got {}",
             ids.len()
         );
@@ -352,7 +352,7 @@ mod tests {
     fn names_cover_registered_desktop_commands() {
         let ids: HashSet<_> = known_ids().into_iter().collect();
         let names = known_names();
-        assert!(names.len() >= 155, "got {}", names.len());
+        assert!(names.len() >= 130, "got {}", names.len());
         for (id, name) in &names {
             assert!(ids.contains(id), "{id} named but not in commands.txt");
             assert!(!name.is_empty());
@@ -373,7 +373,7 @@ mod tests {
             assert!(ids.contains(id), "{id} not in commands.txt");
         }
         let reg = CommandRegistry::with_known_ids();
-        assert!(reg.get("app:reload").unwrap().hotkeys.is_empty());
+        assert!(reg.get("app:open-settings").unwrap().hotkeys.is_empty());
         assert_eq!(reg.get("workspace:next-tab").unwrap().hotkeys.len(), 2);
     }
 
@@ -518,6 +518,28 @@ mod plugin_tests {
             "editor:toggle-readable-line-length",
             "editor:toggle-line-numbers",
             "app:toggle-default-new-pane-mode",
+            // TFT's own pruning of low-value commands.
+            "app:show-debug-info",
+            "app:reload",
+            "app:open-sandbox-vault",
+            "app:migrate-frontmatter",
+            "app:show-release-notes",
+            "app:open-another-vault",
+            "graph:animate",
+            "canvas:jump-to-group",
+            "canvas:convert-to-file",
+            "window:toggle-always-on-top",
+            "editor:toggle-highlight-red",
+            "editor:toggle-highlight-orange",
+            "editor:toggle-highlight-yellow",
+            "editor:toggle-highlight-green",
+            "editor:toggle-highlight-blue",
+            "editor:toggle-highlight-purple",
+            "editor:cycle-list-checklist",
+            "editor:set-heading-0",
+            "workspace:copy-url",
+            "file-explorer:new-file-in-current-tab",
+            "file-explorer:new-file-in-new-pane",
         ] {
             assert!(!ids.contains(id), "{id} survived its feature's removal");
         }
