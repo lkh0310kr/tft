@@ -786,48 +786,6 @@ impl CanvasView {
         self.edited(cx);
     }
 
-    /// `canvas:jump-to-group`: frames the group and selects it.
-    pub fn jump_to_group(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.scene.node(id).is_none() {
-            return;
-        }
-        self.scene.selection = Selection::only_node(id);
-        self.zoom_to_node(id, cx);
-    }
-
-    /// The groups `canvas:jump-to-group` offers: label and id.
-    pub fn group_targets(&self) -> Vec<(String, String)> {
-        self.scene
-            .jump_targets()
-            .into_iter()
-            .map(|n| (n.label.clone().unwrap_or_default(), n.id.clone()))
-            .collect()
-    }
-
-    /// The one selected text card, for `canvas:convert-to-file`: its id and
-    /// text.
-    pub fn selected_text_card(&self) -> Option<(String, String)> {
-        let [id] = self.scene.selection.nodes.as_slice() else {
-            return None;
-        };
-        let node = self.scene.node(id)?;
-        (node.kind == NodeType::Text).then(|| (id.clone(), node.text.clone().unwrap_or_default()))
-    }
-
-    /// Turns a text card into a file card over `path`, after the workspace
-    /// wrote the note: the geometry and colour stay, the text goes.
-    pub fn convert_to_file(&mut self, id: &str, path: &str, cx: &mut Context<Self>) {
-        self.editing = None;
-        self.scene.begin();
-        if let Some(node) = self.scene.node_mut(id) {
-            node.kind = NodeType::File;
-            node.file = Some(path.to_string());
-            node.text = None;
-        }
-        self.scene.commit();
-        self.edited(cx);
-    }
-
     /// Frames one node.
     fn zoom_to_node(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(n) = self.scene.node(id) {

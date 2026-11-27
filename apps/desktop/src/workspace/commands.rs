@@ -43,7 +43,6 @@ pub const EDITOR_ONLY: &[&str] = &[
     "editor:add-cursor-below",
     "editor:clear-formatting",
     "editor:context-menu",
-    "editor:cycle-list-checklist",
     "editor:delete-paragraph",
     "editor:fold-all",
     "editor:fold-less",
@@ -65,7 +64,6 @@ pub const EDITOR_ONLY: &[&str] = &[
     "editor:open-link-in-new-window",
     "editor:rename-heading",
     "editor:set-heading",
-    "editor:set-heading-0",
     "editor:set-heading-1",
     "editor:set-heading-2",
     "editor:set-heading-3",
@@ -82,12 +80,6 @@ pub const EDITOR_ONLY: &[&str] = &[
     "editor:toggle-comments",
     "editor:toggle-fold",
     "editor:toggle-highlight",
-    "editor:toggle-highlight-blue",
-    "editor:toggle-highlight-green",
-    "editor:toggle-highlight-orange",
-    "editor:toggle-highlight-purple",
-    "editor:toggle-highlight-red",
-    "editor:toggle-highlight-yellow",
     "editor:toggle-inline-math",
     "editor:toggle-italics",
     "editor:toggle-numbered-list",
@@ -102,7 +94,6 @@ pub const EDITOR_ONLY: &[&str] = &[
 pub const ACTIVE_FILE_ONLY: &[&str] = &[
     "workspace:copy-path",
     "workspace:copy-full-path",
-    "workspace:copy-url",
     "open-with-default-app:open",
     "open-with-default-app:show",
 ];
@@ -126,13 +117,6 @@ pub const RUNNABLE: &[&str] = &[
     "editor:toggle-bullet-list",
     "editor:toggle-numbered-list",
     "editor:toggle-checklist-status",
-    "editor:cycle-list-checklist",
-    "editor:toggle-highlight-red",
-    "editor:toggle-highlight-orange",
-    "editor:toggle-highlight-yellow",
-    "editor:toggle-highlight-green",
-    "editor:toggle-highlight-blue",
-    "editor:toggle-highlight-purple",
     "editor:clear-formatting",
     "editor:insert-callout",
     "editor:insert-codeblock",
@@ -146,7 +130,6 @@ pub const RUNNABLE: &[&str] = &[
     "editor:unfold-all",
     "editor:fold-more",
     "editor:fold-less",
-    "editor:set-heading-0",
     "editor:set-heading-1",
     "editor:set-heading-2",
     "editor:set-heading-3",
@@ -167,10 +150,7 @@ pub const RUNNABLE: &[&str] = &[
     "global-search:open",
     "graph:open",
     "graph:open-local",
-    "graph:animate",
     "canvas:new-file",
-    "canvas:jump-to-group",
-    "canvas:convert-to-file",
     "markdown:toggle-preview",
     "markdown:add-metadata-property",
     "markdown:add-alias",
@@ -199,14 +179,10 @@ pub const RUNNABLE: &[&str] = &[
     "app:go-forward",
     "app:open-settings",
     "app:switch-vault",
-    "app:open-another-vault",
-    "app:open-sandbox-vault",
     "app:toggle-left-sidebar",
     "file-explorer:open",
     "file-explorer:reveal-active-file",
     "file-explorer:new-file",
-    "file-explorer:new-file-in-current-tab",
-    "file-explorer:new-file-in-new-pane",
     "file-explorer:new-folder",
     "file-explorer:move-file",
     "file-explorer:duplicate-file",
@@ -244,7 +220,6 @@ pub const RUNNABLE: &[&str] = &[
     "app:delete-file",
     "workspace:copy-path",
     "workspace:copy-full-path",
-    "workspace:copy-url",
     "workspace:show-trash",
     "open-with-default-app:open",
     "open-with-default-app:show",
@@ -252,16 +227,11 @@ pub const RUNNABLE: &[&str] = &[
     "editor:attach-file",
     "editor:download-attachments",
     "app:open-file",
-    "app:show-debug-info",
-    "app:show-release-notes",
-    "app:migrate-frontmatter",
     "workspace:export-pdf",
     "canvas:export-as-image",
     "window:zoom-in",
     "window:zoom-out",
     "window:reset-zoom",
-    "window:toggle-always-on-top",
-    "app:reload",
 ];
 
 /// Binds every runnable command's hotkeys in the Workspace context and the reading
@@ -377,13 +347,7 @@ impl Workspace {
             // global graph.
             "graph:open-local" if self.active_group_state.current.is_none() => {}
             "graph:open-local" => self.show_graph(true, window, cx),
-            // Both check callbacks: asked for by id where the palette would
-            // not offer them, they do nothing.
-            "graph:animate" if !self.global_graph_active(cx) => {}
-            "graph:animate" => self.graph.update(cx, |g, cx| g.animate(cx)),
             "canvas:new-file" => self.new_canvas("", cx),
-            "canvas:jump-to-group" => self.jump_to_group(window, cx),
-            "canvas:convert-to-file" => self.convert_card_to_file(cx),
             "markdown:toggle-preview" => self.toggle_mode(&ToggleMode, window, cx),
             // The properties block is the same editable widget in reading
             // view, and `editor:toggle-fold-properties` was observed running
@@ -513,28 +477,6 @@ impl Workspace {
                         .update(cx, |e, cx| e.toggle_checklist(window, cx));
                 }
             }
-            "editor:cycle-list-checklist" => {
-                if self.editing_or_report(id, window, cx) {
-                    self.active_editor()
-                        .update(cx, |e, cx| e.cycle_checklist(window, cx));
-                }
-            }
-            // The six colours write one emoji after the opening `==`.
-            "editor:toggle-highlight-red"
-            | "editor:toggle-highlight-orange"
-            | "editor:toggle-highlight-yellow"
-            | "editor:toggle-highlight-green"
-            | "editor:toggle-highlight-blue"
-            | "editor:toggle-highlight-purple" => {
-                if self.editing_or_report(id, window, cx) {
-                    let color = id
-                        .rsplit('-')
-                        .next()
-                        .and_then(tft_markdown::HighlightColor::from_name);
-                    self.active_editor()
-                        .update(cx, |e, cx| e.toggle_highlight(color, window, cx));
-                }
-            }
             "editor:clear-formatting" => {
                 if self.editing_or_report(id, window, cx) {
                     self.active_editor()
@@ -560,8 +502,7 @@ impl Workspace {
             "editor:set-heading" => {
                 self.editing_or_report(id, window, cx);
             }
-            "editor:set-heading-0"
-            | "editor:set-heading-1"
+            "editor:set-heading-1"
             | "editor:set-heading-2"
             | "editor:set-heading-3"
             | "editor:set-heading-4"
@@ -661,22 +602,14 @@ impl Workspace {
                     cx.notify();
                 }
             },
-            "file-explorer:new-file"
-            | "file-explorer:new-file-in-current-tab"
-            | "file-explorer:new-file-in-new-pane" => {
-                // Obsidian's "Create new note" goes to a new tab unless the active one
-                // is empty; "to the right" is a new tab in TFT's one strip.
-                let fresh_tab = match id {
-                    "file-explorer:new-file-in-current-tab" => false,
-                    "file-explorer:new-file-in-new-pane" => true,
-                    _ => self.active_group_state.current.is_some(),
-                };
-                // New notes go to the vault folder.
-                let folder = String::new();
-                if fresh_tab {
+            "file-explorer:new-file" => {
+                // Obsidian's "Create new note" goes to a new tab unless the
+                // active one is empty.
+                if self.active_group_state.current.is_some() {
                     self.new_tab(cx);
                 }
-                self.new_note(&folder, window, cx);
+                // New notes go to the vault folder.
+                self.new_note("", window, cx);
             }
             "file-explorer:new-folder" => self.start_new_folder("", window, cx),
             "file-explorer:move-file" => {
@@ -776,17 +709,6 @@ impl Workspace {
                     self.report("Copied to your clipboard", cx);
                 }
             }
-            "workspace:copy-url" => {
-                if let (Some(state), Some(current)) = (
-                    self.vault_session.state.clone(),
-                    self.active_group_state.current.clone(),
-                ) {
-                    let name = vault_folder_name(&state.root);
-                    let url = crate::uri::open_url(&name, &current);
-                    cx.write_to_clipboard(ClipboardItem::new_string(url));
-                    self.report("URL copied to your clipboard", cx);
-                }
-            }
             // "Show trash", offered only under `trashOption: "local"`: the `.trash`
             // folder, or Obsidian's notice when it is missing.
             "workspace:show-trash" => {
@@ -812,35 +734,16 @@ impl Workspace {
                 }
             }
             "app:switch-vault" => self.toggle_vault_menu(cx),
-            "app:open-another-vault" => self.open_another_vault(window, cx),
-            "app:open-sandbox-vault" => self.open_sandbox_vault(window, cx),
-            "app:show-debug-info" => self.show_debug_info(window, cx),
-            "app:migrate-frontmatter" => self.open_migrate_frontmatter(window, cx),
             "workspace:export-pdf" | "canvas:export-as-image" => {
                 self.run_export_command(id, window, cx);
             }
-            "app:show-release-notes" => self.show_release_notes(cx),
             // Zoom in/out/reset: half a level between -2.5 and +3, on the vault
             // window (see [[Specification#Window zoom]]).
-            "app:reload" => self.reload_app(cx),
             "window:zoom-in" => self.zoom_main(zoom::stepped(self.main_window.zoom_level(), 1), cx),
             "window:zoom-out" => {
                 self.zoom_main(zoom::stepped(self.main_window.zoom_level(), -1), cx)
             }
             "window:reset-zoom" => self.zoom_main(0.0, cx),
-            // A popout's command only (`can_run`): that window above others, a
-            // second run back; nothing is written.
-            "window:toggle-always-on-top" => {
-                if self.can_run(id, window, cx) {
-                    let on = !zoom::always_on_top(window);
-                    if !zoom::set_always_on_top(window, on) {
-                        self.report(
-                            "This desktop does not let a window keep itself on top".to_string(),
-                            cx,
-                        );
-                    }
-                }
-            }
             _ => {
                 let name = self.command_name(id, cx);
                 self.report(format!("{name}: not available in TFT yet"), cx);

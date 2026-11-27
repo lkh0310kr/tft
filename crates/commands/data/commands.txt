@@ -2,18 +2,11 @@
 app:delete-file
 app:go-back
 app:go-forward
-app:open-another-vault
-app:open-sandbox-vault
 app:open-settings
-app:reload
-app:show-debug-info
-app:show-release-notes
 app:show-tab-switcher
 app:switch-vault
 app:toggle-left-sidebar
-canvas:convert-to-file
 canvas:export-as-image
-canvas:jump-to-group
 canvas:new-file
 editor:add-cursor-above
 editor:add-cursor-below
@@ -23,7 +16,6 @@ editor:configure-toolbar
 editor:context-menu
 editor:copy
 editor:cut
-editor:cycle-list-checklist
 editor:delete-paragraph
 editor:download-attachments
 editor:focus
@@ -62,7 +54,6 @@ editor:redo
 editor:rename-heading
 editor:save-file
 editor:set-heading
-editor:set-heading-0
 editor:set-heading-1
 editor:set-heading-2
 editor:set-heading-3
@@ -107,13 +98,10 @@ editor:unindent-list
 file-explorer:duplicate-file
 file-explorer:move-file
 file-explorer:new-file
-file-explorer:new-file-in-current-tab
-file-explorer:new-file-in-new-pane
 file-explorer:new-folder
 file-explorer:open
 file-explorer:reveal-active-file
 global-search:open
-graph:animate
 graph:open
 graph:open-local
 markdown-importer:open
@@ -127,7 +115,6 @@ open-with-default-app:show
 switcher:open
 theme:toggle-light-dark
 window:reset-zoom
-window:toggle-always-on-top
 window:zoom-in
 window:zoom-out
 workspace:close
@@ -137,7 +124,6 @@ workspace:close-tab-group
 workspace:close-window
 workspace:copy-full-path
 workspace:copy-path
-workspace:copy-url
 workspace:edit-file-title
 workspace:export-pdf
 workspace:goto-last-tab
@@ -161,13 +147,6 @@ workspace:split-vertical
 workspace:toggle-pin
 workspace:undo-close-pane
 # Added by Obsidian 1.14.4 (observed in the running app).
-app:migrate-frontmatter
 app:open-file
-editor:toggle-highlight-red
-editor:toggle-highlight-orange
-editor:toggle-highlight-yellow
-editor:toggle-highlight-green
-editor:toggle-highlight-blue
-editor:toggle-highlight-purple
 editor:table-row-copy
 editor:table-col-copy

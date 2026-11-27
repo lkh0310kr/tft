@@ -165,6 +165,11 @@ impl CommandPalette {
                             this.selected = ix;
                             this.run_selected(cx);
                         }))
+                        .child(crate::assets::icon(
+                            "terminal",
+                            16.,
+                            theme.tokens.text_muted,
+                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -196,7 +201,7 @@ impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
         let count = self.items.len();
-        let rows = (count.min(12) as f32) * 34.;
+        let rows = (count.min(12) as f32) * 38.;
         crate::ui::palette_panel("command-palette", 620., &theme)
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Close)))
             .child(crate::ui::palette_search_slot(&theme).child(self.input.clone()))

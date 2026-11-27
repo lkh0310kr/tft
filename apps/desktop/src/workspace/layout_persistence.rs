@@ -20,8 +20,6 @@ pub(super) struct WorkspacePersistenceState {
     snapshot: Option<Value>,
     /// The loaded layout suppresses the startup flag that would open the first note.
     restored: bool,
-    /// Layout captured before `app:reload`, reapplied once the vault reloads.
-    pending_reload: Option<Value>,
     /// Recently opened vault-relative paths stored in `workspace.json`.
     last_open_files: Vec<String>,
 }
@@ -31,14 +29,6 @@ impl WorkspacePersistenceState {
         self.snapshot = None;
         self.restored = false;
         self.last_open_files.clear();
-    }
-
-    pub(super) fn take_pending_reload(&mut self) -> Option<Value> {
-        self.pending_reload.take()
-    }
-
-    pub(super) fn set_pending_reload(&mut self, layout: Value) {
-        self.pending_reload = Some(layout);
     }
 
     pub(super) fn load_last_open_files(&mut self, layout: &Value) {

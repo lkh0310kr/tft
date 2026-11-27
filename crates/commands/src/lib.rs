@@ -35,12 +35,6 @@ pub fn default_hotkeys() -> BTreeMap<&'static str, Vec<Hotkey>> {
     bind(&mut m, "global-search:open", &["Mod", "Shift"], "F");
     bind(&mut m, "graph:open", &["Mod"], "G");
     bind(&mut m, "file-explorer:new-file", &["Mod"], "N");
-    bind(
-        &mut m,
-        "file-explorer:new-file-in-new-pane",
-        &["Mod", "Shift"],
-        "N",
-    );
     bind(&mut m, "editor:save-file", &["Mod"], "S");
     bind(&mut m, "editor:open-search", &["Mod"], "F");
     bind(&mut m, "editor:open-search-replace", &["Mod"], "H");

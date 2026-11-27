@@ -1,6 +1,6 @@
 //! Desktop notices, modal overlays, menu focus handoff, and pane visibility.
 
-use super::notices::{NoticeAction, NOTICE_LIFETIME};
+use super::notices::NOTICE_LIFETIME;
 use super::{ChooserPurpose, PendingOp, Workspace};
 use crate::prompt::PromptSpec;
 use crate::search::CopyEntry;
@@ -17,8 +17,6 @@ pub(super) enum Modal {
     Chooser(ChooserPurpose),
     CopyResults,
     Downloads,
-    DebugInfo,
-    MigrateFrontmatter,
     PdfExport,
     ImageExport,
 }
@@ -59,33 +57,8 @@ impl Workspace {
     /// Shows a message that expires on its own, the way Obsidian's Notice does; the
     /// status bar keeps only what stays true.
     pub(super) fn report(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.report_with(message, None, cx);
-    }
-
-    /// A notice's button pressed.
-    pub(super) fn run_notice_action(
-        &mut self,
-        action: NoticeAction,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match action {
-            NoticeAction::UndoMigration => self.undo_migration(cx),
-        }
-    }
-
-    /// [`Workspace::report`] with a button after the message.
-    pub(super) fn report_with(
-        &mut self,
-        message: impl Into<SharedString>,
-        action: Option<NoticeAction>,
-        cx: &mut Context<Self>,
-    ) {
         let home = self.window_of_group(self.active_group_id());
-        let id = self
-            .feedback
-            .notices
-            .push_with(message.into(), home, action);
+        let id = self.feedback.notices.push(message.into(), home);
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_LIFETIME).await;
             this.update(cx, |ws, cx| {
@@ -164,22 +137,6 @@ impl Workspace {
                         .text_size(px(12.))
                         .text_color(theme.tokens.text_normal)
                         .child(notice.text.clone())
-                        .children(notice.action.map(|action| {
-                            let id = notice.id;
-                            div()
-                                .id(("notice-action", id))
-                                .mt_1()
-                                .flex()
-                                .justify_end()
-                                .cursor_pointer()
-                                .text_color(theme.tokens.text_accent)
-                                .hover(|s| s.text_color(theme.tokens.text_accent_hover))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.feedback.notices.expire(id);
-                                    this.run_notice_action(action, window, cx);
-                                }))
-                                .child(action.label())
-                        }))
                 }))
                 .into_any_element(),
         )
@@ -229,8 +186,6 @@ impl Workspace {
             | Modal::Chooser(_)
             | Modal::Downloads
             | Modal::CopyResults
-            | Modal::DebugInfo
-            | Modal::MigrateFrontmatter
             | Modal::PdfExport
             | Modal::ImageExport => {
                 let child: gpui::AnyElement = match self.overlay.modal {
@@ -239,8 +194,6 @@ impl Workspace {
                     Modal::Chooser(_) => self.chooser.clone().into_any_element(),
                     Modal::Downloads => self.downloads_element()?,
                     Modal::CopyResults => self.copy_results.clone().into_any_element(),
-                    Modal::DebugInfo => self.debug_info.clone().into_any_element(),
-                    Modal::MigrateFrontmatter => self.migrate_element()?,
                     Modal::PdfExport => self.pdf_export.clone().into_any_element(),
                     Modal::ImageExport => self.image_export.clone().into_any_element(),
                     _ => self.prompt.view.clone().into_any_element(),

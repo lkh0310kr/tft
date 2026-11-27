@@ -14,13 +14,11 @@ mod chooser;
 mod clipboard_extra;
 mod control;
 mod copy_results;
-mod debug_info;
 mod explorer;
 mod export_modals;
 mod file_menu;
 mod graph;
 mod hover_preview;
-mod migrate_modal;
 mod palette;
 mod popout;
 mod prompt;
@@ -286,8 +284,6 @@ pub fn bind_all_keys(cx: &mut App, registry: &CommandRegistry) {
     settings::bind_keys(cx);
     prompt::bind_keys(cx);
     copy_results::bind_keys(cx);
-    debug_info::bind_keys(cx);
-    migrate_modal::bind_keys(cx);
     export_modals::bind_keys(cx);
     // Quit: Cmd+Q on macOS, Ctrl+Q elsewhere.
     cx.bind_keys([KeyBinding::new("secondary-q", Quit, None)]);

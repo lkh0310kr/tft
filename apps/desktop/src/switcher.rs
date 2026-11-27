@@ -376,27 +376,27 @@ impl QuickSwitcher {
                         .into(),
                     ),
                 };
+                let recent = self.recent.iter().any(|path| path == &c.path);
+                let file_icon = match FileKind::from_path(&c.path) {
+                    FileKind::Canvas => "layout-dashboard",
+                    FileKind::Pdf => "book-open",
+                    _ => "files",
+                };
                 Some(
-                    div()
-                        .id(("switcher-row", ix))
-                        .w_full()
-                        .h(px(34.))
-                        .px_3()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .rounded_sm()
-                        .cursor_pointer()
-                        .when(selected, |d| d.bg(theme.tokens.background_modifier_hover))
-                        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+                    crate::ui::palette_result_row(("switcher-row", ix), selected, &theme)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.selected = ix;
                             this.open_selected(cx);
                         }))
+                        .child(crate::assets::icon(
+                            file_icon,
+                            16.,
+                            theme.tokens.text_muted,
+                        ))
                         .child(
                             div()
+                                .flex_1()
+                                .min_w_0()
                                 .text_size(px(14.))
                                 .text_color(if c.downranked {
                                     theme.tokens.text_muted
@@ -410,11 +410,17 @@ impl QuickSwitcher {
                         )
                         .children(detail.map(|d| {
                             div()
+                                .max_w(px(220.))
+                                .overflow_hidden()
+                                .text_ellipsis()
                                 .flex_shrink_0()
                                 .text_size(px(11.))
                                 .text_color(theme.tokens.text_muted)
                                 .child(d)
-                        })),
+                        }))
+                        .when(recent, |d| {
+                            d.child(crate::assets::icon("clock", 14., theme.tokens.text_muted))
+                        }),
                 )
             })
             .collect()
@@ -425,28 +431,36 @@ impl Render for QuickSwitcher {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.global::<Theme>().clone();
         let count = self.items.len();
-        let rows = (count.min(12) as f32) * 34.;
-        crate::ui::modal_panel("quick-switcher", 620., &theme)
-            .p_2()
+        let rows = (count.min(12) as f32) * 38.;
+        crate::ui::palette_panel("quick-switcher", 620., &theme)
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(SwitcherEvent::Close)))
-            .child(self.input.clone())
+            .child(crate::ui::palette_search_slot(&theme).child(self.input.clone()))
             .when(count > 0, |d| {
-                d.child(
+                d.child(crate::ui::palette_results_slot().child(
                     uniform_list("switcher-list", count, cx.processor(Self::render_rows))
                         .track_scroll(&self.scroll)
-                        .h(px(rows))
-                        .mt_2(),
-                )
+                        .h(px(rows)),
+                ))
             })
             .when(count == 0 && !self.input.read(cx).text().is_empty(), |d| {
-                d.child(
+                d.child(crate::ui::palette_results_slot().child(
                     div()
-                        .p_3()
+                        .h(px(38.))
+                        .px(px(10.))
+                        .flex()
+                        .items_center()
                         .text_size(px(12.))
                         .text_color(theme.tokens.text_muted)
                         .child("No matching files."),
-                )
+                ))
             })
+            .child(crate::ui::palette_footer(
+                "Open",
+                "↵",
+                "Actions…",
+                if cfg!(target_os = "macos") { "⌘⇧A" } else { "Ctrl+Shift+A" },
+                &theme,
+            ))
     }
 }
 

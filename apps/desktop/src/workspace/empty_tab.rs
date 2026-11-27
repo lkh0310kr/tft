@@ -51,33 +51,28 @@ pub(super) fn empty_tab_actions(registry: &CommandRegistry) -> Vec<EmptyAction> 
 }
 
 impl Workspace {
-    /// The empty tab: the three pills Obsidian offers, each running its command, under
-    /// TFT's mark. The body is the same however the tab emptied.
+    /// The empty tab's three actions, presented as a plain vertical list.
     pub(super) fn render_empty_tab(
         &self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let registry = cx.global::<Commands>().0.clone();
-        let pills: Vec<_> =
+        let actions: Vec<_> =
             empty_tab_actions(&registry)
                 .into_iter()
                 .map(|action| {
                     let command = action.command;
-                    // Obsidian's `mod-pill`: fully rounded, the label in the UI size with
-                    // the hotkey muted behind it.
                     div()
                         .id(action.id)
+                        .w_full()
+                        .h(px(36.))
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.))
-                        .px(px(14.))
-                        .py(px(6.))
-                        .rounded(px(14.))
-                        .bg(theme.tokens.background_modifier_hover)
-                        .border_1()
-                        .border_color(theme.tokens.background_modifier_border)
+                        .justify_between()
+                        .px(px(8.))
+                        .rounded(px(4.))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.tokens.background_modifier_hover))
                         .text_size(px(FONT_UI_SMALL))
@@ -100,18 +95,15 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .gap_5()
             .items_center()
             .justify_center()
             .text_color(theme.tokens.text_muted)
             .child(
                 div()
+                    .w(px(240.))
                     .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap(px(8.))
-                    .children(pills),
+                    .flex_col()
+                    .children(actions),
             )
             .into_any_element()
     }

@@ -312,13 +312,7 @@ impl Workspace {
         // desktop is dark, and `set_system_dark`, run before the vault was
         // read, had no vault to rebuild it from.
         self.reload_theme(cx);
-        if let Some(layout) = self.layout_persistence.take_pending_reload() {
-            // A reload: the commands and keys from the files as they are
-            // now, and the layout as it was left.
-            self.rebuild_commands(&state, cx);
-            self.apply_layout(layout, &state, window, cx);
-            self.focus_main(window, cx);
-        } else if let Some(current) = self.active_group_state.current.clone() {
+        if let Some(current) = self.active_group_state.current.clone() {
             self.open_file(current, None, cx);
         } else {
             self.restore_layout(&state, window, cx);
@@ -598,38 +592,5 @@ impl Workspace {
 
     pub fn is_loaded(&self) -> bool {
         self.vault_session.state.is_some()
-    }
-
-    /// "Reload app without saving", in the vault window: the vault, config, theme,
-    /// hotkeys and plugins are read again; unsaved edits are dropped and the layout
-    /// kept ([[Specification#Observed app reload]]).
-    pub(super) fn reload_app(&mut self, cx: &mut Context<Self>) {
-        if self.vault_session.state.is_none() {
-            return;
-        }
-        let this = cx.entity();
-        let main = self.main_window.handle();
-        cx.defer(move |cx| {
-            main.update(cx, |_, window, cx| {
-                this.update(cx, |ws, cx| ws.reload_now(window, cx))
-            })
-            .ok();
-        });
-    }
-
-    fn reload_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(state) = self.vault_session.state.clone() else {
-            return;
-        };
-        let layout = self.layout_json();
-        // Without saving: the pending autosave is dropped and the closing groups write nothing.
-        self.document_save.cancel();
-        self.active_group_state.current = None;
-        self.forget_vault(cx);
-        self.active_group_state.history.clear();
-        self.active_group_state.history_ix = 0;
-        self.layout_persistence.set_pending_reload(layout);
-        let record = self.vault_session.record;
-        self.load_vault_with(state.root.clone(), record, window, cx);
     }
 }

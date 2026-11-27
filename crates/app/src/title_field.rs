@@ -169,6 +169,16 @@ impl TitleField {
         self.replace(range, "");
     }
 
+    /// Deletes the selection or the text from the start of the title to the caret.
+    pub fn delete_to_start(&mut self) {
+        let range = if self.has_selection() {
+            self.selection()
+        } else {
+            0..self.cursor
+        };
+        self.replace(range, "");
+    }
+
     /// A bare Left or Right collapses a selection onto the edge it points
     /// at rather than stepping from the head, as a native input does.
     pub fn step(&mut self, forward: bool, extend: bool) {

@@ -364,6 +364,12 @@ impl Field {
         }
     }
 
+    /// Deletes from the start of this single-line field to its caret.
+    pub fn delete_to_start(&mut self) {
+        self.text.replace_range(0..self.cursor, "");
+        self.cursor = 0;
+    }
+
     pub fn left(&mut self) {
         if let Some(prev) = self.prev_boundary() {
             self.cursor = prev;

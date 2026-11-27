@@ -98,6 +98,7 @@ actions!(
         SelectDocumentEnd,
         SelectAll,
         Backspace,
+        DeleteToLineStart,
         Delete,
         DeleteWordLeft,
         DeleteWordRight,
@@ -182,6 +183,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-right", LineEnd, ctx),
         KeyBinding::new("cmd-shift-left", SelectLineStart, ctx),
         KeyBinding::new("cmd-shift-right", SelectLineEnd, ctx),
+        KeyBinding::new("cmd-backspace", DeleteToLineStart, ctx),
     ]);
     // Document ends: Cmd+↑/↓ on macOS, Ctrl+Home/End elsewhere.
     #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
@@ -3118,6 +3120,31 @@ impl Editor {
         self.delete_all(|buf, at| at..buf.next_char_boundary(at), kind, window, cx);
     }
 
+    fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.title_apply(cx, |field| field.delete_to_start()) {
+            return;
+        }
+        if let Some(field) = self.active_field() {
+            field.delete_to_start();
+            cx.notify();
+            return;
+        }
+        self.delete_all(
+            |buf, at| {
+                let line = buf.cursor_at(at).line;
+                buf.line_starts()[line]..at
+            },
+            EditKind::Other,
+            window,
+            cx,
+        );
+    }
+
     fn delete_word_left(
         &mut self,
         _: &DeleteWordLeft,
@@ -5322,6 +5349,10 @@ impl Editor {
         if !event.modifiers.shift {
             self.buf.collapse_cursors();
         }
+        // Double- and triple-click establish a selection on mouse down too;
+        // keep the same drag lifecycle as a single click so the selection can
+        // continue extending until mouse up.
+        self.dragging = true;
         match event.click_count {
             2 => {
                 let word = self.buf.word_at(at);
@@ -5343,7 +5374,6 @@ impl Editor {
                 if !event.modifiers.shift {
                     self.buf.anchor = at;
                 }
-                self.dragging = true;
             }
         }
         cx.notify();
@@ -5867,6 +5897,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::select_document_end))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete_to_line_start))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_left))
             .on_action(cx.listener(Self::delete_word_right))

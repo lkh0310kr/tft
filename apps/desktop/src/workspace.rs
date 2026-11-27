@@ -5,7 +5,6 @@ use crate::assets::icon;
 use crate::canvas::CanvasView;
 use crate::chooser::Chooser;
 use crate::copy_results::CopyResults;
-use crate::debug_info::DebugInfo;
 use crate::explorer::{FileExplorer, display_name};
 use crate::export_modals::{ImageExport, PdfExport};
 use crate::file_menu::{self, Pick};
@@ -124,7 +123,7 @@ mod vault_lifecycle;
 use vault_lifecycle::{ThemeAppearanceState, VaultSessionState};
 mod vault_state;
 mod window_frame;
-use notices::{FeedbackState, NoticeAction};
+use notices::FeedbackState;
 pub(crate) use vault_state::{Changes, VaultState};
 use window_frame::WINDOW_RADIUS;
 use window_frame::WindowFrame;
@@ -137,13 +136,10 @@ use window_node::WindowBounds;
 use window_node::{WindowNode, popout_outer_size, popout_placement};
 
 // The app's own commands: debug info and release notes.
-mod app_info;
 mod release_notes;
 use release_notes::ReleaseNotesState;
 
 // Frontmatter migration.
-mod migrate_frontmatter;
-use migrate_frontmatter::FrontmatterMigrationState;
 
 // Export to PDF and Export as image.
 mod exports;
@@ -228,13 +224,11 @@ pub struct Workspace {
     /// Attachment import and download modal lifecycle.
     attachments: attachments::AttachmentState,
     /// Frontmatter migration dialog and its last run's Undo data.
-    frontmatter_migration: FrontmatterMigrationState,
     /// Requests delivered by event callbacks that need a Window on the next render.
     render_requests: RenderRequests,
     prompt: PromptState,
     copy_results: Entity<CopyResults>,
     /// "Debug info", filled each time it opens.
-    debug_info: Entity<DebugInfo>,
     /// "Export to PDF", filled each time it opens.
     pdf_export: Entity<PdfExport>,
     /// "Export as image", at its defaults each time it opens.
@@ -307,7 +301,6 @@ impl Workspace {
         let settings = cx.new(SettingsView::new);
         let prompt = cx.new(Prompt::new);
         let copy_results = cx.new(CopyResults::new);
-        let debug_info = cx.new(DebugInfo::new);
         let pdf_export = cx.new(PdfExport::new);
         let image_export = cx.new(ImageExport::new);
         let release_notes = cx.new(ReadingView::new);
@@ -325,7 +318,6 @@ impl Workspace {
             &settings,
             &prompt,
             &copy_results,
-            &debug_info,
             &pdf_export,
             &image_export,
             &release_notes,
@@ -365,11 +357,9 @@ impl Workspace {
             command_palette,
             chooser,
             attachments: attachments::AttachmentState::default(),
-            frontmatter_migration: FrontmatterMigrationState::default(),
             render_requests: RenderRequests::default(),
             prompt: PromptState::new(prompt.clone()),
             copy_results,
-            debug_info,
             pdf_export,
             image_export,
             release_notes: ReleaseNotesState::new(release_notes),

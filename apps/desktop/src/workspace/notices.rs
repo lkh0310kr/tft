@@ -12,22 +12,6 @@ pub(super) struct Notice {
     pub(super) text: SharedString,
     /// The window it shows in (`None` for the vault window), active when it appeared.
     pub(super) window: Option<u64>,
-    /// An optional action shown after the message.
-    pub(super) action: Option<NoticeAction>,
-}
-
-/// The action attached to a notice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NoticeAction {
-    UndoMigration,
-}
-
-impl NoticeAction {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            NoticeAction::UndoMigration => "Undo",
-        }
-    }
 }
 
 impl Notice {
@@ -90,25 +74,13 @@ impl Workspace {
 impl Notices {
     /// Shows `text` in `window` (`None` for the vault) and returns its id.
     /// A repeated message is renewed rather than stacked.
-    #[cfg(test)]
     pub(super) fn push(&mut self, text: SharedString, window: Option<u64>) -> u64 {
-        self.push_with(text, window, None)
-    }
-
-    /// Adds a notice with an optional action.
-    pub(super) fn push_with(
-        &mut self,
-        text: SharedString,
-        window: Option<u64>,
-        action: Option<NoticeAction>,
-    ) -> u64 {
         self.live.retain(|notice| notice.text != text);
         self.last_id += 1;
         self.live.push(Notice {
             id: self.last_id,
             text,
             window,
-            action,
         });
         self.last_id
     }

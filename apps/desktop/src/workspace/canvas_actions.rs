@@ -7,11 +7,10 @@ use gpui::{Context, Window};
 use tft_cache::basename;
 use tft_formats::FileKind;
 
-/// What the chooser is open for: a vault file for a canvas card, or a group to jump to.
+/// What the chooser is open for: a vault file for a canvas card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChooserPurpose {
     CanvasFile,
-    CanvasGroup,
 }
 
 impl Workspace {
@@ -57,94 +56,5 @@ impl Workspace {
         self.chooser
             .update(cx, |c, cx| c.open(rows, placeholder, empty, window, cx));
         cx.notify();
-    }
-
-    /// `canvas:jump-to-group`: a chooser over the open canvas's labelled
-    /// groups; the pick is framed and selected. Obsidian hides the command
-    /// when no canvas is active; here it says so.
-    pub(super) fn jump_to_group(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.main_view(cx) != MainView::Canvas {
-            self.report("Canvas: Jump to group needs an open canvas", cx);
-            return;
-        }
-        let rows: Vec<ChooserRow> = self
-            .active_canvas()
-            .read(cx)
-            .group_targets()
-            .into_iter()
-            .map(|(label, id)| ChooserRow {
-                label,
-                value: id,
-                flair: None,
-            })
-            .collect();
-        self.overlay.modal = Modal::Chooser(ChooserPurpose::CanvasGroup);
-        self.chooser.update(cx, |c, cx| {
-            c.open(
-                rows,
-                "Type name of a group...",
-                "No groups in this canvas",
-                window,
-                cx,
-            )
-        });
-        cx.notify();
-    }
-
-    /// `canvas:convert-to-file`: the selected text card's text becomes a
-    /// note named after its first line (`Untitled` when blank) beside the
-    /// canvas, and the card embeds it. Obsidian asks for the name in a
-    /// dialog first; here the first line names it.
-    pub(super) fn convert_card_to_file(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = self.vault_session.state.clone() else {
-            return;
-        };
-        if self.main_view(cx) != MainView::Canvas {
-            self.report("Canvas: Convert to file needs a selected text card", cx);
-            return;
-        }
-        let Some((id, text)) = self.active_canvas().read(cx).selected_text_card() else {
-            self.report("Canvas: Convert to file needs a selected text card", cx);
-            return;
-        };
-        let folder = self
-            .active_group_state
-            .current
-            .as_deref()
-            .and_then(|p| p.rsplit_once('/'))
-            .map(|(dir, _)| dir)
-            .unwrap_or("");
-        let first = text
-            .lines()
-            .map(|l| l.trim().trim_start_matches('#').trim())
-            .find(|l| !l.is_empty())
-            .unwrap_or("Untitled");
-        let name: String = first
-            .chars()
-            .filter(|c| {
-                !matches!(
-                    c,
-                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '[' | ']' | '#' | '^'
-                )
-            })
-            .take(60)
-            .collect::<String>()
-            .trim()
-            .to_string();
-        let name = if name.is_empty() {
-            "Untitled".to_string()
-        } else {
-            name
-        };
-        let path = state.vault().available_path(folder, &name, "md");
-        match state.create_note(&path, &text) {
-            Ok(changes) => {
-                self.after_changes(changes, cx);
-                self.active_canvas()
-                    .update(cx, |c, cx| c.convert_to_file(&id, &path, cx));
-                self.report(format!("Created {path}"), cx);
-            }
-            Err(err) => self.report(err, cx),
-        }
     }
 }

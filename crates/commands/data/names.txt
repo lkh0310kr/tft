@@ -18,7 +18,6 @@ workspace:split-horizontal	Split down
 workspace:edit-file-title	Rename file
 workspace:copy-path	Copy current file path from vault folder
 workspace:copy-full-path	Copy current file path from system root
-workspace:copy-url	Copy TFT URL for current file
 workspace:undo-close-pane	Undo close tab
 workspace:export-pdf	Export to PDF...
 editor:rename-heading	Rename this heading...
@@ -47,28 +46,19 @@ mobile:quick-action	Configure mobile Quick Action
 app:go-back	Navigate back
 app:go-forward	Navigate forward
 app:switch-vault	Change vault...
-app:open-another-vault	Open vault...
 theme:toggle-light-dark	Toggle light/dark mode
 app:open-settings	Open settings
-app:show-release-notes	Show release notes
 markdown:toggle-preview	Toggle reading view
 markdown:add-metadata-property	Add file property
 markdown:add-alias	Add alias
 markdown:clear-metadata-properties	Clear file properties
 app:delete-file	Delete current file
 app:toggle-left-sidebar	Toggle left sidebar
-app:reload	Reload app without saving
-app:migrate-frontmatter	Format converter: Frontmatter migration
-app:show-debug-info	Show debug info
-app:open-sandbox-vault	Open sandbox vault
 app:open-file	Open file from outside the vault...
-window:toggle-always-on-top	Toggle window always on top
 window:zoom-in	Zoom in
 window:zoom-out	Zoom out
 window:reset-zoom	Reset zoom
 file-explorer:new-file	Create new note
-file-explorer:new-file-in-current-tab	Create new note in current tab
-file-explorer:new-file-in-new-pane	Create note to the right
 open-with-default-app:open	Open in default app
 file-explorer:move-file	Move current file to another folder
 file-explorer:duplicate-file	Make a copy of the current file
@@ -88,7 +78,6 @@ editor:insert-embed	Add embed
 editor:insert-link	Insert Markdown link
 editor:insert-tag	Add tag
 editor:set-heading	Toggle heading
-editor:set-heading-0	Remove heading
 editor:set-heading-1	Set as heading 1
 editor:set-heading-2	Set as heading 2
 editor:set-heading-3	Set as heading 3
@@ -99,12 +88,6 @@ editor:toggle-bold	Toggle bold
 editor:toggle-italics	Toggle italic
 editor:toggle-strikethrough	Toggle strikethrough
 editor:toggle-highlight	Toggle highlight
-editor:toggle-highlight-red	Toggle red highlight
-editor:toggle-highlight-orange	Toggle orange highlight
-editor:toggle-highlight-yellow	Toggle yellow highlight
-editor:toggle-highlight-green	Toggle green highlight
-editor:toggle-highlight-blue	Toggle blue highlight
-editor:toggle-highlight-purple	Toggle purple highlight
 editor:toggle-code	Toggle code
 editor:toggle-inline-math	Toggle inline math
 editor:toggle-blockquote	Toggle blockquote
@@ -113,7 +96,6 @@ editor:clear-formatting	Clear formatting
 editor:toggle-bullet-list	Toggle bullet list
 editor:toggle-numbered-list	Toggle numbered list
 editor:toggle-checklist-status	Toggle checkbox status
-editor:cycle-list-checklist	Cycle bullet/checkbox
 editor:insert-callout	Insert callout
 editor:insert-codeblock	Insert code block
 editor:insert-horizontal-rule	Insert horizontal rule
@@ -151,8 +133,5 @@ global-search:open	Search: Search in all files
 switcher:open	Quick switcher: Open quick switcher
 graph:open	Graph view: Open graph view
 graph:open-local	Graph view: Open local graph
-graph:animate	Graph view: Start graph timelapse animation
 canvas:new-file	Canvas: Create new canvas
 canvas:export-as-image	Canvas: Export as image
-canvas:jump-to-group	Canvas: Jump to group
-canvas:convert-to-file	Canvas: Convert to file...

@@ -4,7 +4,6 @@ use super::{ChooserPurpose, Modal, Workspace};
 use crate::canvas::{CanvasEvent, CanvasView};
 use crate::chooser::{Chooser, ChooserEvent};
 use crate::copy_results::{CopyResults, CopyResultsEvent};
-use crate::debug_info::{DebugInfo, DebugInfoEvent};
 use crate::editor::{Editor, EditorEvent};
 use crate::explorer::{ExplorerEvent, FileExplorer};
 use crate::export_modals::{ImageExport, ImageExportEvent, PdfExport, PdfExportEvent};
@@ -30,7 +29,6 @@ pub(super) fn workspace_subscriptions(
     settings: &Entity<SettingsView>,
     prompt: &Entity<Prompt>,
     copy_results: &Entity<CopyResults>,
-    debug_info: &Entity<DebugInfo>,
     pdf_export: &Entity<PdfExport>,
     image_export: &Entity<ImageExport>,
     release_notes: &Entity<ReadingView>,
@@ -152,22 +150,6 @@ pub(super) fn workspace_subscriptions(
                     this.report("Results copied to your clipboard.", cx);
                 }
                 CopyResultsEvent::Close => this.close_modal(window, cx),
-            },
-        ),
-        cx.subscribe_in(
-            debug_info,
-            window,
-            |this, _, event: &DebugInfoEvent, window, cx| match event {
-                DebugInfoEvent::Copy(text) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    this.close_modal(window, cx);
-                    this.report("Debug info copied to your clipboard", cx);
-                }
-                DebugInfoEvent::Sandbox => {
-                    this.close_modal(window, cx);
-                    this.open_sandbox_vault(window, cx);
-                }
-                DebugInfoEvent::Close => this.close_modal(window, cx),
             },
         ),
         cx.subscribe_in(
@@ -300,9 +282,6 @@ pub(super) fn workspace_subscriptions(
                         ChooserPurpose::CanvasFile => this
                             .active_canvas()
                             .update(cx, |c, cx| c.add_file_card_at_center(value, cx)),
-                        ChooserPurpose::CanvasGroup => this
-                            .active_canvas()
-                            .update(cx, |c, cx| c.jump_to_group(value, cx)),
                     }
                     this.focus_main(window, cx);
                     cx.notify();
