@@ -44,6 +44,7 @@ use file_operations::{PendingOp, PromptState};
 mod focus;
 use focus::WorkspaceFocusState;
 mod group_layout;
+use group_layout::DividerDragState;
 mod groups;
 use groups::{ActiveGroupState, GroupRegistryState, TabGroup};
 mod layout_docks;
@@ -270,6 +271,8 @@ pub struct Workspace {
     group_registry: GroupRegistryState,
     /// Cross-window tab drag state, read by Workspace painting and drag handlers.
     tab_drag_state: TabDragState,
+    /// The split divider being dragged, for its accent while held.
+    divider_drag_state: DividerDragState,
     /// Inline title editing and its focus/layout state.
     title_editing: TitleEditingState,
     /// Persisted `workspace.json` state and its load/reload lifecycle.
@@ -384,6 +387,7 @@ impl Workspace {
             main_window: MainWindowState::new(window.window_handle()),
             group_registry: GroupRegistryState::new(),
             tab_drag_state: TabDragState::default(),
+            divider_drag_state: DividerDragState::default(),
             title_editing: TitleEditingState::new(cx.focus_handle()),
             layout_persistence: WorkspacePersistenceState::default(),
             preview_state: PreviewState::default(),

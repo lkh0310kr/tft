@@ -15,6 +15,14 @@ pub(super) struct DividerDrag {
     pub(super) before: usize,
 }
 
+/// The divider being dragged, `(window, split path, before)`. Kept in the
+/// workspace so the handle stays accent-coloured while the pointer is over a
+/// pane and hover no longer reaches it.
+#[derive(Default)]
+pub(super) struct DividerDragState {
+    pub(super) active: Option<(Option<u64>, Vec<usize>, usize)>,
+}
+
 impl Workspace {
     /// How many groups the main area holds (`groups` also counts popouts').
     pub(super) fn main_group_count(&self) -> usize {
@@ -85,6 +93,7 @@ impl Workspace {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
+        self.divider_drag_state.active = Some((drag.window, drag.path.clone(), drag.before));
         let Some(Layout::Split {
             direction,
             children,

@@ -254,6 +254,18 @@ impl Workspace {
                     gpui::MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.cross_window_drop(window, cx)),
                 )
+                .on_drop(cx.listener(
+                    |this, _: &super::group_layout::DividerDrag, _, cx| {
+                        this.divider_drag_state.active = None;
+                        cx.notify();
+                    },
+                ))
+                .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    if this.divider_drag_state.active.is_some() {
+                        this.divider_drag_state.active = None;
+                        cx.notify();
+                    }
+                }))
                 .when(hotkeys_live, |d| {
                     d.on_action(cx.listener(Self::toggle_mode))
                         .on_action(cx.listener(Self::go_back))

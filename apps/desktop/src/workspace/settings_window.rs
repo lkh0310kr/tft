@@ -36,32 +36,9 @@ impl Workspace {
             .update(cx, |s, cx| s.open_menu(key, cx));
     }
 
-    /// Opens the Settings window, and brings it forward if it is already up.
-    ///
-    /// Obsidian's Settings is a modal; TFT's is a window of its own, so
-    /// this takes nothing away from the workspace: the vault behind it
-    /// keeps its keys and its focus.
-    pub fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.close_editor_suggest(cx);
-        self.vault_switcher_state.close_menu();
-        let view = self.settings_state.view.clone();
-        if let Some(handle) = self.settings_state.window {
-            let raised = handle
-                .update(cx, |_, window, cx| {
-                    view.update(cx, |s, cx| s.open(window, cx));
-                    window.activate_window();
-                })
-                .is_ok();
-            if raised {
-                cx.notify();
-                return;
-            }
-        }
-        match SettingsWindow::open(view, cx.weak_entity(), cx) {
-            Ok(handle) => self.settings_state.window = Some(handle),
-            Err(err) => self.report(format!("Could not open Settings: {err}"), cx),
-        }
-        cx.notify();
+    /// The former Settings button now opens the color scheme choices.
+    pub fn open_settings_menu_from_button(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.open_theme_menu(cx);
     }
 
     /// Takes the Settings window down, from its own Escape or its ×.

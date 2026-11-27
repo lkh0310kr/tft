@@ -419,7 +419,6 @@ impl Workspace {
         match tft_vault::write_no_follow(&absolute, contents.as_bytes()) {
             Ok(()) => {
                 editor.update(cx, |e, _| e.mark_saved(&contents));
-                self.report(format!("{name} saved"), cx);
             }
             Err(err) => {
                 self.report(format!("Could not save {name}: {err}"), cx);

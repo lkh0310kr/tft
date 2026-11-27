@@ -358,13 +358,19 @@ pub fn run() {
         bind_all_keys(cx, &registry);
         cx.set_global(Commands(registry));
 
-        let (width, height) = args.size.unwrap_or((1400.0, 900.0));
+        let requested_size = args.size;
+        let (width, height) = requested_size.unwrap_or((1400.0, 900.0));
         let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+        let window_bounds = if requested_size.is_some() {
+            WindowBounds::Windowed(bounds)
+        } else {
+            WindowBounds::Maximized(bounds)
+        };
         let vault = args.vault.clone();
         let window = cx
             .open_window(
                 WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_bounds: Some(window_bounds),
                     titlebar: Some(TitlebarOptions {
                         title: Some("TFT".into()),
                         // What hides the caption on Windows and macOS,

@@ -437,6 +437,20 @@ impl Workspace {
         self.reload_theme(cx);
     }
 
+    /// Applies a color scheme selected from the vault profile menu.
+    pub(super) fn set_color_scheme(&mut self, scheme: &str, cx: &mut Context<Self>) {
+        let Some(state) = self.vault_session.state.clone() else {
+            return;
+        };
+        let mut next = state.appearance().clone();
+        if next.theme.as_deref() == Some(scheme) {
+            return;
+        }
+        next.theme = Some(scheme.to_string());
+        self.theme_appearance.clear_session_override();
+        self.change_setting(SettingChange::Appearance(next), cx);
+    }
+
     /// `theme:toggle-light-dark`: with a named base theme write the other; under
     /// `system` write nothing and flip only the session's scheme.
     pub(super) fn toggle_light_dark(&mut self, cx: &mut Context<Self>) {

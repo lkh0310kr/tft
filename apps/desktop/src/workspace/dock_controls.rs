@@ -12,6 +12,9 @@ pub(super) struct DockState {
     pub(super) keyboard: bool,
     pub(super) visible: bool,
     pub(super) width: f64,
+    /// The inner edge is being dragged: keep the handle accent-coloured while
+    /// the pointer is over the editor and hover no longer reaches it.
+    pub(super) dragging: bool,
 }
 
 impl DockState {
@@ -21,6 +24,7 @@ impl DockState {
             keyboard: false,
             visible: true,
             width,
+            dragging: false,
         }
     }
 }
@@ -79,8 +83,11 @@ impl Workspace {
             .on_click(cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)))
     }
 
-    /// A sidebar's resize handle: the 3 px strip on its inner edge, accent-coloured on hover.
+    /// A sidebar's resize handle: the 3 px strip on its inner edge, accent-coloured on
+    /// hover and while it is being dragged.
     pub(super) fn dock_handle(&self, left: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+        let accent = theme.tokens.interactive_accent;
+        let dragging = self.left_dock.dragging;
         div()
             .id(if left {
                 "left-dock-handle"
@@ -96,10 +103,9 @@ impl Workspace {
             .border_color(theme.tokens.background_modifier_border)
             .cursor_col_resize()
             .occlude()
-            .hover(|s| {
-                s.bg(theme.tokens.interactive_accent)
-                    .border_color(theme.tokens.interactive_accent)
-            })
+            .hover(move |s| s.bg(accent).border_color(accent))
+            .active(move |s| s.bg(accent).border_color(accent))
+            .when(dragging, move |d| d.bg(accent).border_color(accent))
             .on_drag(DockDrag { left }, |_, _, _, cx| cx.new(|_| NoDragPreview))
     }
 
@@ -119,6 +125,7 @@ impl Workspace {
             let origin = f64::from(f32::from(bounds.origin.x));
             self.left_dock.width = (x - origin).clamp(MIN_SIDEBAR_WIDTH, max);
         }
+        self.left_dock.dragging = true;
         cx.notify();
     }
 }

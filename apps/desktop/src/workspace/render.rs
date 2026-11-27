@@ -13,7 +13,8 @@ use crate::pdf::view::PdfView;
 use crate::reading::ReadingView;
 use crate::theme::{HEADER_HEIGHT, Theme};
 use gpui::{
-    App, Context, DragMoveEvent, Entity, SharedString, Window, div, prelude::*, px, relative,
+    App, Context, DragMoveEvent, Entity, MouseButton, SharedString, Window, div, prelude::*, px,
+    relative,
 };
 use tft_app::{Layout, SplitDirection, Tab};
 use tft_formats::FileKind;
@@ -307,6 +308,12 @@ impl Workspace {
                             path: split_path.clone(),
                             before: ix - 1,
                         };
+                        let accent = theme.tokens.interactive_accent;
+                        let dragging = self.divider_drag_state.active.as_ref().is_some_and(
+                            |(w, p, before)| {
+                                *w == window && p == &split_path && *before == ix - 1
+                            },
+                        );
                         let handle = div()
                             .id(("divider", ix as u64))
                             .absolute()
@@ -314,17 +321,23 @@ impl Workspace {
                                 d.left(px(0.))
                                     .top_0()
                                     .h_full()
-                                    .w(px(6.))
+                                    .w(px(3.))
                                     .cursor_col_resize()
                             })
                             .when(!row, |d| {
                                 d.top(px(0.))
                                     .left_0()
                                     .w_full()
-                                    .h(px(6.))
+                                    .h(px(3.))
                                     .cursor_row_resize()
                             })
                             .occlude()
+                            // The split's edge takes the primary colour under the
+                            // pointer and for as long as it is dragged, like the
+                            // sidebar's handle.
+                            .hover(move |s| s.bg(accent))
+                            .active(move |s| s.bg(accent))
+                            .when(dragging, move |d| d.bg(accent))
                             .on_drag(drag, |_, _, _, cx| cx.new(|_| NoDragPreview));
                         cell = cell
                             .when(row, |d| d.border_l_1())
@@ -786,6 +799,26 @@ impl Render for Workspace {
                         let left = e.drag(cx).left;
                         this.drag_dock(left, e.bounds, e.event.position, cx);
                     }))
+                    .on_drop(cx.listener(|this, _: &DockDrag, _, cx| {
+                        this.left_dock.dragging = false;
+                        cx.notify();
+                    }))
+                    .on_drop(cx.listener(|this, _: &DividerDrag, _, cx| {
+                        this.divider_drag_state.active = None;
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if this.left_dock.dragging
+                                || this.divider_drag_state.active.is_some()
+                            {
+                                this.left_dock.dragging = false;
+                                this.divider_drag_state.active = None;
+                                cx.notify();
+                            }
+                        }),
+                    )
                     .when(left_visible, |d| d.child(left))
                     .child(main),
             )

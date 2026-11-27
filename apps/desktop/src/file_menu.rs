@@ -363,86 +363,69 @@ fn right_click_caret(selection: &std::ops::Range<usize>, at: usize) -> Option<us
 /// Obsidian's file row has no creation items at all — TFT's menu used to
 /// offer "New note" and "New folder" on a file, which is the one thing here
 /// that was wrong rather than missing.
+/// The Files tree's one menu. A file, a folder and the blank space below the
+/// last row show the same rows in the same order; a row that cannot act on
+/// the target is disabled rather than left out, as Zed's project panel does.
+/// No icons: the tree's menu is a plain list.
+fn tree_items(target: &Target) -> Vec<Item> {
+    use Pick as P;
+    use Section as S;
+    let file = matches!(target, Target::File(_));
+    let folder = matches!(target, Target::Folder(_));
+    let blank = matches!(target, Target::Blank);
+    let row = |label: &'static str, section: Section, pick: Pick, enabled: bool| Item {
+        label: SharedString::new_static(label),
+        icon: "",
+        section,
+        pick,
+        disabled: !enabled,
+        warning: false,
+        checked: false,
+        submenu: Vec::new(),
+    };
+    vec![
+        row("New note", S::ActionPrimary, P::NewNote, folder || blank),
+        row(
+            "New folder",
+            S::ActionPrimary,
+            P::NewFolder,
+            folder || blank,
+        ),
+        row(
+            "New canvas",
+            S::ActionPrimary,
+            P::NewCanvas,
+            folder || blank,
+        ),
+        row("Open in new tab", S::Open, P::OpenInNewTab, file),
+        row("Open to the right", S::Open, P::OpenToRight, file),
+        row("Open in new window", S::Open, P::OpenInNewWindow, file),
+        row("Make a copy", S::Action, P::Duplicate, file || folder),
+        row("Move to...", S::Action, P::Move, file || folder),
+        row("Search in folder", S::Action, P::SearchInFolder, folder),
+        row("Copy path", S::Unsectioned, P::CopyPath, file || folder),
+        row("Open in default app", S::System, P::OpenInDefaultApp, file),
+        row(
+            "Show in system explorer",
+            S::System,
+            P::ShowInSystemExplorer,
+            file || folder,
+        ),
+        row("Rename...", S::Danger, P::Rename, file || folder),
+        row("Delete", S::Danger, P::Delete, file || folder),
+    ]
+}
+
 pub fn items(target: &Target) -> Vec<Item> {
     use Pick as P;
     use Section as S;
     match target {
-        Target::File(_) => vec![
-            item("Open in new tab", "file-plus", S::Open, P::OpenInNewTab),
-            item(
-                "Open to the right",
-                "separator-vertical",
-                S::Open,
-                P::OpenToRight,
-            ),
-            item(
-                "Open in new window",
-                "picture-in-picture-2",
-                S::Open,
-                P::OpenInNewWindow,
-            ),
-            item("Make a copy", "files", S::Action, P::Duplicate),
-            item("Move file to...", "folder-tree", S::Action, P::Move),
-        ]
-        .into_iter()
-        .chain([
-            item("Copy path", "clipboard", S::Unsectioned, P::CopyPath),
-            item(
-                "Open in default app",
-                "arrow-up-right",
-                S::System,
-                P::OpenInDefaultApp,
-            ),
-            item(
-                "Show in system explorer",
-                "arrow-up-right",
-                S::System,
-                P::ShowInSystemExplorer,
-            ),
-            item("Rename...", "pen-line", S::Danger, P::Rename),
-            item("Delete", "trash-2", S::Danger, P::Delete),
-        ])
-        .collect(),
-        Target::Folder(_) => vec![
-            // Obsidian draws `lucide-edit` here, which is the current
-            // `square-pen`; `lucide-edit-3` on Rename is `pen-line`. Both
-            // renames come from Lucide's own alias data, not a guess.
-            item("New note", "square-pen", S::ActionPrimary, P::NewNote),
-            item("New folder", "folder-open", S::ActionPrimary, P::NewFolder),
-            item(
-                "New canvas",
-                "layout-dashboard",
-                S::ActionPrimary,
-                P::NewCanvas,
-            ),
-            item("Make a copy", "files", S::Action, P::Duplicate),
-            item("Move folder to...", "folder-tree", S::Action, P::Move),
-            item(
-                "Search in folder",
-                "folder-search",
-                S::Action,
-                P::SearchInFolder,
-            ),
-            item("Copy path", "clipboard", S::Unsectioned, P::CopyPath),
-            item(
-                "Show in system explorer",
-                "arrow-up-right",
-                S::System,
-                P::ShowInSystemExplorer,
-            ),
-            item("Rename...", "pen-line", S::Danger, P::Rename),
-            item("Delete", "trash-2", S::Danger, P::Delete),
-        ],
-        Target::Blank => vec![
-            item("New note", "square-pen", S::ActionPrimary, P::NewNote),
-            item("New folder", "folder-open", S::ActionPrimary, P::NewFolder),
-            item(
-                "New canvas",
-                "layout-dashboard",
-                S::ActionPrimary,
-                P::NewCanvas,
-            ),
-        ],
+        // One list for the whole Files tree, as Zed's project panel has: the
+        // same rows on a file, a folder and the empty space below them, with
+        // the rows that cannot act on that target disabled and dimmed rather
+        // than absent. The menu draws no icons, so its rows line up like a
+        // plain list.
+        Target::File(_) | Target::Folder(_) | Target::Blank => tree_items(target),
         // The 2026-10-22 probe read this menu's labels and separators off a
         // Links row but not its icons, so these are the explorer's for the
         // same labels. "Reveal file in navigation" has no explorer twin;
@@ -943,7 +926,7 @@ pub fn render<V: 'static>(
         let mut row = crate::ui::menu_row(("file-menu-item", ix), theme)
             .relative()
             .text_color(color)
-            .when(item.disabled, |d| d.text_color(faded))
+            .when(item.disabled, |d| d.text_color(faded).opacity(0.6))
             .when(!item.disabled, |d| {
                 d.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     if *hovered {

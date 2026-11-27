@@ -15,13 +15,13 @@ use crate::properties::{Field, Part, Target};
 use crate::properties::{PROPERTIES_FOLD_ID, PROPERTY_ID_BASE};
 use crate::theme::Theme;
 use gpui::{
-    actions, canvas, div, img, list, prelude::*, px, AnyElement, App, Bounds, ClipboardItem,
-    Context, CursorStyle, DispatchPhase, DragMoveEvent, Element, ElementId, Entity, EventEmitter,
-    FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId, HighlightStyle, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, InteractiveText, KeyBinding, LayoutId, ListAlignment,
-    ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    Pixels, Point, SharedString, SharedUri, StrikethroughStyle, StyledText, Task, TextLayout,
-    TextRun, UnderlineStyle, Window, WindowTextSystem,
+    actions, canvas, deferred, div, img, list, prelude::*, px, AnyElement, App, Bounds,
+    ClipboardItem, Context, CursorStyle, DispatchPhase, DragMoveEvent, Element, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, Font, FontStyle, FontWeight, GlobalElementId,
+    HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId, InteractiveText, KeyBinding,
+    LayoutId, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, Pixels, Point, SharedString, SharedUri, StrikethroughStyle, StyledText,
+    Task, TextLayout, TextRun, UnderlineStyle, Window, WindowTextSystem,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -3282,10 +3282,13 @@ impl<'a> Renderer<'a> {
                     }),
             );
         div()
+            .relative()
             .flex()
             .flex_col()
             .child(line)
-            .children(menu)
+            // A popover, not a row: it floats over the rows below, so opening
+            // it moves nothing in the block.
+            .children(menu.map(deferred))
             .into_any_element()
     }
 
@@ -3296,14 +3299,20 @@ impl<'a> Renderer<'a> {
         host: &PropertiesHost,
     ) -> AnyElement {
         let t = self.theme;
+        let base = t.base_font_size;
         div()
-            .ml(px(24.))
-            .mb_1()
+            // Anchored under the type glyph: the menu is out of flow and
+            // paints after the rows (deferred by the caller).
+            .absolute()
+            .top(px(base * 0.875 * LINE_HEIGHT + 8.))
+            .left(px(24.))
+            .min_w(px(180.))
             .flex()
             .flex_col()
             .border_1()
             .border_color(t.tokens.background_modifier_border)
             .rounded_md()
+            .shadow_md()
             .bg(t.tokens.background_secondary)
             .py_1()
             .children(PropertyType::selectable().iter().copied().map(|ty| {

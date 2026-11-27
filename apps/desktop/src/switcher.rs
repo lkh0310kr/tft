@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tft_cache::frontmatter_aliases;
 use tft_formats::config::SwitcherConfig;
 use tft_formats::FileKind;
-use tft_search::fuzzy_match;
+use tft_search::{fuzzy_match, simple_search};
 
 const MAX_RESULTS: usize = 50;
 
@@ -70,6 +70,56 @@ struct Item {
     ranges: Vec<Range<usize>>,
 }
 
+/// Scores one query token against a filename, preferring exact, prefix,
+/// word-start and substring hits before fuzzy subsequence matches.
+fn token_match(token: &str, label: &str) -> Option<(f64, Vec<Range<usize>>)> {
+    if let Some(ranges) = simple_search(token, label) {
+        let range = ranges.first()?;
+        if label.eq_ignore_ascii_case(token) {
+            return Some((100_000.0, ranges));
+        }
+        if range.start == 0 {
+            return Some((80_000.0 - label.chars().count() as f64, ranges));
+        }
+        let word_start = label[..range.start]
+            .chars()
+            .next_back()
+            .is_some_and(|previous| !previous.is_alphanumeric());
+        if word_start {
+            return Some((60_000.0 - range.start as f64, ranges));
+        }
+        return Some((50_000.0 - range.start as f64, ranges));
+    }
+    fuzzy_match(token, label).map(|matched| (20_000.0 + matched.score, matched.ranges))
+}
+
+/// Splits on whitespace and requires every token to match independently.
+/// This avoids joining separated words into one fuzzy subsequence (for
+/// example, treating `alpha pro` as `alphapro`) while allowing a typo in
+/// one token to use fuzzy matching without losing the other tokens.
+fn label_match(query: &str, label: &str) -> Option<(f64, Vec<Range<usize>>)> {
+    let tokens: Vec<&str> = query.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Some((0.0, Vec::new()));
+    }
+    let mut score = 0.0;
+    let mut ranges = Vec::new();
+    for token in tokens {
+        let (token_score, mut token_ranges) = token_match(token, label)?;
+        score += token_score;
+        ranges.append(&mut token_ranges);
+    }
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    Some((score, merged))
+}
+
 /// The rows for `query`: the recent files while it is empty, otherwise
 /// every fuzzy match best first. Excluded files are not among the recent
 /// files and come after every other match, as in Obsidian 1.15.1 (observed
@@ -93,23 +143,28 @@ fn rank(candidates: &[Candidate], recent: &[String], query: &str) -> Vec<Item> {
         }
     } else {
         for c in candidates {
-            let by_label = fuzzy_match(query, &c.label);
+            let by_label = label_match(query, &c.label);
             let by_path = if c.kind == ItemKind::File {
-                fuzzy_match(query, &c.path).map(|m| (m.score - 2.0, m))
+                // A folder-only hit remains useful, but stays below every
+                // filename match. Compress its score to preserve ordering.
+                label_match(query, &c.path).map(|(score, _)| {
+                    (10_000.0 + 9_000.0 * score / (score + 50_000.0), Vec::new())
+                })
             } else {
                 None
             };
             let best = match (by_label, by_path) {
-                (Some(l), Some((ps, _))) if l.score >= ps => Some((l.score, l.ranges)),
-                // A path match highlights nothing in the label.
-                (_, Some((ps, _))) => Some((ps, Vec::new())),
-                (Some(l), None) => Some((l.score, l.ranges)),
+                (Some((label_score, ranges)), Some((path_score, _)))
+                    if label_score >= path_score => Some((label_score, ranges)),
+                // A path match highlights nothing in the basename.
+                (_, Some((path_score, ranges))) => Some((path_score, ranges)),
+                (Some((label_score, ranges)), None) => Some((label_score, ranges)),
                 (None, None) => None,
             };
             if let Some((score, ranges)) = best {
                 let penalty = match c.kind {
                     ItemKind::File => 0.0,
-                    ItemKind::Alias => 0.5,
+                    ItemKind::Alias => 500.0,
                     ItemKind::Unresolved => 3.0,
                 };
                 items.push((

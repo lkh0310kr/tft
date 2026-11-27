@@ -102,7 +102,7 @@ impl Workspace {
                 d.rounded_tr(WINDOW_RADIUS)
             })
             .h(px(HEADER_HEIGHT))
-            .pl(px(8. + left_space))
+            .pl(px(left_space))
             .pr(if under_controls {
                 px(3. * RIBBON_WIDTH)
             } else {

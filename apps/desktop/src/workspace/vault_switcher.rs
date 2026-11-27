@@ -10,6 +10,7 @@ use tft_vault::VaultRegistry;
 #[derive(Default)]
 pub(super) struct VaultSwitcherState {
     menu_open: bool,
+    theme_menu_open: bool,
     hovered: bool,
 }
 
@@ -18,9 +19,6 @@ impl VaultSwitcherState {
         self.menu_open
     }
 
-    pub(super) fn close_menu(&mut self) {
-        self.menu_open = false;
-    }
 }
 
 fn now_millis() -> i64 {
@@ -50,6 +48,17 @@ impl Workspace {
     /// The active vault name toggles a menu of remembered vaults and actions.
     pub(super) fn toggle_vault_menu(&mut self, cx: &mut Context<Self>) {
         self.vault_switcher_state.menu_open = !self.vault_switcher_state.menu_open;
+        cx.notify();
+    }
+
+    pub(super) fn open_theme_menu(&mut self, cx: &mut Context<Self>) {
+        self.vault_switcher_state.menu_open = false;
+        self.vault_switcher_state.theme_menu_open = true;
+        cx.notify();
+    }
+
+    fn toggle_theme_menu(&mut self, cx: &mut Context<Self>) {
+        self.vault_switcher_state.theme_menu_open = !self.vault_switcher_state.theme_menu_open;
         cx.notify();
     }
 
@@ -134,8 +143,7 @@ impl Workspace {
         .detach();
     }
 
-    /// The left sidebar's footer, Obsidian's vault profile: the vault's name behind a
-    /// switcher, and Settings, above a hairline. It collapses with the sidebar.
+    /// The left sidebar's footer: vault switcher and color scheme selector.
     pub(super) fn render_vault_profile(
         &self,
         theme: &Theme,
@@ -143,11 +151,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let menu = self.render_vault_menu(theme, window, cx);
-        let button = |id: &'static str, name: &'static str, command: &'static str| {
-            crate::ui::icon_button(id, name, theme).on_click(
-                cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
-            )
-        };
+        let theme_menu = self.render_theme_menu(theme, cx);
         div()
             .flex()
             .flex_row()
@@ -208,7 +212,92 @@ impl Workspace {
                             .child(self.vault_session.name.clone()),
                     ),
             )
-            .child(button("vault-settings", "settings", "app:open-settings"))
+            .child(
+                crate::ui::icon_button("vault-settings", "settings", theme)
+                    .tooltip(crate::ui::tooltip("Color scheme"))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_theme_menu(cx)))
+                    .child(div().absolute().top_0().left_0().size_0().children(theme_menu)),
+            )
+    }
+
+    fn render_theme_menu(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.vault_switcher_state.theme_menu_open {
+            return None;
+        }
+        let selected = self
+            .vault_session
+            .state
+            .as_ref()
+            .and_then(|state| state.appearance().theme.clone())
+            .unwrap_or_else(|| "system".into());
+        let options = [("system", "System"), ("light", "Light"), ("dark", "Dark")];
+        let mut menu = div()
+            .id("color-scheme-menu")
+            .flex()
+            .flex_col()
+            .min_w(px(160.))
+            .py_1()
+            .bg(theme.tokens.background_secondary)
+            .border_1()
+            .border_color(theme.tokens.background_modifier_border)
+            .rounded_md()
+            .shadow_lg()
+            .text_size(px(FONT_UI_SMALL))
+            .text_color(theme.tokens.text_normal)
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.vault_switcher_state.theme_menu_open = false;
+                cx.notify();
+            }));
+        for (scheme, label) in options {
+            let is_selected = selected == scheme;
+            menu = menu.child(
+                div()
+                    .id(match scheme {
+                        "system" => "color-scheme-system",
+                        "light" => "color-scheme-light",
+                        _ => "color-scheme-dark",
+                    })
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py(px(6.))
+                    .mx_1()
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.tokens.background_modifier_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.vault_switcher_state.theme_menu_open = false;
+                        this.set_color_scheme(scheme, cx);
+                    }))
+                    .child(
+                        div()
+                            .w(px(16.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .children(is_selected.then(|| icon("check", 14., theme.tokens.text_muted))),
+                    )
+                    .child(label),
+            );
+        }
+        Some(
+            deferred(
+                anchored()
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .offset(point(px(0.), px(-6.)))
+                    .snap_to_window_with_margin(px(8.))
+                    .child(menu),
+            )
+            .with_priority(2)
+            .into_any_element(),
+        )
     }
 
     fn render_vault_menu(

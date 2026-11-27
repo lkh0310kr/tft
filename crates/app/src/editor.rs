@@ -7944,6 +7944,32 @@ mod tests {
         preview::display_line(src.lines().next().unwrap_or(""), &lines[0], &[])
     }
 
+    /// A highlight range from a parse one edit behind can end inside a
+    /// Korean glyph. gpui slices the shaped line at every cumulative run
+    /// length, so the runs are clipped to char boundaries before shaping.
+    #[test]
+    fn a_run_inside_a_multibyte_glyph_is_clipped() {
+        let text = "2025_07_17_정점";
+        let style = TextStyle::default();
+        let runs = vec![
+            TextRun {
+                len: 13,
+                ..style.to_run(0)
+            },
+            TextRun {
+                len: text.len() - 13,
+                ..style.to_run(0)
+            },
+        ];
+        let clipped = clip_runs(text, runs, style.to_run(0));
+        let mut at = 0;
+        for run in &clipped {
+            at += run.len;
+            assert!(text.is_char_boundary(at), "a run ended inside a glyph at {at}");
+        }
+        assert_eq!(at, text.len());
+    }
+
     /// The marker a nested image widget paints beside itself is the line's
     /// own Live Preview display of the bytes before the embed: a bullet, a
     /// number, a task's box, nothing for a quote but its bar.

@@ -630,7 +630,7 @@ impl Workspace {
             }
             "app:go-back" => self.go_back(&GoBack, window, cx),
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
-            "app:open-settings" => self.open_settings(window, cx),
+            "app:open-settings" => self.open_settings_menu_from_button(window, cx),
             "app:toggle-left-sidebar" => {
                 self.left_dock.visible = !self.left_dock.visible;
                 if !self.left_dock.visible {
