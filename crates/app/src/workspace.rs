@@ -1,7 +1,7 @@
 //! Workspace application state shared by Desktop and Web. No UI or I/O.
 
 use crate::NodeId;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 /// A platform-neutral request from the Workspace UI to its host. The parent
 /// is a Vault-relative path (`""` means the Vault root); filesystem paths and
@@ -18,6 +18,10 @@ pub enum ViewMode {
     Source,
     Graph,
     Search,
+    /// A terminal pane (`terminal:open`). The shell runs in the Desktop
+    /// app; this shared mode names the leaf so tabs close and focus like
+    /// the search pane's.
+    Terminal,
 }
 
 impl ViewMode {
@@ -42,6 +46,7 @@ impl ViewMode {
             ViewMode::Source => "source",
             ViewMode::Graph => "graph",
             ViewMode::Search => "search",
+            ViewMode::Terminal => "terminal",
         }
     }
 
@@ -55,6 +60,71 @@ impl ViewMode {
             _ => None,
         }
     }
+}
+
+/// The filename shown in a workspace tab. Markdown names use the Explorer's
+/// normal display rule; canvas, PDF, audio, and video names omit their known
+/// format extension as the native workspace does.
+pub fn tab_display_name(file_name: &str) -> &str {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext))
+            if (ext.eq_ignore_ascii_case("canvas")
+                || ext.eq_ignore_ascii_case("pdf")
+                || matches!(
+                    crate::formats::FileKind::from_extension(&ext.to_ascii_lowercase()),
+                    crate::formats::FileKind::Audio | crate::formats::FileKind::Video
+                ))
+                && !stem.is_empty() =>
+        {
+            stem
+        }
+        _ => crate::explorer::display_name(file_name),
+    }
+}
+
+/// The title shared by a workspace tab and its view header.
+pub fn workspace_leaf_title(path: Option<&str>, mode: ViewMode) -> String {
+    match (path, mode) {
+        (Some(path), _) => tab_display_name(path.rsplit('/').next().unwrap_or(path)).to_owned(),
+        (None, ViewMode::Graph) => "Graph view".to_owned(),
+        (None, ViewMode::Search) => "Search".to_owned(),
+        (None, ViewMode::Terminal) => "Terminal".to_owned(),
+        (None, _) => "New tab".to_owned(),
+    }
+}
+
+/// Folder breadcrumbs for a vault-relative file path. Each pair contains the
+/// displayed folder name and its vault-relative path, ready for a host to bind
+/// to its own navigation action.
+pub fn workspace_breadcrumbs(path: Option<&str>) -> Vec<(String, String)> {
+    let Some(directory) =
+        path.and_then(|path| path.rsplit_once('/').map(|(directory, _)| directory))
+    else {
+        return Vec::new();
+    };
+
+    let mut accumulated = String::new();
+    directory
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            if !accumulated.is_empty() {
+                accumulated.push('/');
+            }
+            accumulated.push_str(part);
+            (part.to_owned(), accumulated.clone())
+        })
+        .collect()
+}
+
+/// A document header can switch between reading and editing only when it
+/// represents an opened file view that supports those modes.
+pub fn workspace_header_shows_mode_switch(path: Option<&str>, mode: ViewMode) -> bool {
+    path.is_some()
+        && !matches!(
+            mode,
+            ViewMode::Graph | ViewMode::Search | ViewMode::Terminal
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +310,13 @@ pub fn place_new_tab(tabs: &mut Vec<Tab>, active: usize, tab: Tab) -> usize {
     let at = (active + 1).min(tabs.len());
     tabs.insert(at, tab);
     at
+}
+
+/// Appends a fresh empty tab and returns its active index. Strip `+` actions
+/// use append order; navigation-created tabs continue to use `place_new_tab`.
+pub fn append_empty_tab(tabs: &mut Vec<Tab>, mode: ViewMode) -> usize {
+    tabs.push(Tab::empty(mode));
+    tabs.len() - 1
 }
 
 /// Removes a tab and keeps the active index on the same tab when possible.
@@ -647,6 +724,14 @@ impl WorkspaceModel {
     ) -> Option<usize> {
         self.group_mut(group)
             .map(|g| g.open_node_in_new_tab(node, path, mode))
+    }
+
+    /// Appends an empty tab to the active group and makes it active.
+    pub fn new_tab(&mut self, mode: ViewMode) -> Option<usize> {
+        let group = self.active_mut()?;
+        let index = append_empty_tab(&mut group.tabs, mode);
+        group.active_tab = index;
+        Some(index)
     }
 
     pub fn navigate_node(

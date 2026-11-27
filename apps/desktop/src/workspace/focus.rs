@@ -70,6 +70,9 @@ impl Workspace {
         ) || unpainted(MainView::Reading, &self.active_reading().focus_handle(cx))
             || unpainted(MainView::Graph, &graph_focus)
             || unpainted(MainView::Search, &self.search.focus_handle(cx))
+            || self
+                .terminal_focus(cx)
+                .is_some_and(|handle| unpainted(MainView::Terminal, &handle))
             || unpainted(MainView::Canvas, &self.active_canvas().focus_handle(cx))
             || unpainted(MainView::Pdf, &self.active_pdf().focus_handle(cx))
             || unpainted(
@@ -103,6 +106,9 @@ impl Workspace {
                 .flatten()
                 .unwrap_or_else(|| self.graph.focus_handle(cx)),
             MainView::Search => self.search.focus_handle(cx),
+            MainView::Terminal => self
+                .terminal_focus(cx)
+                .unwrap_or_else(|| self.focus.handle.clone()),
             MainView::Canvas => self.active_canvas().focus_handle(cx),
             MainView::Pdf => self.active_pdf().focus_handle(cx),
             MainView::ReleaseNotes => self.release_notes.view.focus_handle(cx),
@@ -162,6 +168,7 @@ impl Workspace {
             "workspace" | "reading" | "graph" | "canvas" | "pdf" | "file-properties" | "none" => {
                 "none"
             }
+            "terminal" => "terminal",
             _ => "input",
         }
     }
@@ -190,6 +197,12 @@ impl Workspace {
                     editor.update(cx, |e, cx| e.type_text(text, window, cx));
                 }
                 "canvas-editor"
+            }
+            "terminal" => {
+                if let Some(session) = self.terminal.session.as_ref() {
+                    session.write(text, window, cx);
+                }
+                "terminal"
             }
             // Nothing else is reachable from here, so nothing else is
             // typed into: a focused input is answered by the caller, which
@@ -267,6 +280,12 @@ impl Workspace {
         if self.search.focus_handle(cx).is_focused(window) {
             return "search-input";
         }
+        if self
+            .terminal_focus(cx)
+            .is_some_and(|handle| handle.is_focused(window))
+        {
+            return "terminal";
+        }
         if self.explorer.focus_handle(cx).is_focused(window) {
             return "explorer";
         }
@@ -322,6 +341,7 @@ impl Workspace {
             "reading" => MainView::Reading,
             "graph" => MainView::Graph,
             "search" => MainView::Search,
+            "terminal" => MainView::Terminal,
             "canvas" => MainView::Canvas,
             "pdf" => MainView::Pdf,
             "release-notes" => MainView::ReleaseNotes,

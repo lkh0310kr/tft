@@ -7,6 +7,7 @@ pub mod canvas;
 #[cfg(feature = "gpui-ui")]
 pub mod editor;
 pub mod effect;
+pub mod file_switcher;
 #[cfg(feature = "gpui-ui")]
 pub mod fixed;
 #[cfg(feature = "gpui-ui")]

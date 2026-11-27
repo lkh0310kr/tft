@@ -367,6 +367,17 @@ mod tests {
     }
 
     #[test]
+    fn the_terminal_command_is_the_palettes_own() {
+        let reg = CommandRegistry::with_known_ids();
+        let terminal = reg.get("terminal:open").expect("terminal command");
+        assert_eq!(terminal.name, "Terminal: Open terminal");
+        assert!(
+            terminal.default_hotkeys.is_empty(),
+            "the terminal is opened from the palette, not a default key"
+        );
+    }
+
+    #[test]
     fn default_hotkeys_target_known_ids() {
         let ids: HashSet<_> = known_ids().into_iter().collect();
         for id in default_hotkeys().keys() {

@@ -1,8 +1,8 @@
 //! Empty-tab content and the command-backed actions it offers.
 
 use super::{Commands, Workspace};
-use crate::theme::{Theme, FONT_UI_SMALL};
-use gpui::{div, prelude::*, px, Context};
+use crate::theme::Theme;
+use gpui::{div, prelude::*, px, Context, SharedString};
 use tft_commands::{hotkey_label, CommandRegistry};
 
 /// What an empty tab offers, in Obsidian's order: element id, pill label and command.
@@ -58,53 +58,23 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let registry = cx.global::<Commands>().0.clone();
-        let actions: Vec<_> =
-            empty_tab_actions(&registry)
-                .into_iter()
-                .map(|action| {
-                    let command = action.command;
-                    div()
-                        .id(action.id)
-                        .w_full()
-                        .h(px(36.))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .justify_between()
-                        .px(px(8.))
-                        .rounded(px(4.))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                        .text_size(px(FONT_UI_SMALL))
-                        .child(
-                            div()
-                                .text_color(theme.tokens.text_normal)
-                                .child(action.label),
-                        )
-                        .children(
-                            action
-                                .hotkey
-                                .map(|keys| div().text_color(theme.tokens.text_faint).child(keys)),
-                        )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.run_command(command, window, cx)
-                        }))
-                })
-                .collect();
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .text_color(theme.tokens.text_muted)
-            .child(
-                div()
-                    .w(px(240.))
-                    .flex()
-                    .flex_col()
-                    .children(actions),
-            )
+        let actions: Vec<_> = empty_tab_actions(&registry)
+            .into_iter()
+            .map(|action| {
+                let command = action.command;
+                crate::ui::workspace_empty_action(
+                    action.id,
+                    action.label,
+                    action.hotkey.map(SharedString::from),
+                    theme,
+                )
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
+                )
+            })
+            .collect();
+        crate::ui::workspace_empty_tab(theme)
+            .child(div().w(px(240.)).flex().flex_col().children(actions))
             .into_any_element()
     }
 }

@@ -1,0 +1,64 @@
+diff --git a/crates/gpui_web/Cargo.toml b/crates/gpui_web/Cargo.toml
+index 5980fa5e85..1fea14c0a3 100644
+--- a/crates/gpui_web/Cargo.toml
++++ b/crates/gpui_web/Cargo.toml
+@@ -36,6 +36,7 @@ wasm_thread = { version = "0.3", features = ["es_modules"], optional = true }
+ web-sys = { version = "0.3", features = [
+     "console",
+     "CompositionEvent",
++    "ClipboardEvent",
+     "CssStyleDeclaration",
+     "DataTransfer",
+     "Document",
+diff --git a/crates/gpui_web/src/events.rs b/crates/gpui_web/src/events.rs
+index e93534fbe8..43185fbbb0 100644
+--- a/crates/gpui_web/src/events.rs
++++ b/crates/gpui_web/src/events.rs
+@@ -64,6 +64,7 @@ impl WebWindowInner {
+             self.register_dragleave(),
+             self.register_key_down(),
+             self.register_key_up(),
++            self.register_paste(),
+             self.register_composition_start(),
+             self.register_composition_update(),
+             self.register_composition_end(),
+@@ -351,7 +352,13 @@ impl WebWindowInner {
+                 return;
+             }
+ 
+-            event.prevent_default();
++            // Let the browser produce a ClipboardEvent for paste. The web
++            // platform has no synchronous clipboard read API, so GPUI's
++            // `read_from_clipboard` action cannot supply the pasted text.
++            let is_paste = key == "v" && (modifiers.platform || modifiers.control);
++            if !is_paste {
++                event.prevent_default();
++            }
+ 
+             let is_held = event.repeat();
+             let key_char = compute_key_char(&event, &key, &modifiers);
+@@ -388,6 +395,24 @@ impl WebWindowInner {
+         })
+     }
+ 
++    fn register_paste(self: &Rc<Self>) -> Closure<dyn FnMut(JsValue)> {
++        let this = Rc::clone(self);
++        self.listen_input("paste", move |event: JsValue| {
++            let event: web_sys::ClipboardEvent = event.unchecked_into();
++            event.prevent_default();
++            let Some(clipboard) = event.clipboard_data() else {
++                return;
++            };
++            let Ok(text) = clipboard.get_data("text/plain") else {
++                return;
++            };
++            if text.is_empty() {
++                return;
++            }
++            this.with_input_handler(|handler| handler.replace_text_in_range(None, &text));
++        })
++    }
++
+     fn register_key_up(self: &Rc<Self>) -> Closure<dyn FnMut(JsValue)> {
+         let this = Rc::clone(self);
+         self.listen_input("keyup", move |event: JsValue| {

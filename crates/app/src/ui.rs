@@ -4,7 +4,8 @@
 use crate::assets::icon;
 use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
 use gpui::{
-    div, prelude::*, px, AnyView, App, Div, ElementId, Render, SharedString, Stateful, Window,
+    div, prelude::*, px, AnyView, App, Div, ElementId, Pixels, Render, SharedString, Stateful,
+    Window,
 };
 
 /// The tab shell shared by the native workspace and the GPUI Web composition.
@@ -43,6 +44,122 @@ pub fn workspace_tab(
         })
 }
 
+/// Outer frame for a workspace tab strip. Hosts add their corner treatment,
+/// navigation controls, tabs, and platform window controls as children.
+pub fn workspace_tab_strip_shell(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_end()
+        .h(px(HEADER_HEIGHT))
+        .bg(theme.tokens.tab_container_background)
+        .relative()
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(1.))
+                .bg(theme.tokens.tab_outline_color),
+        )
+}
+
+/// Shared title/close area inside a workspace tab. The caller supplies the
+/// title and close action while padding and inactive hover treatment stay in
+/// one place.
+pub fn workspace_tab_inner(active: bool, theme: &Theme) -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.))
+        .pl(px(10.))
+        .pr(px(8.))
+        .when(!active, |container| {
+            container.group_hover("tab", |style| {
+                style.bg(theme.tokens.tab_inner_background_hover)
+            })
+        })
+}
+
+/// Shared close/pin slot for a workspace tab. Hosts attach close or unpin
+/// behavior to the returned button.
+pub fn workspace_tab_close_button(
+    id: impl Into<ElementId>,
+    active: bool,
+    pinned: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .group("tab-close")
+        .flex_shrink_0()
+        .w(px(18.))
+        .h(px(18.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(2.))
+        .cursor_pointer()
+        .when(!active && !pinned, |button| {
+            button
+                .invisible()
+                .group_hover("tab", |style| style.visible())
+        })
+        .child(
+            icon(
+                if pinned { "pin" } else { "x" },
+                14.,
+                theme.tokens.tab_text_color_focused_active,
+            )
+            .group_hover("tab-close", |style| {
+                style.text_color(theme.tokens.text_normal)
+            }),
+        )
+}
+
+/// Horizontal, shrinkable tab viewport shared by each host's tab strip.
+pub fn workspace_tab_strip_scroll(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_end()
+        .flex_1()
+        .min_w(px(0.))
+        .h_full()
+        .overflow_x_scroll()
+}
+
+/// Fixed history-control cell at the start of a workspace tab strip.
+/// Hosts attach their own back/forward actions to the two icon buttons.
+pub fn workspace_tab_history_controls(back: impl IntoElement, forward: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h_full()
+        .gap(px(0.))
+        .pl(px(4.))
+        .pr(px(4.))
+        .child(back)
+        .child(forward)
+}
+
+/// Hairline separating history navigation from the horizontally scrolling tabs.
+pub fn workspace_tab_strip_divider(theme: &Theme) -> Div {
+    div()
+        .h_full()
+        .w(px(1.))
+        .flex_shrink_0()
+        .bg(theme.tokens.tab_divider_color)
+}
+
 /// Shared geometry and typography for the document header below a workspace tab strip.
 /// Desktop and Web provide their own navigation and view actions as children.
 pub fn workspace_view_header(theme: &Theme) -> Div {
@@ -55,6 +172,99 @@ pub fn workspace_view_header(theme: &Theme) -> Div {
         .gap(px(10.))
         .text_size(px(FONT_UI_SMALL))
         .text_color(theme.tokens.text_normal)
+}
+
+/// One folder label in a document breadcrumb; the host attaches navigation.
+pub fn workspace_breadcrumb_item(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .px(px(4.))
+        .py(px(3.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.tokens.background_modifier_hover))
+        .child(
+            div()
+                .text_color(theme.tokens.text_muted)
+                .child(label.into()),
+        )
+}
+
+/// Slash separator between folder crumbs and the current document title.
+pub fn workspace_breadcrumb_separator(theme: &Theme) -> Div {
+    div()
+        .px(px(2.))
+        .text_color(theme.tokens.text_muted)
+        .child("/")
+}
+
+/// Centered empty-tab content shared by the native and Web workspaces.
+/// Hosts add their own available actions so platform-specific commands stay
+/// with the host while spacing, typography, and hover treatment stay aligned.
+pub fn workspace_empty_tab(theme: &Theme) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .text_color(theme.tokens.text_muted)
+}
+
+/// One action in the shared empty-tab list. Callers attach their command or
+/// platform event with `on_click`.
+pub fn workspace_empty_action(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    hotkey: Option<SharedString>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .w_full()
+        .h(px(36.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px(px(8.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.tokens.background_modifier_hover))
+        .text_size(px(FONT_UI_SMALL))
+        .child(div().text_color(theme.tokens.text_normal).child(label))
+        .children(hotkey.map(|keys| div().text_color(theme.tokens.text_faint).child(keys)))
+}
+
+/// Base layout for the left workspace dock. Hosts provide the width and add
+/// their own resize handle, window controls, and dock contents.
+pub fn workspace_dock(width: Pixels, theme: &Theme) -> Div {
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w(width)
+        .h_full()
+        .bg(theme.tokens.tab_container_background)
+}
+
+/// Shared top row for a workspace dock. Hosts insert their own tabs and
+/// window-specific controls into the returned container.
+pub fn workspace_dock_header(theme: &Theme) -> Div {
+    div()
+        .h(px(HEADER_HEIGHT))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .bg(theme.tokens.sidebar_tab_container_background)
+        .border_b_1()
+        .border_color(theme.tokens.tab_outline_color)
 }
 
 /// Shared icon tab used by the Files and Search docks in Desktop and Web.
@@ -154,6 +364,53 @@ pub fn file_tree_row(
                 .text_color(t.nav_item_color_hover)
         })
         .relative()
+}
+
+/// Folder expander slot used by both file-tree hosts.
+pub fn file_tree_row_marker(is_folder: bool, collapsed: bool, theme: &Theme) -> Div {
+    div()
+        .w(px(14.))
+        .mr(px(4.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .opacity(theme.tokens.icon_opacity)
+        .when(is_folder, |slot| {
+            slot.child(icon(
+                if collapsed {
+                    "chevron-right"
+                } else {
+                    "chevron-down"
+                },
+                14.,
+                theme.tokens.nav_collapse_icon_color,
+            ))
+        })
+}
+
+/// Indentation guides at the same 20 px rhythm as file-tree row indentation.
+pub fn file_tree_indent_guides(depth: usize, theme: &Theme) -> Vec<Div> {
+    (0..depth)
+        .map(|level| {
+            div()
+                .absolute()
+                .left(px(8. + level as f32 * 20.))
+                .top_0()
+                .bottom_0()
+                .w(px(1.))
+                .bg(theme.tokens.background_modifier_border)
+        })
+        .collect()
+}
+
+/// Single-line, ellipsized label slot shared by file-tree rows.
+pub fn file_tree_row_label() -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
 }
 
 /// The small label a button shows on hover.

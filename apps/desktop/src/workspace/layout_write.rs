@@ -144,7 +144,9 @@ pub(crate) fn leaf_json(tab: &Tab) -> Value {
     let (mode, source) = match tab.mode {
         ViewMode::Reading => ("preview", false),
         ViewMode::Source => ("source", true),
-        ViewMode::LivePreview | ViewMode::Graph | ViewMode::Search => ("source", false),
+        ViewMode::LivePreview | ViewMode::Graph | ViewMode::Search | ViewMode::Terminal => {
+            ("source", false)
+        }
     };
     let title = tab.title();
     let mut leaf = tab
@@ -189,6 +191,14 @@ pub(crate) fn leaf_json(tab: &Tab) -> Value {
                 "id": leaf_id(),
                 "type": "leaf",
                 "state": {"type": "empty", "state": {}, "icon": "lucide-file", "title": "New tab"},
+            }),
+            // TFT's terminal has no Obsidian leaf type: it reads back as
+            // an empty tab, as the Search pane does, and `terminal:open`
+            // brings a shell back.
+            (None, ViewMode::Terminal) => json!({
+                "id": leaf_id(),
+                "type": "leaf",
+                "state": {"type": "empty", "state": {}, "icon": "lucide-file", "title": title},
             }),
             (None, _) => json!({
                 "id": leaf_id(),

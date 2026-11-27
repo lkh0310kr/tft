@@ -3,8 +3,9 @@
 //! production Editor and document bytes live in `VaultData`.
 
 use gpui::{
-    App, Context, Entity, EventEmitter, Render, SharedString, Subscription, Window, div,
-    prelude::*, px,
+    actions, div, prelude::*, px, App, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, Render,
+    SharedString, Subscription, Window,
 };
 #[cfg(feature = "browser-test")]
 use std::collections::BTreeSet;
@@ -26,6 +27,15 @@ use tft_cache::LinkResolver;
 #[cfg(feature = "browser-test")]
 use tft_formats::files::VaultFile;
 
+actions!(web_workspace, [OpenQuickSwitcher]);
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-p", OpenQuickSwitcher, None),
+        KeyBinding::new("ctrl-p", OpenQuickSwitcher, None),
+    ]);
+}
+
 #[derive(Clone)]
 struct SearchHit {
     node: NodeId,
@@ -38,6 +48,30 @@ struct SearchDocument {
     path: String,
     contents: Arc<String>,
     metadata: tft_cache::CachedMetadata,
+}
+
+#[derive(Clone)]
+struct QuickSwitcherHit {
+    node: NodeId,
+    path: String,
+    label: String,
+    score: f64,
+    alias: bool,
+}
+
+#[derive(Clone)]
+struct FileTreeContextMenu {
+    position: Point<Pixels>,
+    node: Option<NodeId>,
+    key: String,
+    path: String,
+    is_folder: bool,
+}
+
+#[derive(Clone)]
+struct TabContextMenu {
+    position: Point<Pixels>,
+    index: usize,
 }
 
 #[cfg(feature = "browser-test")]
@@ -53,14 +87,24 @@ pub struct WebWorkspace {
     editor: Entity<Editor>,
     reading: Entity<ReadingView>,
     search_input: Entity<TextInput>,
+    quick_switcher_input: Entity<TextInput>,
+    quick_switcher_open: bool,
+    quick_switcher_selected: usize,
+    pending_quick_switcher_focus_restore: bool,
+    pending_quick_switcher_open: Option<(NodeId, String)>,
     search_hits: Vec<SearchHit>,
     selected_search_hit: usize,
     pending_search_open: Option<usize>,
     search_error: Option<String>,
     search_generation: u64,
     search_documents: Vec<SearchDocument>,
+    recent_files: Vec<String>,
     vault: VaultData,
     tree: FileTree,
+    tree_focus: FocusHandle,
+    tree_focused_key: Option<String>,
+    file_tree_context_menu: Option<FileTreeContextMenu>,
+    tab_context_menu: Option<TabContextMenu>,
     model: WorkspaceModel,
     sort_menu_open: bool,
     vault_name: String,
@@ -93,8 +137,43 @@ impl WebWorkspace {
         let editor = cx.new(|cx| Editor::new(window, cx));
         let reading = cx.new(ReadingView::new);
         let search_input = cx.new(|cx| TextInput::new("Search vault…", cx));
+        let quick_switcher_input = cx.new(|cx| TextInput::new("Search files by name…", cx));
+        let tree_focus = cx.focus_handle();
         let search_documents = build_search_index(&vault);
         let subscriptions = vec![
+            cx.subscribe(
+                &quick_switcher_input,
+                |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Changed => {
+                        this.quick_switcher_selected = 0;
+                        cx.notify();
+                    }
+                    InputEvent::Down => {
+                        let count = this.quick_switcher_results(cx).len();
+                        if count > 0 {
+                            this.quick_switcher_selected =
+                                (this.quick_switcher_selected + 1) % count;
+                            cx.notify();
+                        }
+                    }
+                    InputEvent::Up => {
+                        let count = this.quick_switcher_results(cx).len();
+                        if count > 0 {
+                            this.quick_switcher_selected = this
+                                .quick_switcher_selected
+                                .checked_sub(1)
+                                .unwrap_or(count - 1);
+                            cx.notify();
+                        }
+                    }
+                    InputEvent::Submit => this.open_quick_switcher_selection(cx),
+                    InputEvent::Cancel => {
+                        this.quick_switcher_open = false;
+                        this.pending_quick_switcher_focus_restore = true;
+                        cx.notify();
+                    }
+                },
+            ),
             cx.subscribe(
                 &search_input,
                 |this, _, event: &InputEvent, cx| match event {
@@ -194,7 +273,9 @@ impl WebWorkspace {
             }),
         ];
 
+        let mut recent_files = Vec::new();
         if let (Some(node), Some(path)) = (initial_node, initial_path) {
+            recent_files.push(path.clone());
             if let Some(tab) = model.active_mut().and_then(|group| group.active_mut()) {
                 tab.open_node(node, path.clone(), ViewMode::Source, 0);
             }
@@ -208,14 +289,24 @@ impl WebWorkspace {
             editor,
             reading,
             search_input,
+            quick_switcher_input,
+            quick_switcher_open: false,
+            quick_switcher_selected: 0,
+            pending_quick_switcher_focus_restore: false,
+            pending_quick_switcher_open: None,
             search_hits: Vec::new(),
             selected_search_hit: 0,
             pending_search_open: None,
             search_error: None,
             search_generation: 0,
             search_documents,
+            recent_files,
             vault,
             tree,
+            tree_focus,
+            tree_focused_key: None,
+            file_tree_context_menu: None,
+            tab_context_menu: None,
             model,
             pending_link: None,
             last_link_event: String::new(),
@@ -253,6 +344,105 @@ impl WebWorkspace {
         })
         .detach();
         cx.notify();
+    }
+
+    fn open_quick_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick_switcher_open = true;
+        self.quick_switcher_selected = 0;
+        self.quick_switcher_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        let focus = self.quick_switcher_input.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn quick_switcher_results(&self, cx: &App) -> Vec<QuickSwitcherHit> {
+        let query = self.quick_switcher_input.read(cx).text().trim().to_owned();
+        let mut results = Vec::new();
+        for document in &self.search_documents {
+            let name = document
+                .path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&document.path)
+                .trim_end_matches(".md")
+                .to_owned();
+            let score = if query.is_empty() {
+                Some(0.0)
+            } else {
+                let by_name = tft_app::file_switcher::label_match(&query, &name);
+                let by_path = tft_app::file_switcher::label_match(&query, &document.path)
+                    .map(|(score, _)| 10_000.0 + 9_000.0 * score / (score + 50_000.0));
+                match (by_name, by_path) {
+                    (Some((name_score, _)), Some(path_score)) => Some(name_score.max(path_score)),
+                    (Some((name_score, _)), None) => Some(name_score),
+                    (None, Some(path_score)) => Some(path_score),
+                    (None, None) => None,
+                }
+            };
+            if let Some(score) = score {
+                results.push(QuickSwitcherHit {
+                    node: document.node,
+                    path: document.path.clone(),
+                    label: name,
+                    score,
+                    alias: false,
+                });
+            }
+            if !query.is_empty() {
+                for alias in tft_cache::frontmatter_aliases(&document.metadata) {
+                    if let Some((score, _)) =
+                        tft_app::file_switcher::label_match(&query, &alias)
+                    {
+                        results.push(QuickSwitcherHit {
+                            node: document.node,
+                            path: document.path.clone(),
+                            label: alias,
+                            score: score - 500.0,
+                            alias: true,
+                        });
+                    }
+                }
+            }
+        }
+        results.sort_by(|a, b| {
+            if query.is_empty() {
+                let a_recent = self
+                    .recent_files
+                    .iter()
+                    .position(|path| path == &a.path)
+                    .unwrap_or(usize::MAX);
+                let b_recent = self
+                    .recent_files
+                    .iter()
+                    .position(|path| path == &b.path)
+                    .unwrap_or(usize::MAX);
+                a_recent
+                    .cmp(&b_recent)
+                    .then_with(|| tft_search::natural_cmp(&a.path, &b.path))
+            } else {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.alias.cmp(&b.alias))
+                    .then_with(|| a.label.len().cmp(&b.label.len()))
+                    .then_with(|| tft_search::natural_cmp(&a.path, &b.path))
+            }
+        });
+        results.truncate(50);
+        results
+    }
+
+    fn open_quick_switcher_selection(&mut self, cx: &mut Context<Self>) {
+        if let Some(hit) = self
+            .quick_switcher_results(cx)
+            .get(self.quick_switcher_selected)
+            .cloned()
+        {
+            self.pending_quick_switcher_open = Some((hit.node, hit.path));
+            self.quick_switcher_open = false;
+            cx.notify();
+        }
     }
 
     fn run_search(&mut self, cx: &mut Context<Self>) {
@@ -361,6 +551,9 @@ impl WebWorkspace {
         ) {
             return;
         }
+        self.recent_files.retain(|recent| recent != &path);
+        self.recent_files.insert(0, path.clone());
+        self.recent_files.truncate(50);
         if !new_tab {
             let existing = self
                 .model
@@ -508,6 +701,82 @@ impl WebWorkspace {
                 self.focus_editor(window, cx);
             }
         }
+        cx.notify();
+        self.publish_test_state();
+    }
+
+    fn toggle_tab_pin(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(tab) = self
+            .model
+            .active_mut()
+            .and_then(|group| group.tabs.get_mut(index))
+        {
+            tab.pinned = !tab.pinned;
+            cx.notify();
+            self.publish_test_state();
+        }
+    }
+
+    fn close_tabs_except(
+        &mut self,
+        keep: impl Fn(usize, &tft_app::Tab) -> bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let group_id = self.model.active_group;
+        let active_node = self
+            .model
+            .active()
+            .and_then(|group| group.active())
+            .and_then(|tab| tab.node);
+        let remove = self
+            .model
+            .active()
+            .map(|group| {
+                group
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, tab)| (!keep(index, tab)).then_some(index))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if remove.is_empty() {
+            return;
+        }
+        self.store_editor_text(active_node, cx);
+        for index in remove.into_iter().rev() {
+            self.model.close(group_id, index);
+        }
+        if let Some(tab) = self.model.active().and_then(|group| group.active()) {
+            let path = tab.path.clone().unwrap_or_default();
+            let text = tab
+                .node
+                .map_or_else(String::new, |node| document_text(&self.vault, node));
+            self.editor
+                .update(cx, |editor, cx| editor.set_text(path, text, cx));
+            if tab.mode == ViewMode::Reading {
+                self.refresh_reading(cx);
+            } else {
+                self.focus_editor(window, cx);
+            }
+        }
+        cx.notify();
+        self.publish_test_state();
+    }
+
+    fn new_tab(&mut self, cx: &mut Context<Self>) {
+        let active_node = self
+            .model
+            .active()
+            .and_then(|group| group.active())
+            .and_then(|tab| tab.node);
+        self.store_editor_text(active_node, cx);
+        if self.model.new_tab(ViewMode::Source).is_none() {
+            return;
+        }
+        self.editor
+            .update(cx, |editor, cx| editor.set_text("", String::new(), cx));
         cx.notify();
         self.publish_test_state();
     }
@@ -763,6 +1032,84 @@ impl WebWorkspace {
         window.focus(&focus, cx);
     }
 
+    fn tree_focus_index(&self) -> Option<usize> {
+        let key = self.tree_focused_key.as_deref()?;
+        self.tree.rows().position(|row| row.key == key)
+    }
+
+    fn handle_tree_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.key == "escape" && self.file_tree_context_menu.is_some() {
+            self.file_tree_context_menu = None;
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if self.tree.is_empty() {
+            if matches!(event.keystroke.key.as_str(), "escape" | "tab") {
+                self.focus_editor(window, cx);
+                cx.stop_propagation();
+            }
+            return;
+        }
+        let current_key = self
+            .tree_focus_index()
+            .and_then(|index| self.tree.row(index).map(|row| row.key.clone()))
+            .or_else(|| {
+                self.current_path()
+                    .and_then(|path| self.tree.visible_index(path))
+                    .and_then(|index| self.tree.row(index).map(|row| row.key.clone()))
+            })
+            .or_else(|| self.tree.row(0).map(|row| row.key.clone()));
+        let key = event.keystroke.key.as_str();
+        let mut handled = true;
+        match key {
+            "down" | "up" => {
+                if let Some(next) = self.tree.focus_vertical_key(
+                    self.tree_focused_key.as_deref(),
+                    self.current_path(),
+                    key == "down",
+                ) {
+                    self.tree_focused_key = Some(next);
+                    cx.notify();
+                }
+            }
+            "right" | "left" => {
+                if let Some(current) = current_key.as_deref() {
+                    if let Some(next) = self.tree.focus_horizontal_key(current, key == "right") {
+                        self.tree_focused_key = Some(next);
+                        cx.notify();
+                    }
+                }
+            }
+            "enter" | "space" => {
+                if let Some(row) = current_key
+                    .as_deref()
+                    .and_then(|key| self.tree.rows().find(|row| row.key == key).cloned())
+                {
+                    if row.is_folder {
+                        self.tree.toggle_key(&row.key);
+                        self.tree_focused_key = Some(row.key);
+                        cx.notify();
+                    } else if key == "enter" {
+                        if let Some(node) = row.node {
+                            self.open(node, row.path, false, window, cx);
+                        }
+                    }
+                }
+            }
+            "escape" | "tab" => self.focus_editor(window, cx),
+            _ => handled = false,
+        }
+        if handled {
+            cx.stop_propagation();
+        }
+    }
+
     fn publish_test_state(&self) {
         #[cfg(all(feature = "browser-test", target_arch = "wasm32"))]
         {
@@ -793,6 +1140,7 @@ impl WebWorkspace {
                 ViewMode::Source => "source",
                 ViewMode::Graph => "graph",
                 ViewMode::Search => "search",
+                ViewMode::Terminal => "terminal",
             });
             let left_tab = match self.model.left_tab {
                 LeftTab::Files => "files",
@@ -822,6 +1170,11 @@ impl WebWorkspace {
                 &state,
                 &JsValue::from_str("leftTab"),
                 &JsValue::from_str(left_tab),
+            );
+            let _ = js_sys::Reflect::set(
+                &state,
+                &JsValue::from_str("leftVisible"),
+                &JsValue::from_bool(self.model.left_visible),
             );
             let _ = js_sys::Reflect::set(
                 &state,
@@ -890,10 +1243,17 @@ fn build_search_index(vault: &VaultData) -> Vec<SearchDocument> {
 }
 
 impl Render for WebWorkspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.pending_quick_switcher_focus_restore {
+            self.pending_quick_switcher_focus_restore = false;
+            self.focus_editor(window, cx);
+        }
+        if let Some((node, path)) = self.pending_quick_switcher_open.take() {
+            self.open(node, path, false, window, cx);
+        }
         if let Some(index) = self.pending_search_open.take() {
             if let Some(hit) = self.search_hits.get(index) {
-                self.open(hit.node, hit.path.clone(), false, _window, cx);
+                self.open(hit.node, hit.path.clone(), false, window, cx);
             }
         }
         if let Some((target, new_tab)) = self.pending_link.take() {
@@ -901,12 +1261,14 @@ impl Render for WebWorkspace {
             let resolver = vault_resolver(&self.vault);
             if let Some(path) = resolver.resolve(&target, &source_path).map(str::to_owned) {
                 if let Ok(node) = self.vault.lookup(&path) {
-                    self.follow_link(node, path, new_tab, _window, cx);
+                    self.follow_link(node, path, new_tab, window, cx);
                 }
             }
         }
         let theme = cx.global::<Theme>().clone();
         let tokens = &theme.tokens;
+        let quick_switcher_results = self.quick_switcher_results(cx);
+        let quick_switcher_input = self.quick_switcher_input.clone();
         let active_tab = self.model.active().and_then(|group| group.active());
         let active_node = active_tab.and_then(|tab| tab.node);
         let active_index = self.model.active().map_or(0, |group| group.active_tab);
@@ -924,6 +1286,7 @@ impl Render for WebWorkspace {
                     row.depth,
                     row.is_folder,
                     row.node.is_some() && row.node == active_node,
+                    self.tree_focused_key.as_deref() == Some(row.key.as_str()),
                     self.tree.is_collapsed_key(&row.key),
                 )
             })
@@ -938,6 +1301,8 @@ impl Render for WebWorkspace {
                 (
                     index,
                     tab.path.clone().unwrap_or_default(),
+                    tft_app::workspace::workspace_leaf_title(tab.path.as_deref(), tab.mode),
+                    tab.pinned,
                     index == active_index,
                 )
             })
@@ -951,12 +1316,83 @@ impl Render for WebWorkspace {
         let selected_search_hit = self.selected_search_hit;
         let search_error = self.search_error.clone();
         let is_reading = active_tab.is_some_and(|tab| tab.mode == ViewMode::Reading);
+        let is_empty_tab = active_tab.is_some_and(|tab| {
+            tab.path.is_none()
+                && !matches!(
+                    tab.mode,
+                    ViewMode::Graph | ViewMode::Search | ViewMode::Terminal
+                )
+        });
+        let main_content = if is_empty_tab {
+            tft_app::ui::workspace_empty_tab(&theme)
+                .child(
+                    div()
+                        .w(px(240.))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            tft_app::ui::workspace_empty_action(
+                                "web-empty-new-note",
+                                "New note",
+                                None,
+                                &theme,
+                            )
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(WebWorkspaceEvent::FileOperationRequested(
+                                    FileOperationRequest::CreateNote {
+                                        parent: String::new(),
+                                    },
+                                ))
+                            })),
+                        )
+                        .child(
+                            tft_app::ui::workspace_empty_action(
+                                "web-empty-go-to-file",
+                                "Go to file",
+                                None,
+                                &theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.open_quick_switcher(window, cx);
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element()
+        } else if is_reading {
+            reading.clone().into_any_element()
+        } else {
+            editor.clone().into_any_element()
+        };
         let mode_icon = if is_reading { "book-open" } else { "pencil" };
-        let active_title = active_tab
-            .and_then(|tab| tab.path.as_deref())
-            .and_then(|path| path.rsplit('/').next())
-            .map(|name| name.strip_suffix(".md").unwrap_or(name).to_owned())
-            .unwrap_or_else(|| "New tab".to_owned());
+        let active_title = tft_app::workspace::workspace_leaf_title(
+            active_tab.and_then(|tab| tab.path.as_deref()),
+            active_tab.map_or(ViewMode::Source, |tab| tab.mode),
+        );
+        let breadcrumbs = tft_app::workspace::workspace_breadcrumbs(
+            active_tab.and_then(|tab| tab.path.as_deref()),
+        );
+        let mut breadcrumb = div().flex().flex_row().items_center().whitespace_nowrap();
+        for (index, (label, path)) in breadcrumbs.iter().cloned().enumerate() {
+            breadcrumb = breadcrumb.child(
+                tft_app::ui::workspace_breadcrumb_item(
+                    ("web-document-folder-crumb", index),
+                    label,
+                    &theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.tree.reveal(&path);
+                    this.model.left_tab = LeftTab::Files;
+                    this.model.left_visible = true;
+                    cx.notify();
+                    this.publish_test_state();
+                })),
+            );
+            if index + 1 < breadcrumbs.len() {
+                breadcrumb = breadcrumb.child(tft_app::ui::workspace_breadcrumb_separator(&theme));
+            }
+        }
         let files_content = if searching {
             div()
                 .id("web-search-scroll")
@@ -1006,33 +1442,80 @@ impl Render for WebWorkspace {
         } else {
             div()
                 .id("web-files-scroll")
+                .key_context("WebExplorer")
+                .track_focus(&self.tree_focus)
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    this.handle_tree_key(event, window, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        window.focus(&this.tree_focus, cx);
+                        this.file_tree_context_menu = Some(FileTreeContextMenu {
+                            position: event.position,
+                            node: None,
+                            key: String::new(),
+                            path: String::new(),
+                            is_folder: false,
+                        });
+                        cx.notify();
+                    }),
+                )
                 .children(rows.into_iter().map(
-                    |(node, key, path, name, depth, folder, active, collapsed)| {
+                    |(node, key, path, name, depth, folder, active, focused, collapsed)| {
                         let row_path = path.clone();
+                        let menu_key = key.clone();
+                        let menu_path = path.clone();
+                        let menu_node = node;
                         tft_app::ui::file_tree_row(
                             SharedString::from(format!("file-{key}")),
                             depth,
                             active,
-                            false,
+                            focused,
                             &theme,
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if folder {
-                                this.tree.toggle_key(&key);
+                        .on_click(
+                            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                this.file_tree_context_menu = None;
+                                this.tree_focused_key = Some(key.clone());
+                                if folder {
+                                    window.focus(&this.tree_focus, cx);
+                                    this.tree.toggle_key(&key);
+                                    cx.notify();
+                                } else if let Some(node) = node {
+                                    let modifiers = event.modifiers();
+                                    this.open(
+                                        node,
+                                        row_path.clone(),
+                                        modifiers.control || modifiers.platform,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                window.focus(&this.tree_focus, cx);
+                                this.sort_menu_open = false;
+                                this.file_tree_context_menu = Some(FileTreeContextMenu {
+                                    position: event.position,
+                                    node: menu_node,
+                                    key: menu_key.clone(),
+                                    path: menu_path.clone(),
+                                    is_folder: folder,
+                                });
                                 cx.notify();
-                            } else if let Some(node) = node {
-                                this.open(node, row_path.clone(), false, window, cx);
-                            }
-                        }))
-                        .child(div().w(px(16.)).flex_shrink_0().child(if folder {
-                            if collapsed { "›" } else { "⌄" }
-                        } else {
-                            ""
-                        }))
-                        .child(name)
+                            }),
+                        )
+                        .children(tft_app::ui::file_tree_indent_guides(depth, &theme))
+                        .child(tft_app::ui::file_tree_row_marker(folder, collapsed, &theme))
+                        .child(tft_app::ui::file_tree_row_label().child(name))
                     },
                 ))
                 .into_any_element()
@@ -1073,10 +1556,356 @@ impl Render for WebWorkspace {
                 )
                 .into_any_element()
         });
+        let file_tree_context_menu = self.file_tree_context_menu.clone().map(|target| {
+            let viewport = window.bounds().size;
+            let parent = if target.is_folder {
+                target.path.clone()
+            } else {
+                target
+                    .path
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent.to_owned())
+                    .unwrap_or_default()
+            };
+            let mut menu = tft_app::ui::menu("web-file-tree-context-menu", &theme)
+                .absolute()
+                .left(
+                    target
+                        .position
+                        .x
+                        .min((viewport.width - px(210.)).max(px(0.))),
+                )
+                .top(
+                    target
+                        .position
+                        .y
+                        .min((viewport.height - px(150.)).max(px(0.))),
+                );
+
+            if let Some(node) = target.node.filter(|_| !target.is_folder) {
+                let path = target.path.clone();
+                menu = menu.child(
+                    tft_app::ui::menu_item(
+                        "web-file-tree-menu-open-tab",
+                        0,
+                        Some("file-plus"),
+                        "Open in new tab",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.file_tree_context_menu = None;
+                        this.open(node, path.clone(), true, window, cx);
+                    })),
+                );
+
+                let path = target.path.clone();
+                menu = menu.child(
+                    tft_app::ui::menu_item(
+                        "web-file-tree-menu-reveal",
+                        1,
+                        Some("folder-open"),
+                        "Reveal in navigation",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.file_tree_context_menu = None;
+                        this.tree.reveal(&path);
+                        this.tree_focused_key = this
+                            .tree
+                            .visible_index(&path)
+                            .and_then(|index| this.tree.row(index).map(|row| row.key.clone()));
+                        this.model.left_tab = LeftTab::Files;
+                        this.model.left_visible = true;
+                        cx.notify();
+                        this.publish_test_state();
+                    })),
+                );
+
+                let path = target.path.clone();
+                menu = menu.child(
+                    tft_app::ui::menu_item(
+                        "web-file-tree-menu-copy-path",
+                        2,
+                        Some("clipboard"),
+                        "Copy relative path",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
+                        this.file_tree_context_menu = None;
+                        cx.notify();
+                    })),
+                );
+            }
+
+            let new_note_parent = parent.clone();
+            menu = menu.child(
+                tft_app::ui::menu_item(
+                    "web-file-tree-menu-new-note",
+                    3,
+                    Some("file-plus"),
+                    "New note",
+                    false,
+                    &theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.file_tree_context_menu = None;
+                    cx.emit(WebWorkspaceEvent::FileOperationRequested(
+                        FileOperationRequest::CreateNote {
+                            parent: new_note_parent.clone(),
+                        },
+                    ));
+                })),
+            );
+
+            if target.is_folder {
+                let key = target.key.clone();
+                let collapsed = self.tree.is_collapsed_key(&key);
+                let title = if collapsed {
+                    "Expand folder"
+                } else {
+                    "Collapse folder"
+                };
+                menu = menu.child(tft_app::ui::menu_separator(&theme)).child(
+                    tft_app::ui::menu_item(
+                        "web-file-tree-menu-toggle-folder",
+                        4,
+                        Some(if collapsed { "folder-open" } else { "folder" }),
+                        title,
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tree.toggle_key(&key);
+                        this.file_tree_context_menu = None;
+                        cx.notify();
+                        this.publish_test_state();
+                    })),
+                );
+            }
+            menu.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        });
+
+        let quick_switcher_overlay = self.quick_switcher_open.then(|| {
+            let count = quick_switcher_results.len();
+            let panel = tft_app::ui::palette_panel("web-quick-switcher", 620., &theme)
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.quick_switcher_open = false;
+                    this.pending_quick_switcher_focus_restore = true;
+                    cx.notify();
+                }))
+                .child(tft_app::ui::palette_search_slot(&theme).child(quick_switcher_input))
+                .when(count > 0, |panel| {
+                    panel.child(
+                        tft_app::ui::palette_results_slot()
+                            .id("web-quick-switcher-results")
+                            .max_h(px(468.))
+                            .overflow_y_scroll()
+                            .children(quick_switcher_results.iter().enumerate().map(
+                                |(index, hit)| {
+                                    let node = hit.node;
+                                    let path = hit.path.clone();
+                                    let name = hit.label.clone();
+                                    let detail = if hit.alias {
+                                        Some(format!(
+                                            "alias of {}",
+                                            path.rsplit('/').next().unwrap_or(&path).trim_end_matches(".md")
+                                        ))
+                                    } else {
+                                        path.rsplit_once('/')
+                                            .map(|(parent, _)| parent.to_owned())
+                                    };
+                                    tft_app::ui::palette_result_row(
+                                        SharedString::from(format!("web-quick-switcher-{index}")),
+                                        index == self.quick_switcher_selected,
+                                        &theme,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.quick_switcher_selected = index;
+                                        this.pending_quick_switcher_open =
+                                            Some((node, path.clone()));
+                                        this.quick_switcher_open = false;
+                                        cx.notify();
+                                    }))
+                                    .child(tft_app::assets::icon(
+                                        "files",
+                                        16.,
+                                        theme.tokens.text_muted,
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_size(px(14.))
+                                            .whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .child(name),
+                                    )
+                                    .children(detail.map(
+                                        |detail| {
+                                            div()
+                                                .max_w(px(220.))
+                                                .flex_shrink_0()
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .text_size(px(11.))
+                                                .text_color(theme.tokens.text_muted)
+                                                .child(detail)
+                                        },
+                                    ))
+                                },
+                            )),
+                    )
+                })
+                .when(count == 0, |panel| {
+                    panel.child(
+                        tft_app::ui::palette_results_slot().child(
+                            div()
+                                .h(px(38.))
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(12.))
+                                .text_color(theme.tokens.text_muted)
+                                .child("No matching files."),
+                        ),
+                    )
+                });
+            div()
+                .occlude()
+                .absolute()
+                .inset_0()
+                .flex()
+                .justify_center()
+                .items_start()
+                .pt(px(90.))
+                .child(panel)
+        });
+
+        let tab_context_menu = self.tab_context_menu.clone().and_then(|target| {
+            let group = self.model.active()?;
+            let tab = group.tabs.get(target.index)?;
+            let index = target.index;
+            let total = group.tabs.len();
+            let pinned = tab.pinned;
+            let viewport = window.bounds().size;
+            let mut menu = tft_app::ui::menu("web-tab-context-menu", &theme)
+                .absolute()
+                .left(
+                    target
+                        .position
+                        .x
+                        .min((viewport.width - px(210.)).max(px(0.))),
+                )
+                .top(
+                    target
+                        .position
+                        .y
+                        .min((viewport.height - px(230.)).max(px(0.))),
+                )
+                .child(
+                    tft_app::ui::menu_item(
+                        "web-tab-close",
+                        0,
+                        Some("x"),
+                        "Close",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.tab_context_menu = None;
+                        this.close_tab(index, window, cx);
+                    })),
+                );
+            if total > 1 {
+                menu = menu.child(tft_app::ui::menu_separator(&theme)).child(
+                    tft_app::ui::menu_item(
+                        "web-tab-close-others",
+                        1,
+                        Some("x"),
+                        "Close others",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.tab_context_menu = None;
+                        this.close_tabs_except(|ix, tab| ix == index || tab.pinned, window, cx);
+                    })),
+                );
+                if index + 1 < total {
+                    menu = menu.child(
+                        tft_app::ui::menu_item(
+                            "web-tab-close-after",
+                            2,
+                            Some("x"),
+                            "Close tabs after",
+                            false,
+                            &theme,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.tab_context_menu = None;
+                            this.close_tabs_except(
+                                |ix, tab| ix <= index || tab.pinned,
+                                window,
+                                cx,
+                            );
+                        })),
+                    );
+                }
+                menu = menu.child(
+                    tft_app::ui::menu_item(
+                        "web-tab-close-all",
+                        3,
+                        Some("x"),
+                        "Close all",
+                        false,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.tab_context_menu = None;
+                        this.close_tabs_except(|_, tab| tab.pinned, window, cx);
+                    })),
+                );
+            }
+            Some(
+                menu.child(tft_app::ui::menu_separator(&theme)).child(
+                    tft_app::ui::menu_item(
+                        "web-tab-toggle-pin",
+                        4,
+                        Some("pin"),
+                        if pinned { "Unpin" } else { "Pin" },
+                        pinned,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.tab_context_menu = None;
+                        this.toggle_tab_pin(index, cx);
+                    })),
+                )
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+            )
+        });
 
         div()
             .size_full()
             .relative()
+            .on_action(cx.listener(|this, _: &OpenQuickSwitcher, window, cx| {
+                this.open_quick_switcher(window, cx);
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.file_tree_context_menu.take().is_some()
+                        || this.tab_context_menu.take().is_some()
+                    {
+                        cx.notify();
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .bg(tokens.background_primary)
@@ -1087,225 +1916,179 @@ impl Render for WebWorkspace {
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(tft_app::theme::SIDEBAR_WIDTH))
-                            .flex_shrink_0()
-                            .flex()
-                            .flex_col()
-                            .bg(tokens.tab_container_background)
-                            .border_r_1()
-                            .border_color(tokens.tab_outline_color)
-                            .child(
-                                div()
-                                    .h(px(tft_app::theme::HEADER_HEIGHT))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(3.))
-                                    .px_2()
-                                    .bg(tokens.sidebar_tab_container_background)
-                                    .border_b_1()
-                                    .border_color(tokens.tab_outline_color)
-                                    .child(
-                                        tft_app::ui::dock_tab(
-                                            "web-dock-files",
-                                            "folder-closed",
-                                            files_tab,
-                                            &theme,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.model.left_tab = LeftTab::Files;
-                                                cx.notify();
-                                                this.publish_test_state();
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        tft_app::ui::dock_tab(
-                                            "web-dock-search",
-                                            "search",
-                                            search_tab,
-                                            &theme,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.model.left_tab = LeftTab::Search;
-                                                cx.notify();
-                                                this.publish_test_state();
-                                            }),
-                                        ),
-                                    )
-                                    .child(div().flex_1())
-                                    .child(
-                                        tft_app::ui::icon_button(
-                                            "web-sidebar-toggle",
-                                            "panel-left",
-                                            &theme,
-                                        )
-                                        .opacity(0.72),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h(px(tft_app::theme::HEADER_HEIGHT))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .gap(px(2.))
-                                    .border_b_1()
-                                    .border_color(tokens.tab_outline_color)
-                                    .child(
-                                        tft_app::ui::header_button(
-                                            "web-explorer-sort",
-                                            "arrow-up-narrow-wide",
-                                            "Change sort order",
-                                            self.sort_menu_open,
-                                            &theme,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                this.sort_menu_open = !this.sort_menu_open;
-                                                cx.notify();
-                                                this.publish_test_state();
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        tft_app::ui::header_button(
-                                            "web-explorer-reveal",
-                                            "gallery-vertical",
-                                            "Auto-reveal current file",
-                                            false,
-                                            &theme,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                if let Some(path) =
-                                                    this.current_path().map(str::to_owned)
-                                                {
-                                                    this.tree.reveal(&path);
+                    .when(self.model.left_visible, |layout| {
+                        layout.child(
+                            tft_app::ui::workspace_dock(px(tft_app::theme::SIDEBAR_WIDTH), &theme)
+                                .border_r_1()
+                                .border_color(tokens.tab_outline_color)
+                                .child(
+                                    tft_app::ui::workspace_dock_header(&theme)
+                                        .gap(px(3.))
+                                        .px_2()
+                                        .child(
+                                            tft_app::ui::dock_tab(
+                                                "web-dock-files",
+                                                "folder-closed",
+                                                files_tab,
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
                                                     this.model.left_tab = LeftTab::Files;
-                                                }
-                                                cx.notify();
-                                                this.publish_test_state();
-                                            }),
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            tft_app::ui::dock_tab(
+                                                "web-dock-search",
+                                                "search",
+                                                search_tab,
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.model.left_tab = LeftTab::Search;
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            tft_app::ui::icon_button(
+                                                "web-sidebar-toggle",
+                                                "panel-left",
+                                                &theme,
+                                            )
+                                            .opacity(0.72)
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.model.left_visible = false;
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
                                         ),
-                                    )
-                                    .child(
-                                        tft_app::ui::header_button(
-                                            "web-explorer-expand",
-                                            "chevrons-up-down",
-                                            if any_expanded {
-                                                "Collapse all"
-                                            } else {
-                                                "Expand all"
-                                            },
-                                            false,
-                                            &theme,
-                                        )
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| {
-                                                if this.tree.any_expanded() {
-                                                    this.tree.collapse_all();
-                                                } else {
-                                                    this.tree.expand_all();
-                                                }
-                                                cx.notify();
-                                                this.publish_test_state();
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        tft_app::ui::icon_button("web-new-note", "plus", &theme)
-                                            .on_click(cx.listener(|_, _, _, cx| {
-                                                cx.emit(WebWorkspaceEvent::FileOperationRequested(
-                                                    FileOperationRequest::CreateNote {
-                                                        parent: String::new(),
-                                                    },
-                                                ))
-                                            })),
-                                    ),
-                            )
-                            .when(search_tab, |panel| {
-                                panel.child(div().w_full().px_2().py_1().child(search_input))
-                            })
-                            .child(files_content)
-                            .child(
-                                div()
-                                    .h(px(tft_app::theme::HEADER_HEIGHT))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_center()
-                                    .px_2()
-                                    .gap(px(3.))
-                                    .border_t_1()
-                                    .border_color(tokens.divider_color)
-                                    .child(
-                                        tft_app::ui::icon_button(
-                                            "web-vault-switcher",
-                                            "chevrons-up-down",
-                                            &theme,
-                                        )
-                                        .opacity(0.65)
-                                        .on_click(
-                                            cx.listener(|_, _, _, cx| {
-                                                cx.emit(WebWorkspaceEvent::SwitchVaultRequested)
-                                            }),
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .whitespace_nowrap()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .text_size(px(13.))
-                                            .text_color(tokens.vault_profile_color)
-                                            .child(self.vault_name.clone()),
-                                    )
-                                    .child(
-                                        tft_app::ui::icon_button(
-                                            "web-vault-settings",
-                                            "settings",
-                                            &theme,
-                                        )
-                                        .opacity(0.55),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .h(px(tft_app::theme::HEADER_HEIGHT))
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .items_stretch()
-                                    .bg(tokens.tab_container_background)
-                                    .border_b_1()
-                                    .border_color(tokens.tab_outline_color)
-                                    .children(tabs.into_iter().map(|(index, path, active)| {
-                                        let title = path.clone();
-                                        tft_app::ui::workspace_tab(
-                                            SharedString::from(format!("tab-{index}-{path}")),
-                                            active,
-                                            true,
-                                            &theme,
-                                        )
+                                )
+                                .child(
+                                    div()
+                                        .h(px(tft_app::theme::HEADER_HEIGHT))
+                                        .flex_shrink_0()
                                         .flex()
                                         .items_center()
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.activate_tab(index, window, cx)
-                                        }))
+                                        .justify_center()
+                                        .gap(px(2.))
+                                        .border_b_1()
+                                        .border_color(tokens.tab_outline_color)
+                                        .child(
+                                            tft_app::ui::header_button(
+                                                "web-explorer-sort",
+                                                "arrow-up-narrow-wide",
+                                                "Change sort order",
+                                                self.sort_menu_open,
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.sort_menu_open = !this.sort_menu_open;
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            tft_app::ui::header_button(
+                                                "web-explorer-reveal",
+                                                "gallery-vertical",
+                                                "Auto-reveal current file",
+                                                false,
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    if let Some(path) =
+                                                        this.current_path().map(str::to_owned)
+                                                    {
+                                                        this.tree.reveal(&path);
+                                                        this.model.left_tab = LeftTab::Files;
+                                                    }
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            tft_app::ui::header_button(
+                                                "web-explorer-expand",
+                                                "chevrons-up-down",
+                                                if any_expanded {
+                                                    "Collapse all"
+                                                } else {
+                                                    "Expand all"
+                                                },
+                                                false,
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    if this.tree.any_expanded() {
+                                                        this.tree.collapse_all();
+                                                    } else {
+                                                        this.tree.expand_all();
+                                                    }
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
+                                        )
+                                        .child(
+                                            tft_app::ui::icon_button(
+                                                "web-new-note",
+                                                "plus",
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|_, _, _, cx| {
+                                                    cx.emit(
+                                                        WebWorkspaceEvent::FileOperationRequested(
+                                                            FileOperationRequest::CreateNote {
+                                                                parent: String::new(),
+                                                            },
+                                                        ),
+                                                    )
+                                                }),
+                                            ),
+                                        ),
+                                )
+                                .when(search_tab, |panel| {
+                                    panel.child(div().w_full().px_2().py_1().child(search_input))
+                                })
+                                .child(files_content)
+                                .child(
+                                    div()
+                                        .h(px(tft_app::theme::HEADER_HEIGHT))
+                                        .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
+                                        .px_2()
+                                        .gap(px(3.))
+                                        .border_t_1()
+                                        .border_color(tokens.divider_color)
+                                        .child(
+                                            tft_app::ui::icon_button(
+                                                "web-vault-switcher",
+                                                "chevrons-up-down",
+                                                &theme,
+                                            )
+                                            .opacity(0.65)
+                                            .on_click(
+                                                cx.listener(|_, _, _, cx| {
+                                                    cx.emit(WebWorkspaceEvent::SwitchVaultRequested)
+                                                }),
+                                            ),
+                                        )
                                         .child(
                                             div()
                                                 .flex_1()
@@ -1313,71 +2096,185 @@ impl Render for WebWorkspace {
                                                 .whitespace_nowrap()
                                                 .overflow_hidden()
                                                 .text_ellipsis()
-                                                .child(title),
+                                                .text_size(px(13.))
+                                                .text_color(tokens.vault_profile_color)
+                                                .child(self.vault_name.clone()),
+                                        ),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                tft_app::ui::workspace_tab_strip_shell(&theme)
+                                    .flex_shrink_0()
+                                    .when(!self.model.left_visible, |strip| {
+                                        strip.child(
+                                            tft_app::ui::icon_button(
+                                                "web-sidebar-restore",
+                                                "panel-left",
+                                                &theme,
+                                            )
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.model.left_visible = true;
+                                                    cx.notify();
+                                                    this.publish_test_state();
+                                                }),
+                                            ),
                                         )
-                                        .child(
-                                            div()
-                                                .id(format!("close-tab-{index}"))
-                                                .px_1()
+                                    })
+                                    .child(tft_app::ui::workspace_tab_history_controls(
+                                        tft_app::ui::icon_button(
+                                            "web-tab-back",
+                                            "arrow-left",
+                                            &theme,
+                                        )
+                                        .when(!can_back, |button| button.opacity(0.4))
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.navigate_history(false, window, cx)
+                                            }),
+                                        ),
+                                        tft_app::ui::icon_button(
+                                            "web-tab-forward",
+                                            "arrow-right",
+                                            &theme,
+                                        )
+                                        .when(!can_forward, |button| button.opacity(0.4))
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.navigate_history(true, window, cx)
+                                            }),
+                                        ),
+                                    ))
+                                    .child(tft_app::ui::workspace_tab_strip_divider(&theme))
+                                    .child(
+                                        tft_app::ui::workspace_tab_strip_scroll(
+                                            "web-tab-strip-scroll",
+                                        )
+                                        .children(tabs.into_iter().map(
+                                            |(index, path, title, pinned, active)| {
+                                                tft_app::ui::workspace_tab(
+                                                    SharedString::from(format!(
+                                                        "tab-{index}-{path}"
+                                                    )),
+                                                    active,
+                                                    true,
+                                                    &theme,
+                                                )
+                                                .flex()
+                                                .items_center()
                                                 .cursor_pointer()
-                                                .hover(|style| style.text_color(tokens.text_normal))
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
-                                                        cx.stop_propagation();
-                                                        this.close_tab(index, window, cx);
+                                                        this.activate_tab(index, window, cx)
                                                     },
                                                 ))
-                                                .child("×"),
-                                        )
-                                    })),
+                                                .on_mouse_down(
+                                                    gpui::MouseButton::Middle,
+                                                    cx.listener(move |this, _, window, cx| {
+                                                        this.close_tab(index, window, cx)
+                                                    }),
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    cx.listener(move |this, event, _, cx| {
+                                                        cx.stop_propagation();
+                                                        this.file_tree_context_menu = None;
+                                                        this.tab_context_menu = Some(TabContextMenu {
+                                                            position: event.position,
+                                                            index,
+                                                        });
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .child(
+                                                    tft_app::ui::workspace_tab_inner(
+                                                        active, &theme,
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .whitespace_nowrap()
+                                                            .overflow_hidden()
+                                                            .text_ellipsis()
+                                                            .child(title),
+                                                    )
+                                                    .child(
+                                                        tft_app::ui::workspace_tab_close_button(
+                                                            format!("close-tab-{index}"),
+                                                            active,
+                                                            pinned,
+                                                            &theme,
+                                                        )
+                                                        .on_click(cx.listener(
+                                                            move |this, _, window, cx| {
+                                                                cx.stop_propagation();
+                                                                this.close_tab(index, window, cx);
+                                                            },
+                                                        )),
+                                                    ),
+                                                )
+                                            },
+                                        ))
+                                        .child(
+                                            tft_app::ui::icon_button("web-new-tab", "plus", &theme)
+                                                .w(px(32.))
+                                                .h_full()
+                                                .rounded(px(0.))
+                                                .hover(|style| {
+                                                    style.bg(tokens.background_modifier_hover)
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.new_tab(cx);
+                                                })),
+                                        ),
+                                    ),
                             )
                             .child(
                                 tft_app::ui::workspace_view_header(&theme)
                                     .child(
                                         div()
-                                            .flex()
-                                            .flex_row()
-                                            .child(
-                                                tft_app::ui::icon_button(
-                                                    "web-back",
-                                                    "arrow-left",
-                                                    &theme,
-                                                )
-                                                .when(!can_back, |button| button.opacity(0.4))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.navigate_history(false, window, cx)
-                                                })),
-                                            )
-                                            .child(
-                                                tft_app::ui::icon_button(
-                                                    "web-forward",
-                                                    "arrow-right",
-                                                    &theme,
-                                                )
-                                                .when(!can_forward, |button| button.opacity(0.4))
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.navigate_history(true, window, cx)
-                                                })),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
                                             .flex_1()
                                             .min_w_0()
+                                            .pl(px(12.))
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_1()
                                             .whitespace_nowrap()
                                             .overflow_hidden()
                                             .text_ellipsis()
+                                            .when(!breadcrumbs.is_empty(), |header| {
+                                                header.child(breadcrumb).child(
+                                                    tft_app::ui::workspace_breadcrumb_separator(
+                                                        &theme,
+                                                    ),
+                                                )
+                                            })
                                             .child(active_title),
                                     )
-                                    .child(
-                                        tft_app::ui::icon_button("web-graph", "git-fork", &theme)
-                                            .opacity(0.4),
-                                    )
-                                    .child(
-                                        tft_app::ui::icon_button("web-mode", mode_icon, &theme)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_view(window, cx)
-                                            })),
+                                    .when(
+                                        tft_app::workspace::workspace_header_shows_mode_switch(
+                                            active_tab.and_then(|tab| tab.path.as_deref()),
+                                            active_tab.map_or(ViewMode::Source, |tab| tab.mode),
+                                        ),
+                                        |header| {
+                                            header.child(
+                                                tft_app::ui::icon_button(
+                                                    "web-mode", mode_icon, &theme,
+                                                )
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_view(window, cx)
+                                                })),
+                                            )
+                                        },
                                     )
                                     .when(drive_controls, |header| {
                                         header.child(
@@ -1396,14 +2293,13 @@ impl Render for WebWorkspace {
                                         )
                                     }),
                             )
-                            .child(div().flex_1().min_h_0().child(if is_reading {
-                                reading.into_any_element()
-                            } else {
-                                editor.into_any_element()
-                            })),
+                            .child(div().flex_1().min_h_0().child(main_content)),
                     ),
             )
             .children(sort_menu)
+            .children(file_tree_context_menu)
+            .children(tab_context_menu)
+            .children(quick_switcher_overlay)
     }
 }
 

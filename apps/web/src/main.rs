@@ -31,6 +31,7 @@ fn run() {
                 .expect("register TFT fonts");
             tft_app::editor::bind_keys(cx);
             tft_app::text_input::bind_keys(cx);
+            web_workspace::bind_keys(cx);
             #[cfg(not(feature = "browser-test"))]
             drive_app::bind_keys(cx);
             #[cfg(target_arch = "wasm32")]

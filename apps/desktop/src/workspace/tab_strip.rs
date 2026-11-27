@@ -3,9 +3,8 @@
 use super::render::GroupView;
 use super::tab_drag::{measure_for_drag, DragPart, TabDrag, TabDragPreview, DROP_BAR_WIDTH};
 use super::{
-    display_name, file_menu, icon, release_notes, window_handle, FileKind, GoBack, GoForward,
-    Pick, Tab, ViewMode, WindowFrame, Workspace, HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH,
-    WINDOW_RADIUS,
+    file_menu, icon, release_notes, window_handle, GoBack, GoForward, Pick, Tab, ViewMode,
+    WindowFrame, Workspace, ICON_SIZE, RIBBON_WIDTH, WINDOW_RADIUS,
 };
 use crate::theme::Theme;
 use gpui::{
@@ -27,39 +26,9 @@ impl TabTitle for Tab {
     }
 }
 
-/// The tab strip's name for a file: a note's name without `.md`, and a
-/// canvas without `.canvas`, a PDF without `.pdf` or an audio or video file
-/// without its extension too (observed: `tone.mp3` is "tone", `clip.mp4`
-/// "clip"), which is how Obsidian titles its tabs -- no view of its own ever
-/// shows an extension (the PDF's is observed: `doc.pdf` is the tab "doc" and
-/// the leaf's `title` "doc").
-pub(super) fn tab_display_name(file_name: &str) -> &str {
-    match file_name.rsplit_once('.') {
-        Some((stem, ext))
-            if (ext.eq_ignore_ascii_case("canvas")
-                || ext.eq_ignore_ascii_case("pdf")
-                || matches!(
-                    FileKind::from_extension(&ext.to_ascii_lowercase()),
-                    FileKind::Audio | FileKind::Video
-                ))
-                && !stem.is_empty() =>
-        {
-            stem
-        }
-        _ => display_name(file_name),
-    }
-}
-
 /// The name a tab, view header and window title share for a leaf.
 pub(crate) fn leaf_title(path: Option<&str>, mode: ViewMode) -> SharedString {
-    match (path, mode) {
-        (Some(path), _) => tab_display_name(path.rsplit('/').next().unwrap_or(path))
-            .to_string()
-            .into(),
-        (None, ViewMode::Graph) => "Graph view".into(),
-        (None, ViewMode::Search) => "Search".into(),
-        (None, _) => "New tab".into(),
-    }
+    tft_app::workspace::workspace_leaf_title(path, mode).into()
 }
 
 impl Workspace {
@@ -96,24 +65,17 @@ impl Workspace {
         };
         let at_left = first && !left_open;
         let at_right = last;
-        div()
-            .flex()
-            .flex_row()
-            .items_end()
+        crate::ui::workspace_tab_strip_shell(theme)
             .when(at_left && frame.corners.tl, |d| d.rounded_tl(WINDOW_RADIUS))
             .when(at_right && frame.corners.tr, |d| {
                 d.rounded_tr(WINDOW_RADIUS)
             })
-            .h(px(HEADER_HEIGHT))
             .pl(px(left_space))
             .pr(if under_controls {
                 px(3. * RIBBON_WIDTH)
             } else {
                 px(8.)
             })
-            .bg(theme.tokens.tab_container_background)
-            .relative()
-            .overflow_hidden()
             // A dragged tab over the strip moves the drop bar to the nearest boundary;
             // dropped, it lands there.
             .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, cx| {
@@ -128,17 +90,6 @@ impl Workspace {
                     DragPart::Strip(group),
                 ))
             })
-            // The strip's outline is a bottom hairline, so the active tab paints over it
-            // and joins the header without a seam; other tabs stop a pixel short.
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .h(px(1.))
-                    .bg(theme.tokens.tab_outline_color),
-            )
             // Without the ribbon a collapsed left sidebar would have no way back;
             // macOS keeps the toggle here, after the traffic lights.
             .when(first && !popout && !left_open, |d| {
@@ -146,51 +97,25 @@ impl Workspace {
             })
             // Back and forward sit in the strip's own cell, as Zed puts them:
             // a fixed pair left of the tabs, parted from them by a hairline.
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .h_full()
-                    .gap(px(0.))
-                    .pl(px(4.))
-                    .pr(px(4.))
-                    .child(
-                        crate::ui::icon_button("back", "arrow-left", theme)
-                            .when(!can_back, |d| d.opacity(0.4))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_group(group, cx);
-                                this.go_back(&GoBack, window, cx)
-                            })),
-                    )
-                    .child(
-                        crate::ui::icon_button("forward", "arrow-right", theme)
-                            .when(!can_forward, |d| d.opacity(0.4))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.activate_group(group, cx);
-                                this.go_forward(&GoForward, window, cx)
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .h_full()
-                    .w(px(1.))
-                    .flex_shrink_0()
-                    .bg(theme.tokens.tab_divider_color),
-            )
+            .child(crate::ui::workspace_tab_history_controls(
+                crate::ui::icon_button("back", "arrow-left", theme)
+                    .when(!can_back, |d| d.opacity(0.4))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(group, cx);
+                        this.go_back(&GoBack, window, cx)
+                    })),
+                crate::ui::icon_button("forward", "arrow-right", theme)
+                    .when(!can_forward, |d| d.opacity(0.4))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(group, cx);
+                        this.go_forward(&GoForward, window, cx)
+                    })),
+            ))
+            .child(crate::ui::workspace_tab_strip_divider(theme))
             // The tabs scroll sideways in their own box, so a crowded strip keeps every
             // tab reachable.
             .child(
-                div()
-                    .id(("tab-strip-scroll", group))
-                    .flex()
-                    .flex_row()
-                    .items_end()
-                    .flex_1()
-                    .min_w(px(0.))
-                    .h_full()
-                    .overflow_x_scroll()
+                crate::ui::workspace_tab_strip_scroll(("tab-strip-scroll", group))
                     .children(tabs.iter().enumerate().map(|(ix, tab)| {
                         let active = ix == active_ix;
                         let pinned = tab.pinned;
@@ -299,24 +224,8 @@ impl Workspace {
                                 this.open_tab_menu(group, ix, e.position, cx)
                             }),
                         )
-                        // The inner box: title and close button, padded `0 4px 0 8px`,
-                        // washed on hover when the tab is not active.
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(4.))
-                                .pl(px(10.))
-                                .pr(px(8.))
-                                .when(!active, |d| {
-                                    d.group_hover("tab", |s| {
-                                        s.bg(theme.tokens.tab_inner_background_hover)
-                                    })
-                                })
+                            crate::ui::workspace_tab_inner(active, theme)
                                 .child(
                                     div()
                                         .flex_1()
@@ -326,25 +235,15 @@ impl Workspace {
                                         .text_ellipsis()
                                         .child(title),
                                 )
-                                // The close button: no wash of its own, its cross
-                                // brightens from muted to normal under the pointer.
                                 .child(
-                                    div()
-                                        .id(("tab-close", ix))
-                                        .group("tab-close")
-                                        .flex_shrink_0()
-                                        .w(px(18.))
-                                        .h(px(18.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(2.))
-                                        // A pinned tab shows its pin in the close button's
-                                        // place; a click unpins.
-                                        .when(!active && !pinned, |d| {
-                                            d.invisible().group_hover("tab", |s| s.visible())
-                                        })
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                    crate::ui::workspace_tab_close_button(
+                                        ("tab-close", ix),
+                                        active,
+                                        pinned,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
                                             cx.stop_propagation();
                                             this.activate_group(group, cx);
                                             if pinned {
@@ -353,17 +252,8 @@ impl Workspace {
                                             } else {
                                                 this.close_tab(ix, cx);
                                             }
-                                        }))
-                                        .child(
-                                            icon(
-                                                if pinned { "pin" } else { "x" },
-                                                14.,
-                                                theme.tokens.tab_text_color_focused_active,
-                                            )
-                                            .group_hover("tab-close", |s| {
-                                                s.text_color(theme.tokens.text_normal)
-                                            }),
-                                        ),
+                                        },
+                                    )),
                                 ),
                         )
                     }))

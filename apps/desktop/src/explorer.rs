@@ -391,76 +391,59 @@ impl FileExplorer {
         }
     }
 
-    /// Where Up and Down start from when no visible row has the ring: the
-    /// open file's row if a folder is not hiding it, else the first row.
-    fn start_ix(&self) -> usize {
-        self.active
-            .as_deref()
-            .and_then(|p| self.tree.visible_index(p))
-            .unwrap_or(0)
-    }
-
     fn focus_down(&mut self, _: &FocusDown, _: &mut Window, cx: &mut Context<Self>) {
-        let next = match self.focused_ix() {
-            Some(ix) => (ix + 1).min(self.tree.len().saturating_sub(1)),
-            None => self.start_ix(),
-        };
-        self.set_focused_ix(next, cx);
+        self.focus_vertical(true, cx);
     }
 
     fn focus_up(&mut self, _: &FocusUp, _: &mut Window, cx: &mut Context<Self>) {
-        let next = match self.focused_ix() {
-            Some(ix) => ix.saturating_sub(1),
-            None => self.start_ix(),
-        };
-        self.set_focused_ix(next, cx);
+        self.focus_vertical(false, cx);
+    }
+
+    fn focus_vertical(&mut self, down: bool, cx: &mut Context<Self>) {
+        let focused_key = self
+            .focused_ix()
+            .and_then(|ix| self.tree.row(ix).map(|row| row.key.clone()));
+        if let Some(key) =
+            self.tree
+                .focus_vertical_key(focused_key.as_deref(), self.active.as_deref(), down)
+        {
+            self.set_focused_key(&key, cx);
+        }
+    }
+
+    fn set_focused_key(&mut self, key: &str, cx: &mut Context<Self>) {
+        let index = self.tree.rows().position(|row| row.key == key);
+        if let Some(index) = index {
+            self.set_focused_ix(index, cx);
+        }
     }
 
     /// Right opens a collapsed folder, steps into an open one, and does
     /// nothing on a file.
     fn focus_right(&mut self, _: &FocusRight, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.focused_ix() else {
+        let Some(key) = self
+            .focused_ix()
+            .and_then(|ix| self.tree.row(ix).map(|row| row.key.clone()))
+        else {
             return;
         };
-        let Some(row) = self.tree.row(ix).cloned() else {
-            return;
-        };
-        if !row.is_folder {
-            return;
-        }
-        if self.tree.is_collapsed(&row.path) {
-            self.tree.toggle(&row.path);
-            cx.notify();
-        } else if self.tree.row(ix + 1).is_some_and(|r| r.depth > row.depth) {
-            self.set_focused_ix(ix + 1, cx);
+        if let Some(next) = self.tree.focus_horizontal_key(&key, true) {
+            self.set_focused_key(&next, cx);
         }
     }
 
     /// Left closes an open folder; on a file or a closed folder it climbs
     /// to the parent and closes that, or does nothing at the root.
     fn focus_left(&mut self, _: &FocusLeft, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(ix) = self.focused_ix() else {
+        let Some(key) = self
+            .focused_ix()
+            .and_then(|ix| self.tree.row(ix).map(|row| row.key.clone()))
+        else {
             return;
         };
-        let Some(row) = self.tree.row(ix).cloned() else {
-            return;
-        };
-        if row.is_folder && !self.tree.is_collapsed(&row.path) {
-            self.tree.toggle(&row.path);
-            cx.notify();
-            return;
+        if let Some(next) = self.tree.focus_horizontal_key(&key, false) {
+            self.set_focused_key(&next, cx);
         }
-        let Some((parent, _)) = row.path.rsplit_once('/') else {
-            return;
-        };
-        let parent = parent.to_string();
-        if !self.tree.is_collapsed(&parent) {
-            self.tree.toggle(&parent);
-        }
-        if let Some(parent_ix) = self.tree.visible_index(&parent) {
-            self.set_focused_ix(parent_ix, cx);
-        }
-        cx.notify();
     }
 
     /// Enter opens the file or toggles the folder under the ring.
@@ -878,15 +861,6 @@ impl FileExplorer {
                 let row = self.tree.row(ix)?;
                 let active = self.active.as_deref() == Some(row.path.as_str());
                 let focused = focused_ix == Some(ix);
-                // Zed's spacing, TFT's chevrons: 20 px per depth, a 14 px
-                // icon and a 4 px gap to the name.
-                let marker = row.is_folder.then(|| {
-                    if self.tree.is_collapsed(&row.path) {
-                        "chevron-right"
-                    } else {
-                        "chevron-down"
-                    }
-                });
                 let name: SharedString = row.name.clone().into();
                 let renaming = self.renaming.as_ref().is_some_and(|e| e.path == row.path);
                 let tag: Option<SharedString> = row.tag.clone().map(Into::into);
@@ -943,17 +917,7 @@ impl FileExplorer {
                 };
                 Some(
                     row_el
-                        // Indent guides, as Zed's panel draws them: one hairline
-                        // at every ancestor's content inset, under this row.
-                        .children((0..row.depth).map(|depth| {
-                            div()
-                                .absolute()
-                                .left(px(8. + depth as f32 * 20.))
-                                .top_0()
-                                .bottom_0()
-                                .w(px(1.))
-                                .bg(t.background_modifier_border)
-                        }))
+                        .children(crate::ui::file_tree_indent_guides(row.depth, &theme))
                         .when(block_top, |d| d.text_color(t.text_accent))
                         .when(dragged, |d| {
                             d.bg(t.interactive_accent).text_color(gpui::white())
@@ -1003,27 +967,13 @@ impl FileExplorer {
                                     .bg(wash),
                             )
                         })
+                        .child(crate::ui::file_tree_row_marker(
+                            row.is_folder,
+                            self.tree.is_collapsed(&row.path),
+                            &theme,
+                        ))
                         .child(
-                            div()
-                                .w(px(14.))
-                                .mr(px(4.))
-                                .flex_shrink_0()
-                                .flex()
-                                .items_center()
-                                // The chevron: `--nav-collapse-icon-color`
-                                // (the faint text colour) at `--icon-opacity`.
-                                .opacity(t.icon_opacity)
-                                .children(marker.map(|name| {
-                                    crate::assets::icon(name, 14., t.nav_collapse_icon_color)
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
+                            crate::ui::file_tree_row_label()
                                 .when(!renaming, |d| d.child(name.clone()))
                                 // The field paints itself on a canvas,
                                 // which has no size of its own: without a

@@ -1,0 +1,25 @@
+[package]
+name = "terminal"
+description = "Terminal pane: a PTY shell, its grid and the GPUI view that paints it"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+repository.workspace = true
+# Vendored from gpui-terminal 0.1.0 (MIT OR Apache-2.0), see src/lib.rs.
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "tft_terminal"
+# The upstream docs' examples name its own crate and an older gpui API;
+# they are kept as documentation, not compiled.
+doctest = false
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+alacritty_terminal.workspace = true
+portable-pty.workspace = true
+flume.workspace = true
+parking_lot.workspace = true
+arboard.workspace = true

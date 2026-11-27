@@ -36,6 +36,7 @@ canvas.workspace = true
 pdf.workspace = true
 math.workspace = true
 mermaid.workspace = true
+terminal.workspace = true
 lyon.workspace = true
 export.workspace = true
 audio.workspace = true

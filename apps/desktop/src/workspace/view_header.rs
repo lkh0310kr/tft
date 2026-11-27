@@ -10,7 +10,7 @@ use gpui::{div, prelude::*, px, Context};
 /// Whether the view header carries the mode switch: no on an empty tab (nothing to
 /// read or edit), and the graph has its own toggle.
 pub(super) fn header_shows_mode_switch(current: &Option<String>, mode: ViewMode) -> bool {
-    current.is_some() && !matches!(mode, ViewMode::Graph | ViewMode::Search)
+    tft_app::workspace::workspace_header_shows_mode_switch(current.as_deref(), mode)
 }
 
 impl Workspace {
@@ -30,47 +30,22 @@ impl Workspace {
             .get(view.active_tab)
             .map(|t| t.title())
             .unwrap_or_else(|| leaf_title(view.current.as_deref(), view.mode));
-        let crumbs: Vec<(String, String)> = view
-            .current
-            .as_deref()
-            .and_then(|p| p.rsplit_once('/').map(|(dir, _)| dir))
-            .map(|dir| {
-                let mut path = String::new();
-                dir.split('/')
-                    .filter(|part| !part.is_empty())
-                    .map(|part| {
-                        if !path.is_empty() {
-                            path.push('/');
-                        }
-                        path.push_str(part);
-                        (part.to_string(), path.clone())
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let crumbs = tft_app::workspace::workspace_breadcrumbs(view.current.as_deref());
         let mut breadcrumb = div().flex().flex_row().items_center().whitespace_nowrap();
         for (ix, (label, path)) in crumbs.iter().cloned().enumerate() {
             breadcrumb = breadcrumb.child(
-                div()
-                    .id(("document-header-folder-crumb", ix))
-                    .px(px(4.))
-                    .py(px(3.))
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_group(id, cx);
-                        this.reveal_in_navigation(&path, window, cx);
-                    }))
-                    .child(div().text_color(theme.tokens.text_muted).child(label)),
+                crate::ui::workspace_breadcrumb_item(
+                    ("document-header-folder-crumb", ix),
+                    label,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_group(id, cx);
+                    this.reveal_in_navigation(&path, window, cx);
+                })),
             );
             if ix + 1 < crumbs.len() {
-                breadcrumb = breadcrumb.child(
-                    div()
-                        .px(px(2.))
-                        .text_color(theme.tokens.text_muted)
-                        .child("/"),
-                );
+                breadcrumb = breadcrumb.child(crate::ui::workspace_breadcrumb_separator(theme));
             }
         }
         // Obsidian's view action shows the current mode: a book while reading, a pencil while editing.
@@ -106,12 +81,8 @@ impl Workspace {
                     .overflow_hidden()
                     // `.view-header-title-parent`: `--text-muted`.
                     .when(!crumbs.is_empty(), |d| {
-                        d.child(breadcrumb).child(
-                            div()
-                                .px(px(2.))
-                                .text_color(theme.tokens.text_muted)
-                                .child("/"),
-                        )
+                        d.child(breadcrumb)
+                            .child(crate::ui::workspace_breadcrumb_separator(theme))
                     })
                     .child(self.render_title(view, title.clone(), title_color, theme, cx)),
             )
@@ -124,8 +95,8 @@ impl Workspace {
                     .items_center()
                     .pl(px(10.))
                     .gap(px(2.))
-                    .child(if release_notes_leaf {
-                        // The release notes are not a note: no graph and no mode switch.
+                    .child(if release_notes_leaf || view.mode == ViewMode::Terminal {
+                        // The release notes and a terminal are not notes: no graph and no mode switch.
                         div()
                     } else {
                         div()

@@ -30,6 +30,7 @@ impl ClosedTabHistory {
         if tab.path.is_none()
             && tab.mode != ViewMode::Graph
             && tab.mode != ViewMode::Search
+            && tab.mode != ViewMode::Terminal
             && release_notes::version_of(&tab).is_none()
         {
             return;
@@ -269,6 +270,9 @@ impl Workspace {
             self.active_group_state.mode_before_graph = self.active_group_state.mode;
         }
         self.active_group_state.mode = tab.mode;
+        if tab.mode == ViewMode::Terminal {
+            self.ensure_terminal(cx);
+        }
         if tab.mode.is_editing() {
             self.active_editor().update(cx, |e, cx| {
                 e.set_live_preview(tab.mode == ViewMode::LivePreview, cx)
@@ -311,8 +315,8 @@ impl Workspace {
         self.flush_save(cx);
         self.active_group_state.stash_active_tab();
         let mode = self.default_mode();
-        self.active_group_state.tabs.push(Tab::empty(mode));
-        self.active_group_state.active_tab = self.active_group_state.tabs.len() - 1;
+        self.active_group_state.active_tab =
+            tft_app::workspace::append_empty_tab(&mut self.active_group_state.tabs, mode);
         self.load_tab(cx);
     }
 

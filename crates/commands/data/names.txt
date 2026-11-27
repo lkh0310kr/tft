@@ -135,3 +135,4 @@ graph:open	Graph view: Open graph view
 graph:open-local	Graph view: Open local graph
 canvas:new-file	Canvas: Create new canvas
 canvas:export-as-image	Canvas: Export as image
+terminal:open	Terminal: Open terminal

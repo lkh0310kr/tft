@@ -6,7 +6,7 @@ use crate::reading::{self, TaskMarker};
 use gpui::{Context, Entity, Task, Window};
 use std::time::Duration;
 use tft_app::{
-    HistoryDirection, HistoryEntry, current_history_entry_mut, history_step, push_history_entry,
+    current_history_entry_mut, history_step, push_history_entry, HistoryDirection, HistoryEntry,
 };
 use tft_markdown::Subpath;
 
@@ -36,6 +36,12 @@ impl Workspace {
     }
 
     pub fn set_mode(&mut self, mode: ViewMode, window: &mut Window, cx: &mut Context<Self>) {
+        // A terminal is a pane, not a note: Reading, Graph and the editor
+        // toggles do not replace it under the shell. The tab's close is the
+        // way out; `terminal:open` is the way back in.
+        if self.active_group_state.mode == ViewMode::Terminal && mode != ViewMode::Terminal {
+            return;
+        }
         self.reset_preview(cx);
         if mode == ViewMode::Graph && self.active_group_state.mode != ViewMode::Graph {
             self.active_group_state.mode_before_graph = self.active_group_state.mode;
@@ -148,6 +154,11 @@ impl Workspace {
             self.active_group_state.current = Some(path);
             return;
         };
+        // A note opened from a terminal is another tab: the shell keeps its
+        // pane, as a note opened beside a running terminal does in Zed.
+        if self.active_group_state.mode == ViewMode::Terminal {
+            self.new_tab(cx);
+        }
         // A pinned tab keeps its file: anything opened from it — a link
         // followed, a switcher pick — goes to a new tab (observed).
         if self.active_group_state.active_tab_pinned()

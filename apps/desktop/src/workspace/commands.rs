@@ -267,6 +267,7 @@ pub const RUNNABLE: &[&str] = &[
     "window:zoom-in",
     "window:zoom-out",
     "window:reset-zoom",
+    "terminal:open",
 ];
 
 /// Binds every runnable command's hotkeys in the Workspace context and the reading
@@ -781,6 +782,7 @@ impl Workspace {
             }
             // Zoom in/out/reset: half a level between -2.5 and +3, on the vault
             // window (see [[Specification#Window zoom]]).
+            "terminal:open" => self.open_terminal(window, cx),
             "window:zoom-in" => self.zoom_main(zoom::stepped(self.main_window.zoom_level(), 1), cx),
             "window:zoom-out" => {
                 self.zoom_main(zoom::stepped(self.main_window.zoom_level(), -1), cx)

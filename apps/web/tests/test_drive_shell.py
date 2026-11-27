@@ -45,10 +45,12 @@ def main():
             page.screenshot(path="/tmp/tft-drive-shell.png")
             print("PASS GPUI Web Drive landing screen rendered")
 
-            # These coordinates target the rendered GPUI fields and button,
-            # so this checks real keyboard focus, TextInput, click and storage.
+            # Exercise the browser's paste event through GPUI's hidden input;
+            # the web platform cannot synchronously read its clipboard API.
+            context.grant_permissions(["clipboard-read", "clipboard-write"], origin=URL)
+            page.evaluate("navigator.clipboard.writeText('poc-client-id')")
             page.mouse.click(600, 434)
-            page.keyboard.type("poc-client-id")
+            page.keyboard.press("Meta+V")
             page.mouse.click(600, 475)
             page.keyboard.type("poc-api-key")
             page.mouse.click(451, 520)
@@ -58,7 +60,7 @@ def main():
             config = page.evaluate("JSON.parse(localStorage.getItem('tft.drive-config'))")
             if config != {"clientId": "poc-client-id", "apiKey": "poc-api-key"}:
                 raise AssertionError(f"Unexpected stored Drive config: {config!r}")
-            print("PASS GPUI TextInput config saves to browser storage")
+            print("PASS GPUI TextInput accepts Cmd+V and saves browser config")
 
             page.reload(wait_until="domcontentloaded")
             page.locator("canvas").wait_for(timeout=30000)

@@ -416,10 +416,13 @@ fn handle(
                 let key = ws
                     .vault_file_path(path)
                     .ok_or_else(|| format!("no such file in the vault: {path}"))?;
-                if let Some(mode) = ws.open_mode(mode)? {
+                // A mode is about the note asked for, not the pane it is
+                // opened from: open first, then apply it (as `open` does).
+                let mode = ws.open_mode(mode)?;
+                ws.open_file(key, None, cx);
+                if let Some(mode) = mode {
                     ws.set_mode(mode, window, cx);
                 }
-                ws.open_file(key, None, cx);
                 Ok(json!({"current": ws.current()}))
             })
             .map(Some)
@@ -472,7 +475,7 @@ fn handle(
                 Ok(ws.in_active_window(window, cx, |ws, window, cx| ws.type_target(window, cx)))
             })?;
             match target {
-                "editor" | "canvas-editor" => ctl
+                "editor" | "canvas-editor" | "terminal" => ctl
                     .workspace(|ws, window, cx| {
                         let target = ws.in_active_window(window, cx, |ws, window, cx| {
                             ws.type_into_focused(text, window, cx)

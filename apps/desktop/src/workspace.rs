@@ -5,7 +5,7 @@ use crate::assets::icon;
 use crate::canvas::CanvasView;
 use crate::chooser::Chooser;
 use crate::copy_results::CopyResults;
-use crate::explorer::{FileExplorer, display_name};
+use crate::explorer::FileExplorer;
 use crate::export_modals::{ImageExport, PdfExport};
 use crate::file_menu::{self, Pick};
 use crate::graph::GraphView;
@@ -17,18 +17,17 @@ use crate::reading::{LinkTarget, ReadingView};
 use crate::search::SearchPane;
 use crate::settings::SettingsView;
 use crate::switcher::QuickSwitcher;
-use crate::theme::{HEADER_HEIGHT, ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH};
+use crate::theme::{ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH};
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, SharedString, Subscription, Window, actions,
-    prelude::*,
+    actions, prelude::*, App, Context, Entity, FocusHandle, Focusable, SharedString, Subscription,
+    Window,
 };
 #[cfg(test)]
-use serde_json::Value;
-#[cfg(test)]
 use serde_json::json;
+#[cfg(test)]
+use serde_json::Value;
 use std::path::PathBuf;
 use tft_cache::basename;
-use tft_formats::FileKind;
 
 // Files from outside the vault: insert attachment, download attachments, open file.
 mod attachments;
@@ -56,7 +55,7 @@ mod tab_drag;
 use layout_docks::default_dock_json;
 #[cfg(test)]
 use layout_docks::dock_current_view;
-use layout_read::{LayoutSpec, read_floating, read_main};
+use layout_read::{read_floating, read_main, LayoutSpec};
 #[cfg(test)]
 pub(crate) use layout_read::{tab_from_leaf, WindowSpec};
 use layout_write::{
@@ -71,7 +70,7 @@ mod command_palette;
 mod commands;
 mod control_api;
 use commands::CommandState;
-pub use commands::{Commands, bind_keys};
+pub use commands::{bind_keys, Commands};
 #[allow(unused_imports)]
 pub(super) use commands::{ACTIVE_FILE_ONLY, EDITOR_ONLY, RUNNABLE};
 mod dock_controls;
@@ -101,9 +100,11 @@ pub(crate) use render::context_names;
 use render_requests::RenderRequests;
 pub(super) use tab_strip::leaf_title;
 #[cfg(test)]
-use tab_strip::tab_display_name;
+use tft_app::workspace::tab_display_name;
 mod settings_window;
 use settings_window::SettingsWindowState;
+mod terminal;
+use terminal::TerminalPaneState;
 mod subscriptions;
 mod tab_strip;
 mod uri_handler;
@@ -113,9 +114,7 @@ mod main_window;
 mod view_header;
 mod window_node;
 #[cfg(test)]
-use commands::{
-    any_markdown_leaf, full_path_text, missing_file_notice, TRASH_FOLDER,
-};
+use commands::{any_markdown_leaf, full_path_text, missing_file_notice, TRASH_FOLDER};
 #[cfg(test)]
 use control_api::vault_path_in;
 use main_window::MainWindowState;
@@ -125,15 +124,15 @@ mod vault_state;
 mod window_frame;
 use notices::FeedbackState;
 pub(crate) use vault_state::{Changes, VaultState};
-use window_frame::WINDOW_RADIUS;
 use window_frame::WindowFrame;
+use window_frame::WINDOW_RADIUS;
 pub(crate) use window_frame::{
-    WindowCorners, client_frame, frame_window_options, popout_margin, window_controls,
-    window_handle, window_title_row,
+    client_frame, frame_window_options, popout_margin, window_controls, window_handle,
+    window_title_row, WindowCorners,
 };
 #[cfg(test)]
 use window_node::WindowBounds;
-use window_node::{WindowNode, popout_outer_size, popout_placement};
+use window_node::{popout_outer_size, popout_placement, WindowNode};
 
 // The app's own commands: debug info and release notes.
 mod release_notes;
@@ -175,6 +174,7 @@ enum MainView {
     Editor,
     Graph,
     Search,
+    Terminal,
     Canvas,
     Pdf,
     /// A `release-notes` leaf: this build's notes in a reading view of their own.
@@ -190,6 +190,7 @@ impl MainView {
             MainView::Editor => "editor",
             MainView::Graph => "graph",
             MainView::Search => "search",
+            MainView::Terminal => "terminal",
             MainView::Canvas => "canvas",
             MainView::Pdf => "pdf",
             MainView::ReleaseNotes => "release-notes",
@@ -199,7 +200,7 @@ impl MainView {
 }
 
 #[cfg(test)]
-use tft_app::{HistoryEntry, place_new_tab};
+use tft_app::{place_new_tab, HistoryEntry};
 /// One place back and forward can land: the note and the state the view was left
 /// in, so back to a note read in Reading returns it in Reading.
 use tft_app::{Layout, SplitDirection, Tab};
@@ -220,6 +221,8 @@ pub struct Workspace {
     switcher: Entity<QuickSwitcher>,
     /// The command palette (`Mod+Shift+P`).
     command_palette: Entity<CommandPalette>,
+    /// The shell pane and its PTY session, spawned by `terminal:open`.
+    terminal: TerminalPaneState,
     chooser: Entity<Chooser>,
     /// Attachment import and download modal lifecycle.
     attachments: attachments::AttachmentState,
@@ -355,6 +358,7 @@ impl Workspace {
             search,
             switcher,
             command_palette,
+            terminal: TerminalPaneState::default(),
             chooser,
             attachments: attachments::AttachmentState::default(),
             render_requests: RenderRequests::default(),
@@ -421,7 +425,11 @@ fn debug_status() -> bool {
 
 /// The `s` a count needs, for the notices that carry one.
 fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 /// Enter and Escape in the view header's title field.

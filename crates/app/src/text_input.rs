@@ -680,7 +680,7 @@ impl EntityInputHandler for TextInput {
         cx: &mut Context<Self>,
     ) {
         let range = self.input_range(range_utf16);
-        self.replace(range, new_text, cx);
+        self.replace(range, &single_line(new_text), cx);
     }
 
     fn replace_and_mark_text_in_range(

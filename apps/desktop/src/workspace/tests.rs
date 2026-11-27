@@ -130,11 +130,7 @@ fn the_observed_app_and_window_commands_are_runnable() {
         assert!(RUNNABLE.contains(&id), "{id} runnable");
         assert!(known.contains(&id), "{id} is a known command ID");
     }
-    for id in [
-        "window:zoom-in",
-        "window:zoom-out",
-        "window:reset-zoom",
-    ] {
+    for id in ["window:zoom-in", "window:zoom-out", "window:reset-zoom"] {
         assert!(RUNNABLE.contains(&id), "{id} runnable");
         assert!(known.contains(&id), "{id} is a known command ID");
     }

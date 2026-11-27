@@ -461,6 +461,7 @@ impl Workspace {
         let config = state.reload_appearance();
         let theme = Theme::from_appearance(&config, self.theme_appearance.effective_dark());
         cx.set_global(theme);
+        self.refresh_terminal_theme(cx);
         cx.notify();
     }
 

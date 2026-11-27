@@ -6,3 +6,5 @@
 4. Google Drive
 5. Canvas
 6. Radial Tree Explorer
+7. TreeView multi selection 기획
+8. TreeView Mac fn + back space -> delete alert

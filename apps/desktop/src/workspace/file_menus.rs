@@ -261,9 +261,9 @@ impl Workspace {
             return;
         };
         let absolute = state.vault().absolute(path);
-        cx.write_to_clipboard(ClipboardItem::new_string(
-            super::commands::full_path_text(absolute),
-        ));
+        cx.write_to_clipboard(ClipboardItem::new_string(super::commands::full_path_text(
+            absolute,
+        )));
     }
 
     /// The explorer menu's "Open in default app": one command per platform, no crate.

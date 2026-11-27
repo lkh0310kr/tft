@@ -401,6 +401,65 @@ impl FileTree {
             .iter()
             .position(|&ix| self.all[ix].path == path)
     }
+
+    /// The next focused row key for a vertical navigation step. With no
+    /// focused row, navigation starts at the open file when it is visible,
+    /// then falls back to the first row.
+    pub fn focus_vertical_key(
+        &self,
+        focused_key: Option<&str>,
+        active_path: Option<&str>,
+        down: bool,
+    ) -> Option<String> {
+        let count = self.len();
+        if count == 0 {
+            return None;
+        }
+        let focused_index = focused_key.and_then(|key| self.rows().position(|row| row.key == key));
+        let active_index = active_path
+            .and_then(|path| self.visible_index(path))
+            .unwrap_or(0);
+        let next = match (focused_index, down) {
+            (Some(index), true) => (index + 1).min(count - 1),
+            (Some(index), false) => index.saturating_sub(1),
+            (None, _) => active_index,
+        };
+        self.row(next).map(|row| row.key.clone())
+    }
+
+    /// Applies one horizontal folder-navigation step and returns the row key
+    /// that should receive focus. Right expands a closed folder or enters its
+    /// first child. Left closes an open folder or moves to and closes its
+    /// parent.
+    pub fn focus_horizontal_key(&mut self, focused_key: &str, right: bool) -> Option<String> {
+        let index = self.rows().position(|row| row.key == focused_key)?;
+        let row = self.row(index)?.clone();
+        if right {
+            if !row.is_folder {
+                return None;
+            }
+            if self.is_collapsed_key(&row.key) {
+                self.toggle_key(&row.key);
+                return Some(row.key);
+            }
+            return self
+                .row(index + 1)
+                .filter(|child| child.depth > row.depth)
+                .map(|child| child.key.clone());
+        }
+
+        if row.is_folder && !self.is_collapsed_key(&row.key) {
+            self.toggle_key(&row.key);
+            return Some(row.key);
+        }
+        let (parent, _) = row.path.rsplit_once('/')?;
+        let parent_index = self.visible_index(parent)?;
+        let parent_row = self.row(parent_index)?.clone();
+        if !self.is_collapsed_key(&parent_row.key) {
+            self.toggle_key(&parent_row.key);
+        }
+        Some(parent_row.key)
+    }
 }
 
 fn flatten(folder: &Folder, prefix: &str, depth: usize, sort: SortOrder, out: &mut Vec<Row>) {

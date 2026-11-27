@@ -150,3 +150,6 @@ workspace:undo-close-pane
 app:open-file
 editor:table-row-copy
 editor:table-col-copy
+
+# TFT's own command: an embedded shell pane (not an Obsidian command).
+terminal:open

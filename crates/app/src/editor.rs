@@ -938,6 +938,11 @@ impl Editor {
         self.hidden.clear();
         self.pending_folds = None;
         self.hover_line = None;
+        self.hovered_link = None;
+        // The last frame's layout names lines of the note that was open. A
+        // pointer event can arrive before the next paint replaces it, and a
+        // line past this note's end would index the buffer out of bounds.
+        self.layout = Layout::default();
         self.properties_folded = false;
         self.buf.head = 0;
         self.buf.anchor = 0;
@@ -973,6 +978,11 @@ impl Editor {
         self.buf.head = self.buf.clamp_offset(head);
         self.buf.anchor = self.buf.clamp_offset(anchor);
         self.scroll_line = self.scroll_line.min(self.line_count() - 1);
+        // The layout was measured against the old text; a pointer event before
+        // the next paint must not map onto lines the new text does not have.
+        self.layout = Layout::default();
+        self.hover_line = None;
+        self.hovered_link = None;
         self.request_parse(cx);
         cx.notify();
     }
@@ -1755,6 +1765,10 @@ impl Editor {
     /// one id, so a selection on one of its lines also reveals the others:
     /// the closing `*` of `*a\nb*` shows while the cursor is on `a`.
     fn touches_on_line(&self, line: usize) -> Vec<Range<usize>> {
+        // A pointer event can still be looking at the previous layout's line.
+        if line >= self.buf.line_count() {
+            return Vec::new();
+        }
         let range = self.buf.line_range(line);
         let mut out = Vec::new();
         let primary = Sel {
@@ -1999,10 +2013,20 @@ impl Editor {
         }
     }
 
+    /// Whether the last frame's layout still names only lines this buffer has.
+    /// An edit, a reload or another note can leave the layout measuring text
+    /// that is gone; pointer mapping waits for the next paint while that is so.
+    fn layout_is_current(&self) -> bool {
+        self.layout
+            .visible
+            .iter()
+            .all(|v| v.line < self.buf.line_count())
+    }
+
     /// The line under window point `position`, from the last frame.
     fn line_at_point(&self, position: Point<Pixels>) -> Option<usize> {
         let layout = &self.layout;
-        if !layout.bounds.contains(&position) {
+        if !layout.bounds.contains(&position) || !self.layout_is_current() {
             return None;
         }
         let y = position.y - layout.bounds.origin.y;
@@ -4194,7 +4218,7 @@ impl Editor {
     /// Resolves a window point against the last frame's layout.
     fn display_hit(&self, window: &mut Window, position: Point<Pixels>) -> Option<Hit> {
         let layout = &self.layout;
-        if layout.line_height <= px(0.) || layout.visible.is_empty() {
+        if layout.line_height <= px(0.) || layout.visible.is_empty() || !self.layout_is_current() {
             return None;
         }
         let y = position.y - layout.bounds.origin.y;

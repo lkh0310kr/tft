@@ -18,6 +18,7 @@ members = [
     "crates/radial-tree-explorer",
     "crates/suggest",
     "crates/pdf",
+    "crates/terminal",
     "crates/math",
     "crates/highlight",
     "crates/mermaid",
@@ -51,6 +52,7 @@ canvas = { path = "crates/canvas" }
 radial-tree-explorer = { path = "crates/radial-tree-explorer" }
 suggest = { path = "crates/suggest" }
 pdf = { path = "crates/pdf" }
+terminal = { path = "crates/terminal" }
 math = { path = "crates/math" }
 highlight = { path = "crates/highlight" }
 mermaid = { path = "crates/mermaid" }
@@ -171,6 +173,14 @@ png = "0.17"
 cpal = "0.18"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3", "pcm", "wav", "adpcm", "flac", "ogg", "vorbis", "mkv"] }
 opus-decoder = "0.1.1"
+# The terminal pane (`crates/terminal`): alacritty_terminal parses and holds
+# the grid (Apache-2.0), portable-pty runs the shell on every desktop, and the
+# GPUI view is a vendored MIT/Apache component with TFT's API fixes.
+alacritty_terminal = "0.25.1"
+portable-pty = "0.9"
+flume = "0.12"
+parking_lot = "0.12"
+arboard = { version = "3", features = ["wayland-data-control"] }
 
 [profile.dev]
 opt-level = 0

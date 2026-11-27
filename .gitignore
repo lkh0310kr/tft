@@ -33,3 +33,5 @@ Untitled [0-9]*.base
 /.claude/
 .serena
 .workspace
+.vercel
+.env*

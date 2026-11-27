@@ -1,20 +1,20 @@
 use super::dock_controls::DockDrag;
 use super::group_layout::DividerDrag;
 use super::release_notes;
-use super::tab_drag::{DragPart, DropZone, NoDragPreview, TabDrag, measure_for_drag};
+use super::tab_drag::{measure_for_drag, DragPart, DropZone, NoDragPreview, TabDrag};
 use super::window_frame::WindowFrame;
 use super::{
-    MainView, Modal, ViewMode, Workspace, client_frame, debug_status, window_controls,
-    window_handle,
+    client_frame, debug_status, window_controls, window_handle, MainView, Modal, ViewMode,
+    Workspace,
 };
 use crate::canvas::CanvasView;
 use crate::editor::Editor;
 use crate::pdf::view::PdfView;
 use crate::reading::ReadingView;
-use crate::theme::{HEADER_HEIGHT, Theme};
+use crate::theme::Theme;
 use gpui::{
-    App, Context, DragMoveEvent, Entity, MouseButton, SharedString, Window, div, prelude::*, px,
-    relative,
+    div, prelude::*, px, relative, App, Context, DragMoveEvent, Entity, MouseButton, SharedString,
+    Window,
 };
 use tft_app::{Layout, SplitDirection, Tab};
 use tft_formats::FileKind;
@@ -58,7 +58,10 @@ pub(super) struct GroupView {
 impl Workspace {
     /// The items [`Workspace::status_items`] gives the open leaf.
     pub fn status_bar_items(&self, cx: &App) -> Vec<String> {
-        if self.active_group_state.mode == ViewMode::Search {
+        if matches!(
+            self.active_group_state.mode,
+            ViewMode::Search | ViewMode::Terminal
+        ) {
             return Vec::new();
         }
         let caret = if self.active_group_state.mode.is_editing() {
@@ -196,6 +199,7 @@ impl Workspace {
     ) -> MainView {
         match mode {
             ViewMode::Search => MainView::Search,
+            ViewMode::Terminal => MainView::Terminal,
             ViewMode::Graph => MainView::Graph,
             _ if canvas => MainView::Canvas,
             _ if pdf => MainView::Pdf,
@@ -310,9 +314,7 @@ impl Workspace {
                         };
                         let accent = theme.tokens.interactive_accent;
                         let dragging = self.divider_drag_state.active.as_ref().is_some_and(
-                            |(w, p, before)| {
-                                *w == window && p == &split_path && *before == ix - 1
-                            },
+                            |(w, p, before)| *w == window && p == &split_path && *before == ix - 1,
                         );
                         let handle = div()
                             .id(("divider", ix as u64))
@@ -507,6 +509,27 @@ impl Workspace {
                 .text_color(theme.tokens.text_muted)
                 .child("Search is open in another pane")
                 .into_any_element(),
+            MainView::Terminal if self.terminal_group() == Some(view.id) => self
+                .terminal_view()
+                .map(|view| view.into_any_element())
+                .unwrap_or_else(|| {
+                    div()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme.tokens.text_muted)
+                        .child("The terminal is not running")
+                        .into_any_element()
+                }),
+            MainView::Terminal => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.tokens.text_muted)
+                .child("The terminal is open in another pane")
+                .into_any_element(),
             MainView::Canvas => view.canvas.clone().into_any_element(),
             MainView::Pdf => view.pdf.clone().into_any_element(),
             MainView::Graph if self.graph_group() == Some(view.id) => {
@@ -698,29 +721,15 @@ impl Render for Workspace {
         // A pane whose plugin is off has no tab, so it cannot be the one
         // showing.
         let left_body: gpui::AnyElement = self.explorer.clone().into_any_element();
-        let left = div()
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_shrink_0()
-            .w(px(self.left_dock.width as f32))
-            .h_full()
-            .bg(theme.tokens.tab_container_background)
+        let left = crate::ui::workspace_dock(px(self.left_dock.width as f32), &theme)
             .map(|d| corners.left().apply(d))
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .h(px(HEADER_HEIGHT))
+                crate::ui::workspace_dock_header(&theme)
                     // Past the traffic lights on macOS, where this header
                     // is the window's top-left corner.
                     .pl(px(8. + frame.left_space()))
                     .pr(px(8.))
-                    .bg(theme.tokens.sidebar_tab_container_background)
                     .gap(px(3.))
-                    .border_b_1()
-                    .border_color(theme.tokens.tab_outline_color)
                     .child(window_handle(
                         div().id("left-dock-space").flex_1().h_full(),
                         frameless,
@@ -811,9 +820,7 @@ impl Render for Workspace {
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
-                            if this.left_dock.dragging
-                                || this.divider_drag_state.active.is_some()
-                            {
+                            if this.left_dock.dragging || this.divider_drag_state.active.is_some() {
                                 this.left_dock.dragging = false;
                                 this.divider_drag_state.active = None;
                                 cx.notify();
