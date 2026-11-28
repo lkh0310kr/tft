@@ -215,7 +215,9 @@ impl DriveApp {
                         }
                         Ok(None) => {
                             app.signed_in = true;
-                            app.status = "Signed in. Choose a Drive folder to open as a Vault.".into();
+                            // A session with no remembered Vault goes straight
+                            // to Picker instead of showing a setup card.
+                            app.pick_vault(cx);
                         }
                         Err(error) => {
                             app.status = format!(
@@ -299,6 +301,9 @@ impl DriveApp {
         cx.spawn(async move |this, cx| {
             let result = async {
                 let (id, name) = drive::finish_pick_folder(promise).await?;
+                // Remember immediately so the loading workspace frame can
+                // stand in while the root metadata is fetched.
+                drive::remember_vault(&id, &name);
                 load_vault(id, name).await
             }
             .await;
@@ -315,6 +320,9 @@ impl DriveApp {
                                 .filter(|entry| entry.kind == tft_formats::FileKind::Markdown)
                                 .count()
                         );
+                        if app.workspace.is_some() {
+                            app.finish_close_vault(cx);
+                        }
                         app.pending = Some(vault);
                     }
                     Err(error) => app.status = format!("Could not open Vault: {error}"),
@@ -485,7 +493,13 @@ impl DriveApp {
             return;
         };
         let Some((node, contents)) = workspace.read(cx).current_document(cx) else {
-            self.status = "Choose a Markdown file before saving.".into();
+            // A lazily loaded note has no safe document to write until its
+            // body lands; say so instead of asking for a file.
+            if workspace.read(cx).active_missing_text().is_some() {
+                self.status = "Loading the note from Drive…".into();
+            } else {
+                self.status = "Choose a Markdown file before saving.".into();
+            }
             cx.notify();
             return;
         };
@@ -1780,19 +1794,24 @@ impl DriveApp {
             .map(|entry| entry.id.clone())
             .or_else(|| workspace.read(cx).folder_drive_id(node))
         else {
+            console_error(&format!("Drive note has no backend id: {path}"));
             workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
             return;
         };
         let epoch = self.vault_epoch;
         cx.spawn(async move |this, cx| {
-            let Ok(text) = drive::read_file(&id).await else {
-                let _ = this.update(cx, |app, cx| {
-                    if app.vault_epoch != epoch {
-                        return;
-                    }
-                    workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
-                });
-                return;
+            let text = match drive::read_file(&id).await {
+                Ok(text) => text,
+                Err(error) => {
+                    console_error(&format!("Could not read {path}: {error}"));
+                    let _ = this.update(cx, |app, cx| {
+                        if app.vault_epoch != epoch {
+                            return;
+                        }
+                        workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
+                    });
+                    return;
+                }
             };
             let _ = this.update(cx, |app, cx| {
                 if app.vault_epoch != epoch {
@@ -2005,7 +2024,13 @@ impl Render for DriveApp {
                     window,
                     |this, _, event: &WebWorkspaceEvent, window, cx| match event {
                         WebWorkspaceEvent::Edited { node, contents } => {
-                            this.schedule_auto_save(*node, contents.clone(), cx)
+                            let loaded = this
+                                .workspace
+                                .as_ref()
+                                .is_some_and(|workspace| workspace.read(cx).has_text(*node));
+                            if loaded {
+                                this.schedule_auto_save(*node, contents.clone(), cx);
+                            }
                         }
                         WebWorkspaceEvent::FileOperationRequested(
                             FileOperationRequest::CreateNote { parent },
@@ -2207,12 +2232,15 @@ impl Render for DriveApp {
                         WebWorkspaceEvent::FolderChildrenRequested { node, path } => {
                             this.load_folder_children(*node, path.clone(), cx)
                         }
+                        WebWorkspaceEvent::ChooseVaultRequested => this.pick_vault(cx),
                     },
                 ));
+                // Install the workspace before asking for the restored active
+                // note, because load_note_text resolves through self.workspace.
+                self.workspace = Some(workspace.clone());
                 if let Some((node, path)) = workspace.read(cx).active_missing_text() {
                     self.load_note_text(node, path, cx);
                 }
-                self.workspace = Some(workspace);
             }
         }
 
@@ -2305,6 +2333,11 @@ impl Render for DriveApp {
         let status = self.status.clone();
         let busy = self.busy;
         let signed_in = self.signed_in;
+        // A returning user with a stored session should never see the setup
+        // card while the last Vault is restored; show the workspace frame.
+        if busy && self.workspace.is_none() && drive::last_vault().is_some() {
+            return loading_workspace(&theme);
+        }
         div()
             .size_full()
             .flex()
@@ -2415,6 +2448,65 @@ impl DriveApp {
             &state,
         );
     }
+}
+
+fn console_error(message: &str) {
+    let Ok(json) = serde_json::to_string(message) else {
+        return;
+    };
+    let _ = js_sys::eval(&format!("console.error({json})"));
+}
+
+fn loading_workspace(theme: &Theme) -> gpui::Div {
+    let tokens = &theme.tokens;
+    div()
+        .size_full()
+        .flex()
+        .bg(tokens.background_primary)
+        .text_color(tokens.text_normal)
+        .child(
+            div()
+                .w(px(300.))
+                .h_full()
+                .flex_shrink_0()
+                .bg(tokens.background_primary_alt)
+                .border_r_1()
+                .border_color(tokens.tab_outline_color)
+                .child(
+                    div()
+                        .h(px(40.))
+                        .w_full()
+                        .border_b_1()
+                        .border_color(tokens.tab_outline_color),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(
+                    div()
+                        .h(px(40.))
+                        .w_full()
+                        .flex_shrink_0()
+                        .bg(tokens.tab_container_background)
+                        .border_b_1()
+                        .border_color(tokens.tab_outline_color),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.))
+                        .text_color(tokens.text_muted)
+                        .child("Loading Vault…"),
+                ),
+        )
 }
 
 pub(super) fn button(label: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div> {

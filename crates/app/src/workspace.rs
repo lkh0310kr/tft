@@ -1257,6 +1257,38 @@ impl WorkspaceModel {
         Some(new)
     }
 
+    /// Splits `beside` and moves tab `source_index` from `source_group` into
+    /// the new group. Unlike `split_with_active_tab` this moves the dragged
+    /// tab rather than duplicating the active one.
+    pub fn split_with_tab(
+        &mut self,
+        source_group: u64,
+        source_index: usize,
+        beside: u64,
+        direction: SplitDirection,
+        after: bool,
+    ) -> Option<(u64, Tab)> {
+        let source_len = self.group(source_group)?.tabs.len();
+        if source_group == beside && source_len <= 1 {
+            return None;
+        }
+        let (tab, source_empty) = {
+            let group = self.group_mut(source_group)?;
+            let tab = remove_tab_at(&mut group.tabs, &mut group.active_tab, source_index)?;
+            let empty = group.tabs.is_empty();
+            (tab, empty)
+        };
+        let new_group = self.split(beside, direction, after)?;
+        let target = self.group_mut(new_group)?;
+        target.tabs = vec![tab.clone()];
+        target.active_tab = 0;
+        if source_empty && source_group != beside {
+            self.close_group(source_group);
+        }
+        self.activate_group(new_group);
+        Some((new_group, tab))
+    }
+
     pub fn close_group(&mut self, group: u64) -> bool {
         if self.groups.len() <= 1 || !self.layout.remove(group) {
             return false;

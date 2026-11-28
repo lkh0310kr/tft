@@ -6,11 +6,13 @@ use crate::explorer::SortOrder;
 use crate::theme::{Theme, FONT_UI_MEDIUM, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
 use crate::workspace::SplitDirection;
 use gpui::{
-    canvas, div, prelude::*, px, AnyElement, AnyView, App, Bounds, Div, ElementId, Modifiers,
-    Pixels, Render, SharedString, Stateful, Window,
+    anchored, canvas, deferred, div, point, prelude::*, px, relative, Animation, AnimationExt,
+    AnyElement, AnyView, App, Bounds, Div, ElementId, Modifiers, Pixels, Render, SharedString,
+    Stateful, Window,
 };
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 /// Reports hover transitions with the element's window-space bounds. The
 /// caller owns preview policy, delays, and the preview content.
@@ -310,6 +312,99 @@ pub fn workspace_split_container(
         })
 }
 
+/// Where a tab dragged over a pane's content would land. The outer band on
+/// each side splits; the middle joins the tab strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceDropZone {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl WorkspaceDropZone {
+    /// The nearest edge inside the split band, otherwise the centre.
+    pub fn at(bounds: Bounds<Pixels>, position: gpui::Point<Pixels>) -> Self {
+        const EDGE_SHARE: f32 = 0.3;
+        let w = f32::from(bounds.size.width);
+        let h = f32::from(bounds.size.height);
+        let x = f32::from(position.x - bounds.origin.x);
+        let y = f32::from(position.y - bounds.origin.y);
+        let band = w.min(h) * EDGE_SHARE;
+        let edges = [
+            (WorkspaceDropZone::Left, x),
+            (WorkspaceDropZone::Right, w - x),
+            (WorkspaceDropZone::Top, y),
+            (WorkspaceDropZone::Bottom, h - y),
+        ];
+        let (zone, distance) = edges
+            .into_iter()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((WorkspaceDropZone::Center, 0.0));
+        if distance < band {
+            zone
+        } else {
+            WorkspaceDropZone::Center
+        }
+    }
+
+    /// The split a side zone makes, and whether the new pane goes after the
+    /// pane it was dropped on.
+    pub fn split(self) -> Option<(SplitDirection, bool)> {
+        match self {
+            WorkspaceDropZone::Center => None,
+            WorkspaceDropZone::Left => Some((SplitDirection::Vertical, false)),
+            WorkspaceDropZone::Right => Some((SplitDirection::Vertical, true)),
+            WorkspaceDropZone::Top => Some((SplitDirection::Horizontal, false)),
+            WorkspaceDropZone::Bottom => Some((SplitDirection::Horizontal, true)),
+        }
+    }
+}
+
+/// The wash and half-pane outline shown under a dragged tab.
+pub fn workspace_drop_zone_overlay(zone: WorkspaceDropZone, theme: &Theme) -> Div {
+    let half = gpui::relative(0.5);
+    div()
+        .absolute()
+        .bg(theme.tokens.interactive_accent.opacity(0.12))
+        .border_2()
+        .border_color(theme.tokens.interactive_accent)
+        .rounded(px(6.))
+        .map(|d| match zone {
+            WorkspaceDropZone::Center => d.top_0().left_0().right_0().bottom_0(),
+            WorkspaceDropZone::Left => d.top_0().left_0().bottom_0().w(half),
+            WorkspaceDropZone::Right => d.top_0().right_0().bottom_0().w(half),
+            WorkspaceDropZone::Top => d.top_0().left_0().right_0().h(half),
+            WorkspaceDropZone::Bottom => d.bottom_0().left_0().right_0().h(half),
+        })
+}
+
+/// The draggable divider between two split panes. The accent appears on hover,
+/// active press and while dragging; hosts attach their own drag payload.
+pub fn workspace_split_divider(direction: SplitDirection, dragging: bool, theme: &Theme) -> Div {
+    let accent = theme.tokens.interactive_accent;
+    div()
+        .absolute()
+        .occlude()
+        .when(direction == SplitDirection::Vertical, |d| {
+            d.left(px(0.))
+                .top_0()
+                .h_full()
+                .w(px(3.))
+                .cursor_col_resize()
+        })
+        .when(direction == SplitDirection::Horizontal, |d| {
+            d.top(px(0.))
+                .left_0()
+                .w_full()
+                .h(px(3.))
+                .cursor_row_resize()
+        })
+        .hover(move |s| s.bg(accent))
+        .when(dragging, move |d| d.bg(accent))
+}
+
 /// Base geometry and separator for one group inside a workspace split.
 pub fn workspace_split_cell(direction: SplitDirection, separated: bool, theme: &Theme) -> Div {
     div()
@@ -525,6 +620,59 @@ pub fn workspace_notice(
         )
 }
 
+/// Full-surface placeholder for a document whose body is still being
+/// fetched. Hosts must draw this instead of an editor over an absent body:
+/// an empty editor would look editable and could be written back over the
+/// real note.
+pub fn workspace_loading_notice(
+    title: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    theme: &Theme,
+) -> Div {
+    let accent = theme.tokens.interactive_accent;
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .text_color(theme.tokens.text_muted)
+        .child(
+            div()
+                .text_size(px(FONT_UI_MEDIUM))
+                .text_color(theme.tokens.text_normal)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_size(px(FONT_UI_SMALL))
+                .text_center()
+                .child(detail.into()),
+        )
+        .child(
+            div()
+                .mt_1()
+                .w(px(180.))
+                .h(px(2.))
+                .overflow_hidden()
+                .rounded_full()
+                .bg(accent.opacity(0.16))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(0.32))
+                        .rounded_full()
+                        .bg(accent)
+                        .with_animation(
+                            SharedString::from("workspace-loading-indicator"),
+                            Animation::new(Duration::from_millis(1100)).repeat(),
+                            |segment, delta| segment.left(relative(delta * 0.68)),
+                        ),
+                ),
+        )
+}
+
 /// Shared search surface used by the workspace Search view and the Files dock.
 pub fn workspace_search_view(
     id: impl Into<ElementId>,
@@ -666,6 +814,42 @@ pub fn workspace_dock_profile_button(
                 .text_color(theme.tokens.vault_profile_color)
                 .child(label.into()),
         )
+}
+
+/// The vault switcher's popover shell, anchored above the dock footer. Hosts
+/// supply their rows; the frame, scroll and anchoring stay identical.
+pub fn workspace_vault_popover(
+    id: impl Into<ElementId>,
+    theme: &Theme,
+    rows: Vec<AnyElement>,
+) -> AnyElement {
+    let menu = div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .min_w(px(240.))
+        .max_w(px(360.))
+        .max_h(px(420.))
+        .overflow_y_scroll()
+        .py_1()
+        .bg(theme.tokens.background_secondary)
+        .border_1()
+        .border_color(theme.tokens.background_modifier_border)
+        .rounded_md()
+        .shadow_lg()
+        .text_size(px(FONT_UI_SMALL))
+        .text_color(theme.tokens.text_normal)
+        .occlude()
+        .children(rows);
+    deferred(
+        anchored()
+            .anchor(gpui::Anchor::BottomLeft)
+            .offset(point(px(0.), px(-6.)))
+            .snap_to_window_with_margin(px(8.))
+            .child(menu),
+    )
+    .with_priority(1)
+    .into_any_element()
 }
 
 /// Shared resize affordance at the inner edge of a workspace dock.

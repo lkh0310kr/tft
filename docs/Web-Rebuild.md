@@ -55,6 +55,10 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - Drive Workspace는 Cmd+S/macOS와 Ctrl+S/Windows·Linux에서 현재 Editor 원문을 저장한다. Mocked Drive 브라우저 회귀는 단축키와 `Save to Drive` 버튼의 PATCH 본문을 각각 확인한다.
 - Google 로그인 토큰은 브라우저 저장소에 만료 시각과 함께 보관하고, reload 때 GIS 로드보다 먼저 복원한다. 유효한 토큰이 있으면 GIS가 늦게 로드되거나 실패해도 마지막 Vault를 다시 열며, 만료 시에는 GIS의 silent(`prompt: none`) 갱신을 시도한다. GIS token client는 refresh token을 노출하지 않으므로, Google 세션도 만료된 뒤의 완전한 재로그인 없는 복원은 서버 측 token broker 없이는 보장하지 않는다.
 - Production Editor의 수정 이벤트를 Drive host로 전달해 Desktop과 같은 2초 debounce 자동 저장을 한다. Drive ETag와 per-note 저장 대기열을 사용해 저장 요청을 직렬화하고, Vault 교체 뒤 이전 요청 결과를 무시한다. Mocked Drive 브라우저 회귀에서 원문 PATCH를 확인했다.
+- Drive Vault는 root 메타데이터만 먼저 읽고, 폴더를 펼칠 때 그 폴더의 자식만, 노트를 열 때 본문만 가져온다. 본문이 오기 전에는 빈 Editor 대신 공유 `workspace_loading_notice`를 그린다. `loaded_texts`가 없는 노트는 `current_document`/`store_*_editor_text`/`refresh_reading`/자동 저장 구독에서 모두 제외하므로 로딩 중 빈 문자열이 Drive로 업로드되지 않는다. Mocked Drive 회귀에서 본문 요청을 붙잡아 로딩 상태와 PATCH 0건을 확인했다.
+- 한 노트가 여러 split 그룹에 열려 있으면 본문 도착 이벤트가 모든 그룹의 Editor/ReadingView에 전달된다. 분할로 새로 드러난 탭도 `sync_group_document`에서 본문을 요청한다.
+- Reading으로 전환할 때 ReadingView가 키보드 포커스를 받는다. 이전에는 unmounted Editor가 포커스를 쥐어 Cmd/Ctrl+\\ 같은 Workspace action이 dispatch되지 않았다. Playwright에서 reload 후 편집→Reading 전환 뒤 dock toggle을 확인했다.
+- 탭을 다른 그룹이나 pane 가장자리로 드래그하면 공유 `WorkspaceDropZone`/`WorkspaceModel::split_with_tab`으로 분할한다. 탭이 하나뿐인 그룹을 자기 자신 옆으로 분할하는 것은 공유 모델이 허용하지 않으며 Desktop과 동일하다.
 - 저장되지 않은 문서가 남아 있으면 `Switch Vault`는 저장을 즉시 시작하고 성공할 때까지 Workspace를 유지한다. Mock Drive 흐름에서 debounce 전에 전환을 눌러도 최신 Markdown PATCH 후에만 Vault를 닫는 것을 확인했다.
 - Chrome에서 GPUI Drive 시작 화면, 입력 컴포넌트 동작, OAuth/Picker 설정의 browser storage 저장 및 reload 유지, 콘솔 오류가 없음을 확인했다. OAuth 실제 승인, Picker 응답, Drive 파일 읽기/쓰기 왕복은 유효한 Google Cloud 설정과 실제 Vault가 없어 아직 검증하지 않았다.
 - 브라우저 네트워크 계층에서 GIS/Picker/Drive를 mock한 `test_drive_flow.py`로 토큰 콜백부터 폴더 메타데이터·파일 목록·Markdown 원문 GET, 편집, 업로드 PATCH의 정확한 원문 본문까지 확인했다. 이는 Google 서버와 실제 계정의 승인을 검증한 테스트가 아니다.

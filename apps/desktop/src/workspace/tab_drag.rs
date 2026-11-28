@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use tft_app::{SplitDirection, TabDragSource};
+use tft_app::TabDragSource;
 
 /// Live state for one tab drag, shared by drag coordination and frame rendering.
 #[derive(Default)]
@@ -65,59 +65,7 @@ pub(super) fn measure_for_drag(
     .size_full()
 }
 
-/// Where a tab dragged over a group's content would land.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DropZone {
-    Center,
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-impl DropZone {
-    /// The zone `position` falls in: an outer band on each side splits, the middle
-    /// joins the strip; the nearer edge wins a corner.
-    pub(super) fn at(
-        bounds: gpui::Bounds<gpui::Pixels>,
-        position: gpui::Point<gpui::Pixels>,
-    ) -> DropZone {
-        let w = f32::from(bounds.size.width);
-        let h = f32::from(bounds.size.height);
-        let x = f32::from(position.x - bounds.origin.x);
-        let y = f32::from(position.y - bounds.origin.y);
-        let band = w.min(h) * DROP_EDGE_SHARE;
-        let edges = [
-            (DropZone::Left, x),
-            (DropZone::Right, w - x),
-            (DropZone::Top, y),
-            (DropZone::Bottom, h - y),
-        ];
-        let (zone, distance) = edges
-            .into_iter()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .unwrap_or((DropZone::Center, 0.0));
-        if distance < band {
-            zone
-        } else {
-            DropZone::Center
-        }
-    }
-
-    /// The split a side zone makes, and whether the new group goes after the dropped-on one.
-    pub(super) fn split(self) -> Option<(SplitDirection, bool)> {
-        match self {
-            DropZone::Center => None,
-            DropZone::Left => Some((SplitDirection::Vertical, false)),
-            DropZone::Right => Some((SplitDirection::Vertical, true)),
-            DropZone::Top => Some((SplitDirection::Horizontal, false)),
-            DropZone::Bottom => Some((SplitDirection::Horizontal, true)),
-        }
-    }
-}
-
-/// How much of a group's shorter side, from each edge, drops as a split.
-pub(super) const DROP_EDGE_SHARE: f32 = 0.3;
+pub(super) use tft_app::ui::WorkspaceDropZone as DropZone;
 
 /// Where a tab dragged over a strip would land: before tab `at` at the nearest
 /// boundary, with an accent bar that slides there from `from`.

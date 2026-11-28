@@ -108,7 +108,10 @@ fn browser_keystrokes(hotkey: &tft_app::formats::config::Hotkey) -> Vec<String> 
 pub fn bind_keys(cx: &mut App) {
     let mut bindings = Vec::new();
     for (id, hotkeys) in tft_app::commands::default_hotkeys() {
-        if !WEB_COMMANDS.contains(&id) {
+        if !WEB_COMMANDS.contains(&id) || id == "app:toggle-left-sidebar" {
+            // The dock toggle is handled by the root capture listener so it
+            // works from an editor as well as the tree; binding it here would
+            // toggle twice.
             continue;
         }
         for hotkey in hotkeys {
@@ -136,6 +139,59 @@ pub fn bind_keys(cx: &mut App) {
         ));
     }
     cx.bind_keys(bindings);
+    // Shortcuts that must work from any focused view: a global command
+    // binding dispatches through the workspace even when the reading view
+    // owns the keyboard.
+    cx.bind_keys([
+        KeyBinding::new(
+            "cmd-\\",
+            RunWebCommand {
+                id: "web:toggle-dock".into(),
+                binding: None,
+            },
+            Some("Workspace"),
+        ),
+        KeyBinding::new(
+            "ctrl-\\",
+            RunWebCommand {
+                id: "web:toggle-dock".into(),
+                binding: None,
+            },
+            Some("Workspace"),
+        ),
+        KeyBinding::new(
+            "cmd-shift-r",
+            RunWebCommand {
+                id: "web:reload".into(),
+                binding: None,
+            },
+            Some("Workspace"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-r",
+            RunWebCommand {
+                id: "web:reload".into(),
+                binding: None,
+            },
+            Some("Workspace"),
+        ),
+        KeyBinding::new(
+            "cmd-\\",
+            RunWebCommand {
+                id: "web:toggle-dock".into(),
+                binding: None,
+            },
+            Some("ReadingView"),
+        ),
+        KeyBinding::new(
+            "ctrl-\\",
+            RunWebCommand {
+                id: "web:toggle-dock".into(),
+                binding: None,
+            },
+            Some("ReadingView"),
+        ),
+    ]);
 }
 
 #[derive(Clone)]
@@ -526,10 +582,15 @@ pub struct WebWorkspace {
     search_documents: Vec<SearchDocument>,
     /// Notes whose text has been requested but not streamed in yet.
     requested_text: std::collections::HashSet<NodeId>,
+    /// Notes whose body actually came from the backend. A `refresh_reading`
+    /// placeholder can put an empty string in `VaultData`, which must not be
+    /// mistaken for loaded content.
+    loaded_texts: std::collections::HashSet<NodeId>,
     /// Folders whose direct children have been fetched from Drive.
     loaded_folders: std::collections::HashSet<NodeId>,
     requested_folders: std::collections::HashSet<NodeId>,
     loading_folders: std::collections::HashSet<NodeId>,
+    vault_menu_open: bool,
     recent_files: Vec<String>,
     excluded: tft_search::ExcludeFilters,
     switcher_config: tft_formats::config::SwitcherConfig,
@@ -566,6 +627,7 @@ pub struct WebWorkspace {
     /// squeeze the document.
     narrow_dock_open: bool,
     tab_drop_boundary: Option<usize>,
+    tab_drop_zone: Option<(u64, tft_app::ui::WorkspaceDropZone)>,
     split_dragging: Option<(Vec<usize>, usize)>,
     model: WorkspaceModel,
     closed_tab_history: tft_app::workspace::ClosedTabHistory,
@@ -575,6 +637,9 @@ pub struct WebWorkspace {
     pending_link_source: Option<String>,
     last_link_event: String,
     recent_group_order: Vec<u64>,
+    /// Last workspace action dispatched to the root handler; Web is a good
+    /// place to lose key focus, so this makes dispatch testable.
+    last_web_action: String,
     group_subscriptions: std::collections::HashMap<u64, Vec<Subscription>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -609,6 +674,7 @@ pub enum WebWorkspaceEvent {
         node: NodeId,
         path: String,
     },
+    ChooseVaultRequested,
     RenameFileRequested {
         from: String,
         to: String,
@@ -756,6 +822,10 @@ impl WebWorkspace {
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         };
+        let loaded_texts = vault
+            .text_entries()
+            .map(|(node, _)| node)
+            .collect::<std::collections::HashSet<_>>();
         let mut tree = FileTree::from_vault(&vault);
         let mut model = WorkspaceModel::new(ViewMode::default_editing());
         let mut recent_files = Vec::new();
@@ -1393,9 +1463,11 @@ impl WebWorkspace {
             search_generation: 0,
             search_documents,
             requested_text: std::collections::HashSet::new(),
+            loaded_texts,
             loaded_folders: std::collections::HashSet::new(),
             requested_folders: std::collections::HashSet::new(),
             loading_folders: std::collections::HashSet::new(),
+            vault_menu_open: false,
             recent_files,
             excluded,
             switcher_config,
@@ -1430,6 +1502,7 @@ impl WebWorkspace {
             dock_dragging: false,
             narrow_dock_open: false,
             tab_drop_boundary: None,
+            tab_drop_zone: None,
             split_dragging: None,
             model,
             closed_tab_history: tft_app::workspace::ClosedTabHistory::default(),
@@ -1437,6 +1510,7 @@ impl WebWorkspace {
             pending_link_source: None,
             last_link_event: String::new(),
             recent_group_order,
+            last_web_action: String::new(),
             group_subscriptions: std::collections::HashMap::new(),
             vault_name: "Vault".into(),
             drive_controls: false,
@@ -1444,7 +1518,7 @@ impl WebWorkspace {
         };
         let mut custom_bindings = Vec::new();
         for (id, hotkeys) in &view.hotkeys {
-            if !WEB_COMMANDS.contains(&id.as_str()) {
+            if !WEB_COMMANDS.contains(&id.as_str()) || id == "app:toggle-left-sidebar" {
                 continue;
             }
             for hotkey in hotkeys {
@@ -2382,6 +2456,12 @@ impl WebWorkspace {
                     else {
                         return;
                     };
+                    // Programmatic document swaps can emit edits for a note
+                    // whose body is still loading; its empty buffer is a
+                    // placeholder, not user work.
+                    if !this.loaded_texts.contains(&node) {
+                        return;
+                    }
                     let Some(editor) = this
                         .group_views
                         .get(&group_id)
@@ -4695,8 +4775,10 @@ impl WebWorkspace {
                 self.model
                     .open_node_in_new_tab(self.model.active_group, node, path.clone(), mode);
             } else {
+                // A plain tree click is navigation in the current tab, as in
+                // Desktop; Cmd/Ctrl-click is the one that opens another tab.
                 self.model
-                    .open_node(self.model.active_group, node, path.clone(), mode);
+                    .navigate_node(self.model.active_group, node, path.clone(), mode);
             }
             self.follow_local_graph_center(&path);
             if is_markdown {
@@ -4708,6 +4790,10 @@ impl WebWorkspace {
                     self.focus_editor(window, cx);
                 } else {
                     self.refresh_reading(cx);
+                    // Reading has no text caret but still owns the keyboard
+                    // (Cmd/Ctrl shortcuts, link activation).
+                    let focus = self.active_reading().read(cx).focus_handle(cx);
+                    window.focus(&focus, cx);
                 }
             }
             cx.notify();
@@ -6413,6 +6499,8 @@ impl WebWorkspace {
             });
             self.active_reading()
                 .update(cx, |reader, cx| reader.scroll_to_offset(offset, cx));
+            let focus = self.active_reading().read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
         }
         cx.notify();
         self.publish_test_state();
@@ -6702,6 +6790,12 @@ impl WebWorkspace {
         else {
             return;
         };
+        // A lazily opened note has an empty editor until its body arrives.
+        // Stashing that placeholder would overwrite the Vault text (and feed
+        // search) with nothing.
+        if !self.loaded_texts.contains(&node) {
+            return;
+        }
         self.vault.set_text(node, contents.clone());
         if let Some(path) = self.vault.path(node).map(str::to_owned) {
             self.upsert_search_document(node, path, contents);
@@ -6771,6 +6865,15 @@ impl WebWorkspace {
             return;
         };
         let path = path.unwrap_or_default();
+        // A split can expose a tab that was never active, so its lazy body
+        // has not been requested yet.
+        if mode != ViewMode::Graph {
+            if let (Some(node), false) = (node, path.is_empty()) {
+                if !self.has_text(node) {
+                    self.request_note_text(node, &path, cx);
+                }
+            }
+        }
         let contents = node.map_or_else(String::new, |node| document_text(&self.vault, node));
         let Some(views) = self.group_views.get(&group_id) else {
             return;
@@ -6793,6 +6896,92 @@ impl WebWorkspace {
                 let _ = node;
             }
         }
+    }
+
+    fn tab_drag_over_group(
+        &mut self,
+        group_id: u64,
+        bounds: gpui::Bounds<Pixels>,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let next = if bounds.contains(&position) {
+            Some((
+                group_id,
+                tft_app::ui::WorkspaceDropZone::at(bounds, position),
+            ))
+        } else if self.tab_drop_zone.is_some_and(|(g, _)| g == group_id) {
+            None
+        } else {
+            return;
+        };
+        if self.tab_drop_zone != next {
+            self.tab_drop_zone = next;
+            cx.notify();
+        }
+    }
+
+    fn drop_tab_on_group(
+        &mut self,
+        drag: &TabReorderDrag,
+        target: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let zone = self
+            .tab_drop_zone
+            .take()
+            .filter(|(group, _)| *group == target)
+            .map(|(_, zone)| zone)
+            .unwrap_or(tft_app::ui::WorkspaceDropZone::Center);
+        self.tab_drop_boundary = None;
+        match zone.split() {
+            None => {
+                let boundary = self.model.group(target).map_or(0, |group| group.tabs.len());
+                self.transfer_tab_between_groups(
+                    drag.source.group_id,
+                    drag.source.tab_index,
+                    target,
+                    boundary,
+                    window,
+                    cx,
+                );
+            }
+            Some((direction, after)) => {
+                self.split_with_dragged_tab(drag, target, direction, after, window, cx)
+            }
+        }
+    }
+
+    fn split_with_dragged_tab(
+        &mut self,
+        drag: &TabReorderDrag,
+        target: u64,
+        direction: SplitDirection,
+        after: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let source = drag.source.group_id;
+        self.stash_group_view_state(source, cx);
+        self.stash_group_view_state(target, cx);
+        let Some((new_group, tab)) =
+            self.model
+                .split_with_tab(source, drag.source.tab_index, target, direction, after)
+        else {
+            return;
+        };
+        if self.model.group(source).is_none() {
+            self.group_views.remove(&source);
+            self.group_subscriptions.remove(&source);
+        } else {
+            self.sync_group_document(source, cx);
+        }
+        self.create_split_group_views(new_group, tab, window, cx);
+        self.sync_group_document(target, cx);
+        cx.notify();
+        self.publish_test_state();
+        self.emit_workspace_state(cx);
     }
 
     fn transfer_tab_between_groups(
@@ -7794,6 +7983,50 @@ impl WebWorkspace {
             .into_any_element()
     }
 
+    fn render_vault_popover(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.vault_menu_open {
+            return None;
+        }
+        let current = tft_app::ui::menu_item_with_enabled(
+            "web-vault-current",
+            0,
+            None,
+            self.vault_name.clone(),
+            true,
+            true,
+            theme,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.vault_menu_open = false;
+            cx.notify();
+        }));
+        let choose = tft_app::ui::menu_item(
+            "web-vault-choose-folder",
+            1,
+            Some("folder-plus"),
+            "Choose Drive folder…",
+            false,
+            theme,
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.vault_menu_open = false;
+            cx.emit(WebWorkspaceEvent::ChooseVaultRequested);
+        }));
+        Some(tft_app::ui::workspace_vault_popover(
+            "web-vault-popover",
+            theme,
+            vec![
+                current.into_any_element(),
+                tft_app::ui::menu_separator(theme).into_any_element(),
+                choose.into_any_element(),
+            ],
+        ))
+    }
+
     fn render_layout_content(
         &self,
         layout: &Layout,
@@ -7830,6 +8063,21 @@ impl WebWorkspace {
                         } else {
                             self.render_drive_preview_notice(*group_id, node, theme, cx)
                         }
+                    } else if tab.node.is_some_and(|node| {
+                        matches!(
+                            tab.mode,
+                            ViewMode::Reading | ViewMode::LivePreview | ViewMode::Source
+                        ) && !self.has_text(node)
+                    }) {
+                        // The lazy Drive read has not landed yet. Never mount
+                        // an empty editor here: it would be editable, and its
+                        // blank buffer could be written over the real note.
+                        tft_app::ui::workspace_loading_notice(
+                            "Loading note…",
+                            "Fetching this note from Drive. Saving stays disabled until it arrives.",
+                            theme,
+                        )
+                        .into_any_element()
                     } else {
                         match tab.mode {
                             ViewMode::Graph if self.radial_tree_active.contains(group_id) => self
@@ -7944,10 +8192,14 @@ impl WebWorkspace {
                 } else {
                     div().into_any_element()
                 };
+                let drop_zone = self
+                    .tab_drop_zone
+                    .filter(|(group, _)| *group == id)
+                    .map(|(_, zone)| zone);
                 let content = div()
                     .id(format!("web-group-content-{group_id}"))
                     .relative()
-                    .flex_1()
+                    .size_full()
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
@@ -7955,6 +8207,26 @@ impl WebWorkspace {
                         pane.capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
                             this.activate_group(id, cx);
                         }))
+                    })
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        let keystroke = &event.keystroke;
+                        if keystroke.key == "\\"
+                            && (keystroke.modifiers.platform || keystroke.modifiers.control)
+                        {
+                            this.toggle_left_dock(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_drag_move(cx.listener(
+                        move |this, event: &DragMoveEvent<TabReorderDrag>, _, cx| {
+                            this.tab_drag_over_group(id, event.bounds, event.event.position, cx);
+                        },
+                    ))
+                    .on_drop(cx.listener(move |this, drag: &TabReorderDrag, window, cx| {
+                        this.drop_tab_on_group(drag, id, window, cx);
+                    }))
+                    .when_some(drop_zone, |pane, zone| {
+                        pane.child(tft_app::ui::workspace_drop_zone_overlay(zone, theme))
                     })
                     .child(content)
                     .into_any_element();
@@ -8061,27 +8333,10 @@ impl WebWorkspace {
                             .split_dragging
                             .as_ref()
                             .is_some_and(|(p, i)| p == &split_path && *i == before);
-                        let accent = theme.tokens.interactive_accent;
-                        let handle = div()
-                            .id(("web-split-divider", index as u64))
-                            .absolute()
-                            .when(*direction == SplitDirection::Vertical, |d| {
-                                d.left(px(-2.))
-                                    .top_0()
-                                    .h_full()
-                                    .w(px(5.))
-                                    .cursor_col_resize()
-                            })
-                            .when(*direction == SplitDirection::Horizontal, |d| {
-                                d.top(px(-2.))
-                                    .left_0()
-                                    .w_full()
-                                    .h(px(5.))
-                                    .cursor_row_resize()
-                            })
-                            .when(dragging, |d| d.bg(accent))
-                            .hover(|d| d.bg(accent))
-                            .on_drag(drag, |_, _, _, cx| cx.new(|_| EmptyDragPreview));
+                        let handle =
+                            tft_app::ui::workspace_split_divider(*direction, dragging, theme)
+                                .id(("web-split-divider", index as u64))
+                                .on_drag(drag, |_, _, _, cx| cx.new(|_| EmptyDragPreview));
                         cell = cell.child(handle);
                     }
                     container = container.child(cell);
@@ -8093,6 +8348,9 @@ impl WebWorkspace {
 
     fn store_editor_text(&mut self, node: Option<NodeId>, cx: &App) {
         if let Some(node) = node {
+            if !self.loaded_texts.contains(&node) {
+                return;
+            }
             let contents = self.active_editor().read(cx).file_contents();
             self.vault.set_text(node, contents.clone());
             if let Some(path) = self.vault.path(node).map(str::to_owned) {
@@ -8571,7 +8829,12 @@ impl WebWorkspace {
 
     pub fn current_document(&self, cx: &App) -> Option<(NodeId, String)> {
         let tab = self.model.active()?.active()?;
-        Some((tab.node?, self.active_editor().read(cx).file_contents()))
+        let node = tab.node?;
+        // The editor is deliberately empty while a lazy read is in flight;
+        // that placeholder must never be written back to Drive.
+        self.loaded_texts
+            .contains(&node)
+            .then(|| (node, self.active_editor().read(cx).file_contents()))
     }
 
     pub fn can_create_note(&self, parent_path: &str, name: &str) -> Result<(), String> {
@@ -9012,6 +9275,7 @@ impl WebWorkspace {
         );
         self.vault.rebuild_indexes();
         self.vault.set_text(node, contents);
+        self.loaded_texts.insert(node);
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
         self.tree_selection.retain_in(&tree);
@@ -9074,6 +9338,7 @@ impl WebWorkspace {
         self.vault.rebuild_indexes();
         if let Some(contents) = contents {
             self.vault.set_text(node, contents.clone());
+            self.loaded_texts.insert(node);
             if kind == tft_formats::FileKind::Markdown {
                 let path = self.vault.path(node).unwrap_or_default().to_owned();
                 self.upsert_search_document(node, path, contents);
@@ -9236,25 +9501,52 @@ impl WebWorkspace {
         cx: &mut Context<Self>,
     ) {
         let requested = self.requested_text.remove(&node);
+        self.loaded_texts.insert(node);
         self.vault.set_text(node, contents.clone());
         self.upsert_search_document(node, path.clone(), contents.clone());
-        let active = self
+        // The same note can be open in several split groups; deliver the body
+        // to every group showing it, not only the active one.
+        let targets = self
             .model
-            .active()
-            .and_then(|group| group.active())
-            .map(|tab| (tab.node, tab.path.clone(), tab.mode));
-        if let Some((Some(active_node), active_path, mode)) = active {
-            if active_node == node {
-                let editor_is_dirty = self.active_editor().read(cx).is_dirty();
-                if (requested || !editor_is_dirty) && active_path.as_deref() == Some(path.as_str())
-                {
-                    self.active_editor().update(cx, |editor, cx| {
-                        editor.set_workspace_document(path.clone(), contents.clone(), mode, cx)
-                    });
-                    if mode == ViewMode::Reading {
-                        self.refresh_reading(cx);
-                    }
-                }
+            .groups
+            .iter()
+            .filter_map(|group| {
+                let tab = group.active()?;
+                (tab.node == Some(node) && tab.path.as_deref() == Some(path.as_str())).then_some((
+                    group.id,
+                    tab.mode,
+                    group.id == self.model.active_group,
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (group_id, mode, is_active) in targets {
+            let Some(views) = self.group_views.get(&group_id) else {
+                continue;
+            };
+            let editor = views.editor.clone();
+            let reading_view = views.reading.clone();
+            let editor_is_dirty = editor.read(cx).is_dirty();
+            if editor_is_dirty && !is_active {
+                // Never clobber a split the user is editing.
+                continue;
+            }
+            if is_active && !(requested || !editor_is_dirty) {
+                continue;
+            }
+            editor.update(cx, |editor, cx| {
+                editor.set_workspace_document(path.clone(), contents.clone(), mode, cx)
+            });
+            if mode == ViewMode::Reading {
+                let source = VaultEmbedSource::new(&self.vault);
+                let model = reading::build_with(
+                    &path,
+                    &contents,
+                    &source,
+                    reading::BuildOptions::default(),
+                );
+                reading_view.update(cx, |reader, cx| {
+                    reader.set_note(Some(path.clone()), model, cx)
+                });
             }
         }
         self.schedule_graph_rebuild(cx, false);
@@ -9338,6 +9630,7 @@ impl WebWorkspace {
 
     pub fn note_text_failed(&mut self, node: NodeId, cx: &mut Context<Self>) {
         self.requested_text.remove(&node);
+        self.loaded_texts.remove(&node);
         // `open` may have stored an empty placeholder; clear it so clicking
         // the file again actually retries the Drive read.
         self.vault.clear_text(node);
@@ -9345,7 +9638,7 @@ impl WebWorkspace {
     }
 
     pub fn has_text(&self, node: NodeId) -> bool {
-        self.vault.text(node).is_some()
+        self.loaded_texts.contains(&node)
     }
 
     /// The active note's text, when a restored tab references a note whose
@@ -9358,7 +9651,7 @@ impl WebWorkspace {
     }
 
     fn request_note_text(&mut self, node: NodeId, path: &str, cx: &mut Context<Self>) {
-        if self.vault.text(node).is_some() {
+        if self.has_text(node) {
             self.requested_text.remove(&node);
             return;
         }
@@ -9367,6 +9660,7 @@ impl WebWorkspace {
                 node,
                 path: path.to_string(),
             });
+            cx.notify();
         }
     }
 
@@ -9647,6 +9941,13 @@ impl WebWorkspace {
         });
         if next == ViewMode::Reading {
             self.refresh_reading(cx);
+            // Reading has no text caret, but it owns the keyboard. Without
+            // this the unmounted editor keeps the focus handle and every
+            // workspace shortcut stops dispatching.
+            if node.is_none_or(|node| self.has_text(node)) {
+                let focus = self.active_reading().read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
             if mode.is_editing() && node.is_some() {
                 cx.emit(WebWorkspaceEvent::SaveRequested);
             }
@@ -9741,6 +10042,9 @@ impl WebWorkspace {
         else {
             return;
         };
+        if !self.loaded_texts.contains(&node) {
+            return;
+        }
         let contents = self.active_editor().read(cx).file_contents();
         self.vault.set_text(node, contents.clone());
         let source = VaultEmbedSource::new(&self.vault);
@@ -9922,6 +10226,10 @@ impl WebWorkspace {
             ("vaultText", JsValue::from_f64(vault_text as f64)),
             ("editorText", JsValue::from_f64(editor_text as f64)),
             (
+                "activeLoaded",
+                JsValue::from_bool(node.is_some_and(|node| self.loaded_texts.contains(&node))),
+            ),
+            (
                 "requestedText",
                 JsValue::from_f64(self.requested_text.len() as f64),
             ),
@@ -9938,6 +10246,19 @@ impl WebWorkspace {
                 JsValue::from_f64(self.vault.folders().len() as f64),
             ),
             ("files", JsValue::from_f64(self.vault.files().len() as f64)),
+            ("groups", JsValue::from_f64(self.model.groups.len() as f64)),
+            ("dockVisible", JsValue::from_bool(self.model.dock.visible)),
+            (
+                "lastAction",
+                JsValue::from_str(self.last_web_action.as_str()),
+            ),
+            ("narrowDock", JsValue::from_bool(self.narrow_dock_open)),
+            (
+                "tabDropZone",
+                JsValue::from_f64(self.tab_drop_zone.map_or(-1.0, |(group, zone)| {
+                    group as f64 + zone as i32 as f64 / 10.0
+                })),
+            ),
         ] {
             let _ = js_sys::Reflect::set(&state, &JsValue::from_str(key), &value);
         }
@@ -11512,13 +11833,29 @@ impl Render for WebWorkspace {
                     })),
             );
         let dock_panel = div().flex().flex_col().size_full().child(files_content);
+        let vault_popover = self.render_vault_popover(&theme, cx);
         let dock_footer = tft_app::ui::workspace_dock_footer(&theme).child(
             tft_app::ui::workspace_dock_profile_button(
                 "web-vault-switcher",
                 self.vault_name.clone(),
                 &theme,
             )
-            .on_click(cx.listener(|_, _, _, cx| cx.emit(WebWorkspaceEvent::SwitchVaultRequested))),
+            .when(self.vault_menu_open, |button| {
+                button.bg(theme.tokens.background_modifier_hover)
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.vault_menu_open = !this.vault_menu_open;
+                cx.notify();
+            }))
+            // Keep the menu's anchor on the footer row, as Desktop does.
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_0()
+                    .children(vault_popover),
+            ),
         );
         let dock_resize_handle = tft_app::ui::workspace_dock_resize_handle(
             "web-left-dock-resize",
@@ -11545,28 +11882,24 @@ impl Render for WebWorkspace {
         div()
             .size_full()
             .relative()
+            .key_context("Workspace")
             .on_modifiers_changed(cx.listener(
                 |this, event: &gpui::ModifiersChangedEvent, _, cx| {
                     this.file_preview_modifiers_changed(event.modifiers, cx)
                 },
             ))
-            .capture_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
-                let keystroke = &event.keystroke;
-                if keystroke.key == "r"
-                    && keystroke.modifiers.shift
-                    && (keystroke.modifiers.platform || keystroke.modifiers.control)
-                {
-                    let _ = js_sys::eval("window.location.reload()");
-                    cx.stop_propagation();
-                }
-            }))
             .on_action(cx.listener(|this, action: &RunWebCommand, window, cx| {
+                this.last_web_action = action.id.clone();
                 if action.binding.as_deref().is_some_and(|binding| {
                     !this.hotkey_is_active(&action.id, binding)
                 }) {
                     return;
                 }
                 match action.id.as_str() {
+                    "web:toggle-dock" => this.toggle_left_dock(cx),
+                    "web:reload" => {
+                        let _ = js_sys::eval("window.location.reload()");
+                    }
                     "switcher:open" => this.open_quick_switcher(window, cx),
                     "command-palette:open" => this.open_command_palette(window, cx),
                     "workspace:new-tab" => this.new_tab(cx),
@@ -11807,19 +12140,25 @@ impl Render for WebWorkspace {
                                     .flex_shrink_0()
                                     .when(!dock_visible, |strip| {
                                         strip.child(
-                                            tft_app::ui::icon_button(
-                                                "web-sidebar-restore",
-                                                "panel-left",
-                                                &theme,
-                                            )
-                                            .on_click(
-                                                cx.listener(move |this, _, _, cx| {
-                                                    if narrow_viewport {
-                                                        this.narrow_dock_open = true;
-                                                    }
-                                                    this.set_left_dock_visible(true, cx);
-                                                }),
-                                            ),
+                                            div()
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
+                                                .child(
+                                                    tft_app::ui::icon_button(
+                                                        "web-sidebar-restore",
+                                                        "panel-left",
+                                                        &theme,
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            if narrow_viewport {
+                                                                this.narrow_dock_open = true;
+                                                            }
+                                                            this.set_left_dock_visible(true, cx);
+                                                        },
+                                                    )),
+                                                ),
                                         )
                                     })
                                     .child(tft_app::ui::workspace_tab_strip_navigation(
@@ -11924,7 +12263,7 @@ impl Render for WebWorkspace {
                                                           event: &DragMoveEvent<TabReorderDrag>,
                                                           _,
                                                           cx| {
-                                                        let bounds = [(
+                                                                        let bounds = [(
                                                             index,
                                                             f32::from(event.bounds.left()),
                                                             f32::from(event.bounds.right()),
@@ -12119,7 +12458,15 @@ impl Render for WebWorkspace {
                                     &theme,
                             )
                             ))
-                            .child(div().flex_1().min_h_0().child(main_content)),
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(main_content),
+                            ),
                     ),
             )
             .children(file_tree_context_menu)
