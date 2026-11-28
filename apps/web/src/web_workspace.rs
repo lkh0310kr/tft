@@ -9375,6 +9375,9 @@ impl WebWorkspace {
         if self.vault.lookup(path).ok() != Some(node) {
             return Err(format!("The file is no longer in the Vault: {path}"));
         }
+        // Deleting a folder also closes every tab under it.
+        let removed_prefix = format!("{path}/");
+        let removed_path = |candidate: &str| candidate == path || candidate.starts_with(&removed_prefix);
         self.store_group_editor_text(self.model.active_group, cx);
         let groups = self
             .model
@@ -9392,8 +9395,9 @@ impl WebWorkspace {
                         .iter()
                         .enumerate()
                         .filter_map(|(index, tab)| {
-                            (tab.node == Some(node) || tab.path.as_deref() == Some(path))
-                                .then_some(index)
+                            (tab.node == Some(node)
+                                || tab.path.as_deref().is_some_and(removed_path))
+                            .then_some(index)
                         })
                         .collect::<Vec<_>>()
                 })
@@ -9404,8 +9408,8 @@ impl WebWorkspace {
             if let Some(group) = self.model.group_mut(*group_id) {
                 for tab in &mut group.tabs {
                     let current = tab.history.get(tab.history_ix.saturating_sub(1)).cloned();
-                    tab.history.retain(|entry| entry.path != path);
-                    if let Some(current) = current.filter(|entry| entry.path != path) {
+                    tab.history.retain(|entry| !removed_path(&entry.path));
+                    if let Some(current) = current.filter(|entry| !removed_path(&entry.path)) {
                         tab.history_ix = tab
                             .history
                             .iter()
@@ -9424,21 +9428,29 @@ impl WebWorkspace {
             }
         }
 
-        self.vault.remove(node);
+        let removed = self.vault.remove(node);
         self.search_documents
-            .retain(|document| document.node != node);
-        self.recent_files.retain(|recent| recent != path);
-        self.canvas_scenes.remove(&node);
-        self.canvas_viewports.remove(&node);
-        self.canvas_loading.remove(&node);
-        self.canvas_errors.remove(&node);
-        self.canvas_saving.remove(&node);
-        self.media_previews.remove(&node);
-        self.media_preview_loading.remove(&node);
-        self.media_preview_errors.remove(&node);
-        self.pdf_loading.remove(&node);
-        self.pdf_loaded.remove(&node);
-        self.pdf_errors.remove(&node);
+            .retain(|document| !removed.contains(&document.node));
+        self.recent_files
+            .retain(|recent| !removed_path(recent.as_str()));
+        for removed_node in &removed {
+            self.loaded_texts.remove(removed_node);
+            self.requested_text.remove(removed_node);
+            self.loaded_folders.remove(removed_node);
+            self.requested_folders.remove(removed_node);
+            self.loading_folders.remove(removed_node);
+            self.canvas_scenes.remove(removed_node);
+            self.canvas_viewports.remove(removed_node);
+            self.canvas_loading.remove(removed_node);
+            self.canvas_errors.remove(removed_node);
+            self.canvas_saving.remove(removed_node);
+            self.media_previews.remove(removed_node);
+            self.media_preview_loading.remove(removed_node);
+            self.media_preview_errors.remove(removed_node);
+            self.pdf_loading.remove(removed_node);
+            self.pdf_loaded.remove(removed_node);
+            self.pdf_errors.remove(removed_node);
+        }
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
         self.tree_selection.retain_in(&tree);
@@ -9663,9 +9675,15 @@ impl WebWorkspace {
         })
     }
 
-    /// [`Self::drive_entry`] for a Vault path.
-    pub fn drive_entry_at(&self, path: &str) -> Option<tft_drive_web::IndexedFile> {
-        self.drive_entry(self.vault.lookup(path).ok()?)
+    /// Drive identity for any node, including a folder. Folder rows are not
+    /// part of the host's file-entry table, but Drive trashes them the same
+    /// way.
+    pub fn drive_object_at(&self, path: &str) -> Option<(NodeId, String)> {
+        let node = self.vault.lookup(path).ok()?;
+        let BackendObjectId::Drive(id) = self.vault.backend(node)? else {
+            return None;
+        };
+        Some((node, id.clone()))
     }
 
     pub fn folder_drive_id(&self, node: NodeId) -> Option<String> {
@@ -11051,7 +11069,7 @@ impl Render for WebWorkspace {
                     tft_app::file_tree_menu::FileTreeMenuAction::OpenInNewTab => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::Duplicate => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::Move => is_file,
-                    tft_app::file_tree_menu::FileTreeMenuAction::Delete => is_file,
+                    tft_app::file_tree_menu::FileTreeMenuAction::Delete => target.node.is_some(),
                     tft_app::file_tree_menu::FileTreeMenuAction::Rename => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::OpenToRight => {
                         is_file && tft_app::workspace::workspace_can_split(self.model.groups.len())

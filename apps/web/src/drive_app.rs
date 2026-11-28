@@ -589,10 +589,7 @@ impl DriveApp {
             ),
             Some(PendingDrivePrompt::DeleteFile { path, node, id }) => {
                 self.pending_drive_prompt = None;
-                if self.dirty_nodes.contains_key(&node)
-                    || self.saving_nodes.contains(&node)
-                    || self.pending_saves.contains_key(&node)
-                {
+                if self.trash_has_unsaved(&path, node) {
                     self.status = format!("Save {path} before moving it to trash.");
                     return;
                 }
@@ -670,14 +667,27 @@ impl DriveApp {
         }
     }
 
+    /// A folder trash also trashes descendants, so any unsaved note anywhere
+    /// below it blocks the move.
+    fn trash_has_unsaved(&self, path: &str, node: NodeId) -> bool {
+        let prefix = format!("{path}/");
+        let unsaved = |candidate: NodeId| {
+            self.dirty_nodes.contains_key(&candidate)
+                || self.saving_nodes.contains(&candidate)
+                || self.pending_saves.contains_key(&candidate)
+        };
+        unsaved(node)
+            || self
+                .entries
+                .iter()
+                .any(|entry| unsaved(entry.node) && entry.path.starts_with(&prefix))
+    }
+
     fn trash_drive_file(&mut self, path: String, node: NodeId, id: String, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        if self.dirty_nodes.contains_key(&node)
-            || self.saving_nodes.contains(&node)
-            || self.pending_saves.contains_key(&node)
-        {
+        if self.trash_has_unsaved(&path, node) {
             self.status = format!("Save {path} before moving it to trash.");
             cx.notify();
             return;
@@ -694,7 +704,6 @@ impl DriveApp {
                 app.busy = false;
                 match result {
                     Ok(()) => {
-                        app.entries.retain(|entry| entry.node != node && entry.path != path);
                         app.dirty_nodes.remove(&node);
                         app.pending_saves.remove(&node);
                         app.saving_nodes.remove(&node);
@@ -705,6 +714,10 @@ impl DriveApp {
                             Ok(()) => format!("Moved {path} to Google Drive trash."),
                             Err(error) => format!("Moved {path} to Drive trash, but could not update the open workspace: {error}"),
                         };
+                        // A trashed folder removes its whole subtree, so
+                        // rebuild the host table from the Vault rather than
+                        // patching just this row.
+                        app.entries = workspace.read(cx).drive_entries();
                     }
                     Err(error) => {
                         console_error(&format!("Trash {path} failed: {error}"));
@@ -2242,26 +2255,27 @@ impl Render for DriveApp {
                             if this.busy {
                                 return;
                             }
-                            let file = this
+                            if path.is_empty() {
+                                this.status = "The Vault root cannot be moved to trash.".into();
+                                cx.notify();
+                                return;
+                            }
+                            let identity = this
                                 .entries
                                 .iter()
                                 .find(|entry| entry.path == *path)
-                                .cloned()
+                                .map(|entry| (entry.node, entry.id.clone()))
                                 .or_else(|| {
                                     this.workspace.as_ref().and_then(|workspace| {
-                                        workspace.read(cx).drive_entry_at(path)
+                                        workspace.read(cx).drive_object_at(path)
                                     })
                                 });
-                            let Some(file) = file else {
+                            let Some((node, id)) = identity else {
                                 this.status = format!("Could not find the Drive file for {path}.");
                                 cx.notify();
                                 return;
                             };
-                            let (node, id) = (file.node, file.id.clone());
-                            if this.dirty_nodes.contains_key(&node)
-                                || this.saving_nodes.contains(&node)
-                                || this.pending_saves.contains_key(&node)
-                            {
+                            if this.trash_has_unsaved(path, node) {
                                 this.status = format!("Save {path} before moving it to trash.");
                                 cx.notify();
                                 return;
