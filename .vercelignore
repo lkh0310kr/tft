@@ -2,3 +2,6 @@ target/
 **/target/
 .cargo-local-build/
 **/.cargo-local-build/
+dist/
+apps/web/dist/
+.vercel/
