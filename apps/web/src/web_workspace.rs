@@ -11225,6 +11225,11 @@ impl Render for WebWorkspace {
         )
         .on_drag(DockResizeDrag, |_, _, _, cx| cx.new(|_| EmptyDragPreview));
 
+        let viewport_width = f32::from(window.bounds().size.width);
+        let dock_width =
+            tft_app::ui::workspace_dock_width_for_viewport(self.dock_width, viewport_width);
+        let dock_visible = self.model.dock.visible && dock_width.is_some();
+        let dock_width = dock_width.unwrap_or(0.);
         div()
             .size_full()
             .relative()
@@ -11455,10 +11460,10 @@ impl Render for WebWorkspace {
                         this.emit_workspace_state(cx);
                         cx.notify();
                     }))
-                    .when(self.model.dock.visible, |layout| {
+                    .when(dock_visible, |layout| {
                         layout.child(
                             tft_app::ui::workspace_dock_shell(
-                                px(self.dock_width),
+                                px(dock_width),
                                 dock_header,
                                 dock_panel,
                                 dock_footer,
@@ -11478,7 +11483,7 @@ impl Render for WebWorkspace {
                             .when(self.model.groups.len() == 1, |area| area.child(
                                 tft_app::ui::workspace_tab_strip_shell(&theme)
                                     .flex_shrink_0()
-                                    .when(!self.model.dock.visible, |strip| {
+                                    .when(!dock_visible && viewport_width >= 510., |strip| {
                                         strip.child(
                                             tft_app::ui::icon_button(
                                                 "web-sidebar-restore",

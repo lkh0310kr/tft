@@ -703,8 +703,12 @@ impl Render for Workspace {
         // A pane whose plugin is off has no tab, so it cannot be the one
         // showing.
         let left_body: gpui::AnyElement = self.explorer.clone().into_any_element();
+        let dock_width = tft_app::ui::workspace_dock_width_for_viewport(
+            self.left_dock.width as f32,
+            f32::from(window.bounds().size.width),
+        );
         let left = crate::ui::workspace_dock_shell(
-            px(self.left_dock.width as f32),
+            px(dock_width.unwrap_or(0.)),
             crate::ui::workspace_dock_header(&theme)
                 // Past the traffic lights on macOS, where this header
                 // is the window's top-left corner.
@@ -731,7 +735,7 @@ impl Render for Workspace {
         let notices = self.render_notices(None, px(30.), &theme, cx);
         let preview = self.render_hover_preview(None, &theme, window, cx);
 
-        let left_visible = self.left_dock.visible;
+        let left_visible = self.left_dock.visible && dock_width.is_some();
         // A modal owns the keyboard while it is up, the way an Obsidian
         // modal's own keymap scope keeps app hotkeys from firing behind it.
         // gpui's key contexts nest rather than replace — the overlay is a

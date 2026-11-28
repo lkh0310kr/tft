@@ -40,6 +40,7 @@ Web 화면을 Desktop workspace와 같은 정보 구조와 조작 흐름으로 �
 - [x] Desktop과 Web에서 dock header, panel, footer, resize handle의 세로 shell 조립을 공유한다.
 - [x] 하단 dock footer의 높이·구분선·Vault profile 버튼 레이아웃을 `app::ui`로 공유한다.
 - [x] dock resize handle의 geometry, hover/drag accent를 `app::ui`에서 공유하고 Web 폭을 저장/복원한다.
+- [x] 좁은 viewport에서 dock이 본문을 밀어내지 않도록 `app::ui::workspace_dock_width_for_viewport`가 저장 폭을 main 최소 폭(360px) 안으로 제한하고, 510px 미만에서는 dock을 숨긴다.
 - [x] 좌측 dock 상단 header row의 공통 높이·배경·구분선을 양쪽 호스트에서 공유한다.
 - [x] Web dock 접기와 탭 strip 복원 진입점을 연결한다.
 - [x] Web에서 Cmd/Ctrl+\\로 좌측 파일 dock을 토글하고 상태를 저장한다.

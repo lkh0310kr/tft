@@ -700,6 +700,17 @@ pub fn workspace_dock_width_at(pointer_x: f32, origin_x: f32, total_width: f32) 
     (pointer_x - origin_x).clamp(MIN_DOCK_WIDTH, max)
 }
 
+/// The width a stored dock setting can take in a viewport, keeping the main
+/// area usable. `None` under the narrowest usable width: the dock yields to
+/// the document instead of squeezing it to a sliver.
+pub fn workspace_dock_width_for_viewport(stored: f32, viewport_width: f32) -> Option<f32> {
+    const MIN_DOCK_WIDTH: f32 = 150.0;
+    const MIN_MAIN_WIDTH: f32 = 360.0;
+    const NARROWEST: f32 = MIN_DOCK_WIDTH + MIN_MAIN_WIDTH;
+    (viewport_width >= NARROWEST)
+        .then(|| stored.clamp(MIN_DOCK_WIDTH, viewport_width - MIN_MAIN_WIDTH))
+}
+
 /// Shared top row for a workspace dock. Hosts insert their own tabs and
 /// window-specific controls into the returned container.
 pub fn workspace_dock_header(theme: &Theme) -> Div {
