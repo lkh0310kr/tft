@@ -62,6 +62,7 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - Reading으로 전환할 때 ReadingView가 키보드 포커스를 받는다. 이전에는 unmounted Editor가 포커스를 쥐어 Cmd/Ctrl+\\ 같은 Workspace action이 dispatch되지 않았다. Playwright에서 reload 후 편집→Reading 전환 뒤 dock toggle을 확인했다.
 - 탭을 다른 그룹이나 pane 가장자리로 드래그하면 공유 `WorkspaceDropZone`/`WorkspaceModel::split_with_tab`으로 분할한다. 탭이 하나뿐인 그룹을 자기 자신 옆으로 분할하는 것은 공유 모델이 허용하지 않으며 Desktop과 동일하다.
 - Files 트리 context menu의 Delete는 폴더에도 활성화된다. Drive에서 폴더를 `trashed: true`로 옮기고, Vault subtree와 그 아래에 열린 탭/히스토리를 함께 정리한다. 폴더 아래에 저장하지 않은 노트가 있으면 이동을 막는다.
+- Files 트리에서 macOS fn+Backspace(Forward Delete, GPUI `delete`)를 누르면 포커스된 행을 Move to trash alert로 보낸다. 파일과 폴더 모두 같은 경로를 쓰며, TreeView에 포커스가 있을 때만 동작한다.
 - Live Preview 위젯(Table, Mermaid, Embed)은 Editor에 `EmbedSource`가 있어야 만들어진다. Web은 Vault snapshot을 공유하는 `WebEmbedSource`를 모든 Editor에 설치하고, 본문/파일 목록이 바뀔 때 snapshot을 갱신해 다시 파싱한다. 이 경로가 없으면 Reading에서는 표가 보이지만 Live Preview에서는 `| ... |` 원문이 그대로 보인다.
 - 저장되지 않은 문서가 남아 있으면 `Switch Vault`는 저장을 즉시 시작하고 성공할 때까지 Workspace를 유지한다. Mock Drive 흐름에서 debounce 전에 전환을 눌러도 최신 Markdown PATCH 후에만 Vault를 닫는 것을 확인했다.
 - Chrome에서 GPUI Drive 시작 화면, 입력 컴포넌트 동작, OAuth/Picker 설정의 browser storage 저장 및 reload 유지, 콘솔 오류가 없음을 확인했다. OAuth 실제 승인, Picker 응답, Drive 파일 읽기/쓰기 왕복은 유효한 Google Cloud 설정과 실제 Vault가 없어 아직 검증하지 않았다.
@@ -79,6 +80,7 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - Cache cold/warm: `apps/web/build-web.sh` 뒤 `python3 apps/web/tests/test_cache.py` (Drive GET에 2.5초 지연을 넣고, warm reload의 workspace/노트/폴더가 1초 안에 캐시로 뜨는지와 live revalidation을 확인)
 - Folder delete: `python3 apps/web/tests/test_folder_delete.py` (folder 행의 Move to trash가 `{"trashed":true}` PATCH를 보내고 하위 행/탭이 정리되는지 확인)
 - Table render: `python3 apps/web/tests/test_table.py` (Reading/Live Preview 스크린샷에서 표 테두리 픽셀과 `tableWidgets`를 검증)
+- Tree Delete key: `python3 apps/web/tests/test_tree_delete_key.py` (파일/폴더 행에서 Delete → alert → `trashed:true` PATCH 검증)
 - Browser editor regression: `apps/web/build-web.sh --features browser-test`와 `tests/test_browser.py`
 - `RUSTC_BOOTSTRAP=1`은 pinned GPUI 의존성이 `wasm_thread`의 nightly feature를 사용하기 때문이다.
 - GPUI revision `4ce18741ad2ea007cb20a1dd96d2a170d224cc01`의 Web `Application::run`은 비동기 시작 이후에도 callback을 유지해야 한다. 현재 WASM 전용 패치와 적용 스크립트가 `apps/web/patches/`에 있다.

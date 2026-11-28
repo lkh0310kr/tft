@@ -10314,6 +10314,19 @@ impl WebWorkspace {
                 }
             }
             "escape" | "tab" => self.focus_editor(window, cx),
+            // macOS fn+Backspace (Forward Delete) arrives as `delete`.
+            "delete" => {
+                let target = self
+                    .tree_focused_key
+                    .as_deref()
+                    .and_then(|key| self.tree.rows().find(|row| row.key == key))
+                    .map(|row| row.path.clone())
+                    .or_else(|| self.current_path().map(str::to_owned))
+                    .or_else(|| self.tree_selection.paths().next().cloned());
+                if let Some(path) = target.filter(|path| !path.is_empty()) {
+                    cx.emit(WebWorkspaceEvent::DeleteFileRequested { path });
+                }
+            }
             _ => handled = false,
         }
         if handled {
