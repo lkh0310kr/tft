@@ -7,6 +7,7 @@ Rust/GPUI로 만든 네이티브 Markdown 지식 베이스입니다. 노트와 �
 
 - 명세와 설계: [docs/Specification.md](docs/Specification.md)
 - 웹과 Google Drive: [docs/Web.md](docs/Web.md), [docs/Web-Rebuild.md](docs/Web-Rebuild.md)
+- Browser pane 계획: [docs/Browser.md](docs/Browser.md)
 
 ## 실행
 
