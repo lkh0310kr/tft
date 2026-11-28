@@ -176,6 +176,8 @@ xattr -dr com.apple.quarantine "$APP_BUNDLE" >/dev/null 2>&1 || true
 
 if [ "$LAUNCH" = "1" ]; then
   printf '==> Launching\n'
-  open "$APP_BUNDLE"
+  # --new-window skips the single-instance handover, so the launch cannot be
+  # taken over by an older TFT (for example a dev build) still running.
+  open -n "$APP_BUNDLE" --args --new-window
 fi
 printf 'Installed %s %s (%s) at %s\n' "$APP_NAME" "$VERSION" "$BUILD_NUMBER" "$APP_BUNDLE"
