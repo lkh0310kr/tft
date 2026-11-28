@@ -46,6 +46,7 @@ cargo run --release -p desktop -- <vault> --synthetic 50000 --stress   # 에디�
 cargo run --release -p desktop -- <vault> --note X --source --type '[[al' [--accept enter]  # 자동완성 popup 열기(및 키 입력)로 스크린샷
 cargo run --release -p bench -- generate <dir>   # 합성 20k-note vault
 cargo run --release -p bench -- index <vault>    # scan/read/index/resolve 시간 측정, 2초 gate 확인
+tools/macos-install.sh                           # macOS: release TFT.app → /Applications 덮어쓰기 → 재실행
 cargo fmt --all && cargo clippy --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings   # CI와 동일: 현재 stable, warning 거부
 ```
