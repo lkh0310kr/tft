@@ -10,8 +10,9 @@ tags:
 
 ## 저장소
 
-- Google Drive만 사용하며 OAuth scope는 `drive.file`입니다.
-- Picker에서 Vault 폴더를 선택합니다. `drive.file`은 사용자가 선택한 폴더와 앱이 만든 파일에 접근할 수 있도록 허용합니다.
+- Google Drive만 사용하며 OAuth scope는 `drive`입니다. Vault는 Picker로 고른 폴더이고, `drive.file`은
+  Picker가 반환한 항목만 권한을 주므로 폴더 안의 기존 노트 쓰기/휴지통 이동에는 `drive`가 필요합니다.
+- Picker에서 Vault 폴더를 선택합니다. 읽기는 같은 토큰으로 폴더 전체를 다룹니다.
 - Source와 Core는 경로를 Vault 기준 상대 경로 문자열로 다룹니다. Drive adapter가 파일 ID, ETag, HTTP 처리를 담당합니다.
 - `workspace.json` 등 UI 전용 상태는 Drive Vault가 아니라 브라우저의 `localStorage` 또는 `IndexedDB`에 저장합니다.
 
@@ -47,7 +48,8 @@ tags:
 1. Google Cloud project를 만들고 **Google Drive API**와 **Google Picker API**를 사용 설정합니다
    (APIs & Services → Library).
 2. OAuth 동의 화면을 External로 구성합니다. Data Access에
-   `https://www.googleapis.com/auth/drive.file`을 추가하고, 사용할 계정을 테스트 사용자로 등록합니다.
+   `https://www.googleapis.com/auth/drive`를 추가하고, 사용할 계정을 테스트 사용자로 등록합니다.
+   `drive`는 restricted scope이므로 Testing 상태에서는 테스트 사용자로만 승인할 수 있습니다.
 3. **Credentials → OAuth client ID → Web application**을 만듭니다.
 4. 다음 **Authorized JavaScript origins**를 추가합니다.
    - `http://127.0.0.1:8080`
@@ -88,7 +90,7 @@ token, vault 데이터는 없습니다. 파일은 사용자의 Drive에 남습�
 
 ## 보안
 
-- `drive.file` scope만 사용하며, Picker가 선택한 PKMS 폴더에 접근 권한을 부여합니다.
+- `drive` scope로 Picker가 선택한 PKMS 폴더의 기존 노트를 읽고, 쓰고, 휴지통으로 옮깁니다.
 - OAuth token은 메모리에만 보관하고 client secret은 사용하지 않습니다.
 - 배포 bundle에 API key를 포함하지 않습니다.
 - 브라우저에서 렌더링한 노트 HTML을 정화해 script, frame, form, `on*` 속성을 제거합니다.

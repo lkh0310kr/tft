@@ -13,10 +13,12 @@ let videoViewer = null;
 
 const SESSION_TOKEN_KEY = "tft.drive-session-token";
 const PERSISTED_TOKEN_KEY = "tft.drive-access-token";
-// `drive.file` covers writes to files the app created/opened; `drive.readonly`
-// covers listing the children of a Picker-selected folder and reading them.
-const DRIVE_SCOPE =
-  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
+// A Vault is a folder selected in Picker. `drive.file` authorizes only the
+// files the Picker returned individually (or the app created), so existing
+// notes discovered inside the folder can be read with `drive.readonly` but
+// not written or trashed. A folder-wide Vault needs the full `drive` scope
+// for its write path.
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 
 function restoreSessionToken(clientId) {
   // Check each store independently: a stale local copy must not erase a valid
@@ -296,7 +298,7 @@ async function refreshTokenIfExpired() {
 export async function createFolder(name, parent) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(
-    "https://www.googleapis.com/drive/v3/files?fields=id,name",
+    "https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -332,7 +334,7 @@ export async function createTextFile(name, parent, content) {
   ].join("\r\n");
 
   const response = await authorizedFetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime",
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime&supportsAllDrives=true",
     {
       method: "POST",
       headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
@@ -648,7 +650,7 @@ export async function deleteFile(id) {
 export async function duplicateFile(id, parent, name) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/copy?fields=id,name,mimeType,size,modifiedTime,createdTime,etag`,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/copy?fields=id,name,mimeType,size,modifiedTime,createdTime,etag&supportsAllDrives=true`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -668,6 +670,7 @@ export async function moveFile(id, addParent, removeParent) {
     addParents: addParent,
     removeParents: removeParent,
     fields: "id,name,parents,etag",
+    supportsAllDrives: "true",
   });
   const response = await authorizedFetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?${query}`,
@@ -683,7 +686,7 @@ export async function moveFile(id, addParent, removeParent) {
 export async function trashFile(id) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,trashed`,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?fields=id,trashed&supportsAllDrives=true`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

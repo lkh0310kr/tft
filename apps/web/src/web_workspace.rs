@@ -9619,6 +9619,32 @@ impl WebWorkspace {
             .collect()
     }
 
+    /// The Drive identity for one file. A lazily restored tab can be opened
+    /// before its folder row was expanded, so the host's entries table may
+    /// lag behind the Vault model.
+    pub fn drive_entry(&self, node: NodeId) -> Option<tft_drive_web::IndexedFile> {
+        let BackendObjectId::Drive(id) = self.vault.backend(node)? else {
+            return None;
+        };
+        let file = self
+            .vault
+            .file_ids()
+            .into_iter()
+            .find_map(|(candidate, file)| (candidate == node).then_some(file))?;
+        Some(tft_drive_web::IndexedFile {
+            node,
+            path: file.path,
+            kind: file.kind,
+            id: id.clone(),
+            etag: None,
+        })
+    }
+
+    /// [`Self::drive_entry`] for a Vault path.
+    pub fn drive_entry_at(&self, path: &str) -> Option<tft_drive_web::IndexedFile> {
+        self.drive_entry(self.vault.lookup(path).ok()?)
+    }
+
     pub fn folder_drive_id(&self, node: NodeId) -> Option<String> {
         match self.vault.backend(node)? {
             BackendObjectId::Drive(id) => Some(id.clone()),

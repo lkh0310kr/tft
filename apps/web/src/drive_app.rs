@@ -503,7 +503,13 @@ impl DriveApp {
             cx.notify();
             return;
         };
-        let Some(file) = self.entries.iter().find(|file| file.node == node) else {
+        let file = self
+            .entries
+            .iter()
+            .find(|file| file.node == node)
+            .cloned()
+            .or_else(|| workspace.read(cx).drive_entry(node));
+        let Some(file) = file else {
             self.status = "The active note is not a Drive file.".into();
             cx.notify();
             return;
@@ -700,7 +706,10 @@ impl DriveApp {
                             Err(error) => format!("Moved {path} to Drive trash, but could not update the open workspace: {error}"),
                         };
                     }
-                    Err(error) => app.status = format!("Could not move {path} to trash: {error}"),
+                    Err(error) => {
+                        console_error(&format!("Trash {path} failed: {error}"));
+                        app.status = format!("Could not move {path} to trash: {error}");
+                    }
                 }
                 cx.notify();
             })
@@ -1674,7 +1683,17 @@ impl DriveApp {
             self.pending_saves.insert(node, (generation, contents));
             return;
         }
-        let Some(file) = self.entries.iter().find(|file| file.node == node) else {
+        let file = self
+            .entries
+            .iter()
+            .find(|file| file.node == node)
+            .cloned()
+            .or_else(|| {
+                self.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.read(cx).drive_entry(node))
+            });
+        let Some(file) = file else {
             self.status = "The edited note is no longer in this Drive Vault.".into();
             cx.notify();
             return;
@@ -1711,7 +1730,10 @@ impl DriveApp {
                         app.last_saved = contents.clone();
                         saved = true;
                     }
-                    Err(error) => app.status = format!("Save failed: {error}"),
+                    Err(error) => {
+                        console_error(&format!("Save {path} failed: {error}"));
+                        app.status = format!("Save failed: {error}");
+                    }
                 }
                 let pending = app.pending_saves.remove(&node);
                 if let Some((pending_generation, pending_contents)) = pending {
@@ -2185,8 +2207,17 @@ impl Render for DriveApp {
                             if this.busy {
                                 return;
                             }
-                            let Some(file) = this.entries.iter().find(|entry| entry.path == *path)
-                            else {
+                            let file = this
+                                .entries
+                                .iter()
+                                .find(|entry| entry.path == *path)
+                                .cloned()
+                                .or_else(|| {
+                                    this.workspace.as_ref().and_then(|workspace| {
+                                        workspace.read(cx).drive_entry_at(path)
+                                    })
+                                });
+                            let Some(file) = file else {
                                 this.status = format!("Could not find the Drive file for {path}.");
                                 cx.notify();
                                 return;
@@ -2212,7 +2243,6 @@ impl Render for DriveApp {
                                         title: "Move to trash?".into(),
                                         detail: vec![path.clone().into()],
                                         confirm: "Move to trash".into(),
-                                        secondary: Some("Cancel".into()),
                                         no_enter: true,
                                         ..PromptSpec::default()
                                     },
@@ -2316,6 +2346,26 @@ impl Render for DriveApp {
                 .bg(tokens.background_primary)
                 .text_color(tokens.text_normal)
                 .child(workspace)
+                .when(!self.status.is_empty(), |root| {
+                    // Drive operations happen off-screen; without this the
+                    // save/trash result and its errors are invisible.
+                    root.child(
+                        div()
+                            .absolute()
+                            .right(px(12.))
+                            .bottom(px(12.))
+                            .max_w(px(460.))
+                            .rounded_md()
+                            .border_1()
+                            .border_color(tokens.background_modifier_border)
+                            .bg(tokens.background_secondary)
+                            .px_3()
+                            .py_2()
+                            .text_size(px(11.))
+                            .text_color(tokens.text_muted)
+                            .child(SharedString::from(self.status.clone())),
+                    )
+                })
                 .when(self.prompt_open, |root| {
                     root.child(
                         div()
