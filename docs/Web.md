@@ -91,6 +91,9 @@ token, vault 데이터는 없습니다. 파일은 사용자의 Drive에 남습�
 ## 보안
 
 - `drive` scope로 Picker가 선택한 PKMS 폴더의 기존 노트를 읽고, 쓰고, 휴지통으로 옮깁니다.
+- 노트 본문과 폴더 목록은 브라우저 IndexedDB(`tft-drive-cache`)에 Vault별로 캐시됩니다. 캐시는 표시 속도용이며
+  저장의 원본이 아닙니다. 브라우저 사이트 데이터를 지우면 캐시도 사라집니다. localStorage에는 토큰·설정·UI
+  상태만 둡니다.
 - OAuth token은 메모리에만 보관하고 client secret은 사용하지 않습니다.
 - 배포 bundle에 API key를 포함하지 않습니다.
 - 브라우저에서 렌더링한 노트 HTML을 정화해 script, frame, form, `on*` 속성을 제거합니다.

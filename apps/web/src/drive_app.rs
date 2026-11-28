@@ -1775,7 +1775,22 @@ impl DriveApp {
         let epoch = self.vault_epoch;
         cx.spawn(async move |this, cx| {
             let parent = tft_app::BackendObjectId::Drive(folder_id.clone());
-            let result = drive::list_folder(&folder_id, &parent).await;
+            // Paint cached rows in the same frame as the expand animation,
+            // then complete or correct them from Drive.
+            if let Some(scanned) = drive::list_folder_cached(&folder_id, &parent).await {
+                let cached_path = path.clone();
+                let _ = this.update(cx, |app, cx| {
+                    if app.vault_epoch != epoch {
+                        return;
+                    }
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.add_folder_children(node, &cached_path, scanned, cx);
+                    });
+                    app.entries = workspace.read(cx).drive_entries();
+                    cx.notify();
+                });
+            }
+            let result = drive::list_folder_live(&folder_id, &parent).await;
             let _ = this.update(cx, |app, cx| {
                 if app.vault_epoch != epoch {
                     return;
@@ -1822,27 +1837,44 @@ impl DriveApp {
         };
         let epoch = self.vault_epoch;
         cx.spawn(async move |this, cx| {
-            let text = match drive::read_file(&id).await {
+            // Paint a cached body immediately (including across a reload),
+            // then read Drive and only replace it when the source changed.
+            let cached = drive::read_file_cached(&id).await;
+            if let Some(text) = cached.clone() {
+                let _ = this.update(cx, |app, cx| {
+                    if app.vault_epoch != epoch {
+                        return;
+                    }
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.ingest_text(node, path.clone(), text, cx);
+                    });
+                });
+            }
+            let text = match drive::read_file_live(&id).await {
                 Ok(text) => text,
                 Err(error) => {
-                    console_error(&format!("Could not read {path}: {error}"));
-                    let _ = this.update(cx, |app, cx| {
-                        if app.vault_epoch != epoch {
-                            return;
-                        }
-                        workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
-                    });
+                    if cached.is_none() {
+                        console_error(&format!("Could not read {path}: {error}"));
+                        let _ = this.update(cx, |app, cx| {
+                            if app.vault_epoch != epoch {
+                                return;
+                            }
+                            workspace
+                                .update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
+                        });
+                    }
                     return;
                 }
             };
+            if cached.as_deref() == Some(text.as_str()) {
+                return;
+            }
             let _ = this.update(cx, |app, cx| {
                 if app.vault_epoch != epoch {
                     return;
                 }
                 workspace.update(cx, |workspace, cx| {
-                    // `open` may have written the empty placeholder into the
-                    // Vault before this read finished; ingest must replace it.
-                    workspace.ingest_text(node, path, text, cx);
+                    workspace.ingest_text_background(node, path, text, cx);
                 });
             });
         })
@@ -1896,6 +1928,9 @@ impl DriveApp {
 }
 
 async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
+    // Cache keys are per Vault; set this before any listing or config read so
+    // a warm IndexedDB cache can answer the initial frame.
+    drive::set_cache_namespace(&id);
     // The tree and the host configuration are independent reads; start them
     // together so a Picker selection reaches the workspace in one round trip
     // instead of a chain of sequential Drive calls.

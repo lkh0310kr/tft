@@ -20,6 +20,154 @@ const PERSISTED_TOKEN_KEY = "tft.drive-access-token";
 // for its write path.
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 
+// Drive responses are cached in IndexedDB per Vault. A cached response is
+// returned immediately and revalidated in the background, so the workspace,
+// folder rows, and note bodies render without waiting for the network while
+// the next read still observes fresh data. IndexedDB (not localStorage) is
+// used for note-sized bodies: it is asynchronous and has no 5 MB string cap.
+const CACHE_DB = "tft-drive-cache";
+const CACHE_STORE = "responses";
+const CACHE_MAX_BODY = 1_500_000;
+let cacheNamespace = "";
+let cacheDbPromise = null;
+let pendingCacheWrites = new Set();
+
+function openCacheDb() {
+  if (!cacheDbPromise) {
+    cacheDbPromise = new Promise((resolve) => {
+      if (!window.indexedDB) {
+        resolve(null);
+        return;
+      }
+      let request;
+      try {
+        request = indexedDB.open(CACHE_DB, 1);
+      } catch {
+        resolve(null);
+        return;
+      }
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(CACHE_STORE)) {
+          db.createObjectStore(CACHE_STORE);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+      request.onblocked = () => resolve(null);
+    });
+  }
+  return cacheDbPromise;
+}
+
+function cacheKey(url) {
+  return cacheNamespace ? `${cacheNamespace}\n${url}` : "";
+}
+
+async function cacheGet(url) {
+  const key = cacheKey(url);
+  if (!key) return null;
+  const db = await openCacheDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    let transaction;
+    try {
+      transaction = db.transaction(CACHE_STORE, "readonly");
+    } catch {
+      resolve(null);
+      return;
+    }
+    const request = transaction.objectStore(CACHE_STORE).get(key);
+    request.onsuccess = () => resolve(request.result ?? null);
+    request.onerror = () => resolve(null);
+  });
+}
+
+function cachePut(url, body, contentType) {
+  const key = cacheKey(url);
+  if (!key || body.length > CACHE_MAX_BODY) return Promise.resolve();
+  const write = (async () => {
+    const db = await openCacheDb();
+    if (!db) return;
+    await new Promise((resolve) => {
+      try {
+        const transaction = db.transaction(CACHE_STORE, "readwrite");
+        transaction
+          .objectStore(CACHE_STORE)
+          .put({ body, contentType, savedAt: Date.now() }, key);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => resolve();
+        transaction.onabort = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  })();
+  pendingCacheWrites.add(write);
+  write.finally(() => pendingCacheWrites.delete(write));
+  return write;
+}
+
+/** Cache-only lookup; callers that revalidate explicitly use this. */
+export async function cacheLookup(url) {
+  const entry = await cacheGet(url);
+  return entry?.body ?? null;
+}
+
+/**
+ * Drop cached responses that mention `id` (a Drive file or folder). A list
+ * response contains the folder id in its `q`, so `includeLists` covers stale
+ * child rows after a create/rename/move/trash.
+ */
+export async function invalidateDriveCache(id, includeLists = false) {
+  if (!cacheNamespace || !id) return;
+  const db = await openCacheDb();
+  if (!db) return;
+  await new Promise((resolve) => {
+    try {
+      const transaction = db.transaction(CACHE_STORE, "readwrite");
+      const store = transaction.objectStore(CACHE_STORE);
+      const request = store.openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        const key = String(cursor.key || "");
+        const stale =
+          key.includes(id) ||
+          (includeLists &&
+            key.includes(cacheNamespace) &&
+            (key.includes("in%20parents") || key.includes("in parents")));
+        if (stale) cursor.delete();
+        cursor.continue();
+      };
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => resolve();
+      transaction.onabort = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export function setCacheNamespace(rootId) {
+  cacheNamespace = String(rootId || "");
+}
+
+/** Await background cache writes; tests use it to make reloads deterministic. */
+export async function cacheFlush() {
+  await Promise.all([...pendingCacheWrites]);
+}
+
+// Diagnostics for browser tests; no Drive data is exposed beyond what the
+// page's own cache already holds.
+window.__tftDriveCache = {
+  flush: cacheFlush,
+  lookup: cacheLookup,
+  invalidate: invalidateDriveCache,
+  setNamespace: setCacheNamespace,
+};
+
+
 function restoreSessionToken(clientId) {
   // Check each store independently: a stale local copy must not erase a valid
   // session copy, and a blocked localStorage must not prevent session restore.
@@ -257,13 +405,42 @@ export async function pickFolder(apiKey, appId) {
   });
 }
 
-export async function driveFetch(url) {
+async function fetchDriveBody(url) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(url);
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`Drive ${response.status}: ${body}`);
   }
+  return { body, contentType: response.headers.get("Content-Type") || "" };
+}
+
+function revalidateDriveUrl(url) {
+  const run = (async () => {
+    const { body, contentType } = await fetchDriveBody(url);
+    await cachePut(url, body, contentType);
+  })().catch(() => {});
+  pendingCacheWrites.add(run);
+  run.finally(() => pendingCacheWrites.delete(run));
+}
+
+export async function driveFetch(url) {
+  const cached = await cacheGet(url);
+  if (cached) {
+    // Stale-while-revalidate: this caller gets the cached body immediately;
+    // the background refresh is what the next read (or reload) observes.
+    revalidateDriveUrl(url);
+    return cached.body;
+  }
+  const { body, contentType } = await fetchDriveBody(url);
+  await cachePut(url, body, contentType);
+  return body;
+}
+
+/** Bypass the response cache and store the fresh body for the next read. */
+export async function driveFetchFresh(url) {
+  const { body, contentType } = await fetchDriveBody(url);
+  await cachePut(url, body, contentType);
   return body;
 }
 
@@ -313,6 +490,7 @@ export async function createFolder(name, parent) {
   if (!response.ok) {
     throw new Error(`Drive folder ${response.status}: ${body}`);
   }
+  await invalidateDriveCache(parent, false);
   return body;
 }
 
@@ -345,6 +523,7 @@ export async function createTextFile(name, parent, content) {
   if (!response.ok) {
     throw new Error(`Drive upload ${response.status}: ${text}`);
   }
+  await invalidateDriveCache(parent, false);
   return text;
 }
 
@@ -376,6 +555,7 @@ export async function renameFile(id, name) {
   );
   const body = await response.text();
   if (!response.ok) throw new Error(`Drive rename ${response.status}: ${body}`);
+  await invalidateDriveCache(id);
   return body;
 }
 
@@ -577,6 +757,7 @@ export async function updateTextFile(id, content, etag) {
   if (!response.ok) {
     throw new Error(`Drive update ${response.status}: ${body}`);
   }
+  await invalidateDriveCache(id);
   return body;
 }
 
@@ -644,6 +825,7 @@ export async function deleteFile(id) {
   if (!response.ok) {
     throw new Error(`Drive delete ${response.status}: ${await response.text()}`);
   }
+  await invalidateDriveCache(id, true);
   return "";
 }
 
@@ -661,6 +843,8 @@ export async function duplicateFile(id, parent, name) {
   if (!response.ok) {
     throw new Error(`Drive duplicate ${response.status}: ${body}`);
   }
+  await invalidateDriveCache(id);
+  await invalidateDriveCache(parent, false);
   return body;
 }
 
@@ -680,6 +864,9 @@ export async function moveFile(id, addParent, removeParent) {
   if (!response.ok) {
     throw new Error(`Drive move ${response.status}: ${body}`);
   }
+  await invalidateDriveCache(id);
+  await invalidateDriveCache(addParent, false);
+  await invalidateDriveCache(removeParent, false);
   return body;
 }
 
@@ -697,5 +884,6 @@ export async function trashFile(id) {
   if (!response.ok) {
     throw new Error(`Drive trash ${response.status}: ${body}`);
   }
+  await invalidateDriveCache(id, true);
   return body;
 }

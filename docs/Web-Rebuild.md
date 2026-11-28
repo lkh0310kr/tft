@@ -54,6 +54,7 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - 기존 Google Drive 브라우저 어댑터를 `crates/drive-web`으로 분리해 GPUI Web과 기존 셸이 공유한다. 일반 GPUI Web 빌드는 설정 입력, 로그인, 폴더 선택, Drive `VaultData` 구성과 Markdown 원문 로드를 거쳐 공통 Workspace를 연다. 활성 노트를 저장하는 `Save to Drive` 동작도 연결했다.
 - Drive Workspace는 Cmd+S/macOS와 Ctrl+S/Windows·Linux에서 현재 Editor 원문을 저장한다. Mocked Drive 브라우저 회귀는 단축키와 `Save to Drive` 버튼의 PATCH 본문을 각각 확인한다.
 - Google 로그인 토큰은 브라우저 저장소에 만료 시각과 함께 보관하고, reload 때 GIS 로드보다 먼저 복원한다. 유효한 토큰이 있으면 GIS가 늦게 로드되거나 실패해도 마지막 Vault를 다시 열며, 만료 시에는 GIS의 silent(`prompt: none`) 갱신을 시도한다. GIS token client는 refresh token을 노출하지 않으므로, Google 세션도 만료된 뒤의 완전한 재로그인 없는 복원은 서버 측 token broker 없이는 보장하지 않는다.
+- Drive 응답은 Vault별 IndexedDB(`tft-drive-cache`)에 캐시한다. 첫 프레임은 캐시로 즉시 그리고, 같은 URL의 최신 응답은 백그라운드에서 받아 다음 읽기/재로드에 반영한다(stale-while-revalidate). 노트 본문·폴더 목록은 캐시 히트 후 `read_file_live`/`list_folder_live`로 다시 읽어 화면도 갱신한다. 쓰기·삭제·이름 변경 뒤에는 해당 파일 ID(과 필요하면 폴더 목록)의 캐시를 무효화한다. 캐시는 원본이 아니며 저장 판단에는 쓰지 않는다. localStorage는 토큰·설정·작은 UI 상태에만 사용한다.
 - OAuth scope는 `drive`다. Picker로 고른 폴더 안의 기존 노트 쓰기·휴지통 이동은 `drive.file`이 반환 항목별 권한만 주기 때문에 동작하지 않는다. scope 문자열이 바뀌면 저장된 토큰은 폐기되고 재동의가 필요하며, Google Cloud Console → OAuth consent screen → Data Access에 `.../auth/drive`가 등록되어 있어야 한다.
 - Production Editor의 수정 이벤트를 Drive host로 전달해 Desktop과 같은 2초 debounce 자동 저장을 한다. Drive ETag와 per-note 저장 대기열을 사용해 저장 요청을 직렬화하고, Vault 교체 뒤 이전 요청 결과를 무시한다. Mocked Drive 브라우저 회귀에서 원문 PATCH를 확인했다.
 - Drive Vault는 root 메타데이터만 먼저 읽고, 폴더를 펼칠 때 그 폴더의 자식만, 노트를 열 때 본문만 가져온다. 본문이 오기 전에는 빈 Editor 대신 공유 `workspace_loading_notice`를 그린다. `loaded_texts`가 없는 노트는 `current_document`/`store_*_editor_text`/`refresh_reading`/자동 저장 구독에서 모두 제외하므로 로딩 중 빈 문자열이 Drive로 업로드되지 않는다. Mocked Drive 회귀에서 본문 요청을 붙잡아 로딩 상태와 PATCH 0건을 확인했다.
@@ -73,6 +74,7 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - WASM: `apps/web/check-wasm.sh`
 - Browser Drive shell: `apps/web/build-web.sh`와 `tests/test_drive_shell.py`
 - Mocked Drive round-trip: `apps/web/build-web.sh --features drive-smoke-test`와 `tests/test_drive_flow.py`
+- Cache cold/warm: `apps/web/build-web.sh` 뒤 `python3 apps/web/tests/test_cache.py` (Drive GET에 2.5초 지연을 넣고, warm reload의 workspace/노트/폴더가 1초 안에 캐시로 뜨는지와 live revalidation을 확인)
 - Browser editor regression: `apps/web/build-web.sh --features browser-test`와 `tests/test_browser.py`
 - `RUSTC_BOOTSTRAP=1`은 pinned GPUI 의존성이 `wasm_thread`의 nightly feature를 사용하기 때문이다.
 - GPUI revision `4ce18741ad2ea007cb20a1dd96d2a170d224cc01`의 Web `Application::run`은 비동기 시작 이후에도 callback을 유지해야 한다. 현재 WASM 전용 패치와 적용 스크립트가 `apps/web/patches/`에 있다.

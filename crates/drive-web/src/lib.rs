@@ -28,6 +28,12 @@ extern "C" {
     fn pick_folder_js(api_key: &str, app_id: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = driveFetch)]
     fn drive_fetch(url: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = driveFetchFresh)]
+    fn drive_fetch_fresh(url: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = cacheLookup)]
+    fn cache_lookup_js(url: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = setCacheNamespace)]
+    fn set_cache_namespace_js(root_id: &str);
     #[wasm_bindgen(js_name = updateTextFile)]
     fn update_text_file(id: &str, content: &str, etag: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = driveBlobUrl)]
@@ -169,6 +175,24 @@ async fn fetch(url: &str) -> Result<String, String> {
         .ok_or_else(|| "Drive returned a non-text response".to_string())
 }
 
+async fn fetch_fresh(url: &str) -> Result<String, String> {
+    JsFuture::from(drive_fetch_fresh(url))
+        .await
+        .map_err(text)?
+        .as_string()
+        .ok_or_else(|| "Drive returned a non-text response".to_string())
+}
+
+async fn cache_lookup(url: &str) -> Option<String> {
+    JsFuture::from(cache_lookup_js(url)).await.ok()?.as_string()
+}
+
+/// The IndexedDB cache is keyed per Vault so two Vaults (or accounts) never
+/// mix rows. Hosts call this before the first Drive read of a Vault.
+pub fn set_cache_namespace(root_id: &str) {
+    set_cache_namespace_js(root_id);
+}
+
 fn list_url(folder_id: &str, page: Option<&str>) -> String {
     let q = format!("'{folder_id}' in parents and trashed=false");
     let mut url = format!(
@@ -184,11 +208,16 @@ fn list_url(folder_id: &str, page: Option<&str>) -> String {
 
 /// Every page of one folder's direct children. The caller controls how many
 /// folders are in flight at once.
-async fn list_children(folder_id: &str) -> Result<Vec<DriveItem>, String> {
+async fn list_children_with(folder_id: &str, fresh: bool) -> Result<Vec<DriveItem>, String> {
     let mut files = Vec::new();
     let mut page = None;
     loop {
-        let body = fetch(&list_url(folder_id, page.as_deref())).await?;
+        let url = list_url(folder_id, page.as_deref());
+        let body = if fresh {
+            fetch_fresh(&url).await?
+        } else {
+            fetch(&url).await?
+        };
         let parsed: ListPage =
             serde_json::from_str(&body).map_err(|e| format!("list parse: {e}"))?;
         files.extend(parsed.files);
@@ -200,14 +229,13 @@ async fn list_children(folder_id: &str) -> Result<Vec<DriveItem>, String> {
     Ok(files)
 }
 
-/// One folder's direct children, as nodes ready for `VaultData`. This is the
-/// unit of a lazy tree: a folder is listed the first time the user expands it.
-pub async fn list_folder(
-    folder_id: &str,
-    parent: &BackendObjectId,
-) -> Result<Vec<ScannedNode>, String> {
+async fn list_children(folder_id: &str) -> Result<Vec<DriveItem>, String> {
+    list_children_with(folder_id, false).await
+}
+
+fn scanned_from_items(parent: &BackendObjectId, items: Vec<DriveItem>) -> Vec<ScannedNode> {
     let mut scanned = Vec::new();
-    for item in list_children(folder_id).await? {
+    for item in items {
         if item.name.starts_with('.') {
             continue;
         }
@@ -244,7 +272,38 @@ pub async fn list_folder(
             }
         }
     }
-    Ok(scanned)
+    scanned
+}
+
+/// One folder's direct children, as nodes ready for `VaultData`. This is the
+/// unit of a lazy tree: a folder is listed the first time the user expands it.
+pub async fn list_folder(
+    folder_id: &str,
+    parent: &BackendObjectId,
+) -> Result<Vec<ScannedNode>, String> {
+    Ok(scanned_from_items(parent, list_children(folder_id).await?))
+}
+
+/// Cached children for the first frame of a folder expansion. Multi-page
+/// folders can be partial here; [`list_folder_live`] completes them.
+pub async fn list_folder_cached(
+    folder_id: &str,
+    parent: &BackendObjectId,
+) -> Option<Vec<ScannedNode>> {
+    let body = cache_lookup(&list_url(folder_id, None)).await?;
+    let parsed: ListPage = serde_json::from_str(&body).ok()?;
+    Some(scanned_from_items(parent, parsed.files))
+}
+
+/// Bypasses the IndexedDB response cache and refreshes it with the result.
+pub async fn list_folder_live(
+    folder_id: &str,
+    parent: &BackendObjectId,
+) -> Result<Vec<ScannedNode>, String> {
+    Ok(scanned_from_items(
+        parent,
+        list_children_with(folder_id, true).await?,
+    ))
 }
 
 pub async fn index_vault(root_id: &str) -> Result<VaultIndex, String> {
@@ -719,6 +778,20 @@ pub async fn read_file(id: &str) -> Result<String, String> {
         "https://www.googleapis.com/drive/v3/files/{id}?alt=media&supportsAllDrives=true"
     ))
     .await
+}
+
+fn media_url(id: &str) -> String {
+    format!("https://www.googleapis.com/drive/v3/files/{id}?alt=media&supportsAllDrives=true")
+}
+
+/// A note body from IndexedDB without touching the network.
+pub async fn read_file_cached(id: &str) -> Option<String> {
+    cache_lookup(&media_url(id)).await
+}
+
+/// Reads the body from Drive, bypassing the cache, and refreshes the cache.
+pub async fn read_file_live(id: &str) -> Result<String, String> {
+    fetch_fresh(&media_url(id)).await
 }
 
 pub async fn write_file(

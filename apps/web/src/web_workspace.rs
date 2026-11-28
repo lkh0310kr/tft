@@ -9495,6 +9495,29 @@ impl WebWorkspace {
             .and_then(|tab| tab.path.as_deref())
     }
 
+    /// Applies a background refresh of a note body. If any pane showing it has
+    /// unsaved edits, keep the user's buffer (and the Vault text it belongs
+    /// to) untouched.
+    pub fn ingest_text_background(
+        &mut self,
+        node: NodeId,
+        path: String,
+        contents: String,
+        cx: &mut Context<Self>,
+    ) {
+        let dirty = self.model.groups.iter().any(|group| {
+            group.active().and_then(|tab| tab.node) == Some(node)
+                && self
+                    .group_views
+                    .get(&group.id)
+                    .is_some_and(|views| views.editor.read(cx).is_dirty())
+        });
+        if dirty {
+            return;
+        }
+        self.ingest_text(node, path, contents, cx);
+    }
+
     /// Best-effort text stream: read a note before the user opens it so the
     /// local search index and graph fill in without blocking the tree.
     pub fn ingest_text(
@@ -10246,6 +10269,10 @@ impl WebWorkspace {
             ViewMode::Terminal => "terminal",
         });
         let state = js_sys::Object::new();
+        let tree_paths = js_sys::Array::new();
+        for row in self.tree.rows() {
+            tree_paths.push(&JsValue::from_str(&row.path));
+        }
         for (key, value) in [
             (
                 "activePath",
@@ -10271,6 +10298,7 @@ impl WebWorkspace {
                 "treeRows",
                 JsValue::from_f64(self.tree.rows().count() as f64),
             ),
+            ("treePaths", tree_paths.into()),
             (
                 "folders",
                 JsValue::from_f64(self.vault.folders().len() as f64),
