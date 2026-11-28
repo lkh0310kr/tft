@@ -19,7 +19,6 @@ mod export_modals;
 mod file_menu;
 mod graph;
 mod hover_preview;
-mod palette;
 mod popout;
 mod prompt;
 mod remote;

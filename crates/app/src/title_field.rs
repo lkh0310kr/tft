@@ -184,7 +184,11 @@ impl TitleField {
     pub fn step(&mut self, forward: bool, extend: bool) {
         let to = if !extend && self.has_selection() {
             let sel = self.selection();
-            if forward { sel.end } else { sel.start }
+            if forward {
+                sel.end
+            } else {
+                sel.start
+            }
         } else if forward {
             self.next_boundary(self.cursor)
         } else {

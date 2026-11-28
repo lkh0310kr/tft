@@ -15,7 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Duration;
-use tft_formats::config::{PagePreviewConfig, PropertyTypes};
+use tft_formats::config::PropertyTypes;
 use tft_formats::properties::PropertiesInDocument;
 use tft_formats::FileKind;
 
@@ -34,35 +34,7 @@ pub const EDGE: f32 = 10.;
 /// The reading view's padding inside the popover.
 pub const PADDING: f32 = 32.;
 
-/// Where the hovered link is: each is a key of `page-preview.json`, whose
-/// value says whether Mod is required there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    /// `preview`, "Reading view": the one source that needs no Mod by default.
-    Reading,
-    /// `editor`, "Editing view": Live Preview and source mode alike.
-    Editor,
-    /// `file-explorer`, "Files": a file's row.
-    Files,
-    /// `tab-header`, "Tab header": a tab showing a file.
-    TabHeader,
-    /// `graph`, "Graph view": a note's or an attachment's node.
-    Graph,
-}
-
-impl Source {
-    /// Whether a hover from here needs Mod held: the key when it is set,
-    /// else the source's `defaultMod` as `hoverLinkSources` records it.
-    pub fn requires_mod(self, config: &PagePreviewConfig) -> bool {
-        match self {
-            Source::Reading => config.preview.unwrap_or(false),
-            Source::Editor => config.editor.unwrap_or(true),
-            Source::Files => config.file_explorer.unwrap_or(true),
-            Source::TabHeader => config.tab_header.unwrap_or(true),
-            Source::Graph => config.graph.unwrap_or(true),
-        }
-    }
-}
+pub use tft_app::page_preview::Source;
 
 /// Mod: Cmd on macOS (Ctrl raised nothing there), Ctrl elsewhere.
 pub fn mod_held(modifiers: &Modifiers) -> bool {
@@ -95,7 +67,7 @@ pub fn hover_row(
     el: Stateful<Div>,
     report: impl Fn(bool, Bounds<Pixels>, Modifiers, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    hover_row_bordered(el, 0., report)
+    tft_app::ui::hover_row(el, report)
 }
 
 /// [`hover_row`] for a row with a border of its own (`border` px wide): an
@@ -106,20 +78,7 @@ pub fn hover_row_bordered(
     border: f32,
     report: impl Fn(bool, Bounds<Pixels>, Modifiers, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    let bounds = Rc::new(Cell::new(Bounds::default()));
-    let set = bounds.clone();
-    el.relative()
-        .child(
-            canvas(move |b, _, _| set.set(b), |_, _, _, _| {})
-                .absolute()
-                .top(px(-border))
-                .left(px(-border))
-                .right(px(-border))
-                .bottom(px(-border)),
-        )
-        .on_hover(move |over, window, cx| {
-            report(*over, bounds.get(), window.modifiers(), window, cx)
-        })
+    tft_app::ui::hover_row_bordered(el, border, report)
 }
 
 /// The link under the pointer, whether or not a popover is up for it.

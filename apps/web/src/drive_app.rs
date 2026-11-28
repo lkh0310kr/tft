@@ -1,27 +1,20 @@
 //! GPUI Web entry flow for configuring Drive, opening a Vault and saving notes.
 
 use crate::web_workspace::{WebWorkspace, WebWorkspaceEvent};
-use gpui::{
-    actions, div, prelude::*, px, App, Context, Entity, KeyBinding, Render, SharedString,
-    Subscription, Window,
-};
+#[cfg(feature = "drive-smoke-test")]
+use gpui::App;
+use gpui::{div, prelude::*, px, Context, Entity, Render, SharedString, Subscription, Window};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tft_app::formats::config::AppearanceConfig;
+use tft_app::formats::config::{
+    AppConfig, AppearanceConfig, GraphConfig, Hotkeys, PagePreviewConfig, SwitcherConfig,
+};
+use tft_app::prompt::{Prompt, PromptEvent, PromptSpec};
 use tft_app::text_input::TextInput;
 use tft_app::theme::Theme;
 use tft_app::ui;
 use tft_app::{FileOperationRequest, NodeId, VaultData};
 use tft_drive_web::{self as drive, IndexedFile, VaultIndex};
-
-actions!(drive_app, [SaveCurrent]);
-
-pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-s", SaveCurrent, None),
-        KeyBinding::new("ctrl-s", SaveCurrent, None),
-    ]);
-}
 
 struct PendingVault {
     id: String,
@@ -30,12 +23,80 @@ struct PendingVault {
     entries: Vec<IndexedFile>,
     initial_node: Option<NodeId>,
     appearance: AppearanceConfig,
+    app_config: AppConfig,
+    switcher_config: SwitcherConfig,
+    page_preview_config: PagePreviewConfig,
+    graph_config: GraphConfig,
+    graph_config_disk_json: Option<String>,
+    hotkeys: Hotkeys,
+    workspace_state: Option<String>,
 }
 
 struct CreatedDriveNote {
     id: String,
     name: String,
+    path: String,
     contents: String,
+    kind: tft_formats::FileKind,
+}
+
+struct CreatedDriveFolder {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Clone)]
+enum PendingDrivePrompt {
+    CreateNote {
+        parent: String,
+    },
+    CreateCanvas {
+        parent: String,
+    },
+    CreateFolder {
+        parent: String,
+    },
+    CanvasEdgeLabel {
+        file: NodeId,
+        edge_id: String,
+    },
+    RenameInput {
+        from: String,
+    },
+    MoveInput {
+        from: String,
+    },
+    RenameHeading {
+        path: String,
+        line: u32,
+    },
+    DuplicateFile {
+        source_path: String,
+        source_id: String,
+        parent_path: String,
+        parent_id: String,
+        kind: tft_formats::FileKind,
+    },
+    DeleteFile {
+        path: String,
+        node: NodeId,
+        id: String,
+    },
+    Rename {
+        from: String,
+        to: String,
+        rewrites: Vec<tft_cache::Rewrite>,
+    },
+    MoveConfirm {
+        from: String,
+        to: String,
+        destination: String,
+        file_id: String,
+        source_parent_id: String,
+        destination_parent_id: String,
+        rewrites: Vec<tft_cache::Rewrite>,
+    },
 }
 
 pub struct DriveApp {
@@ -46,8 +107,15 @@ pub struct DriveApp {
     busy: bool,
     pending: Option<PendingVault>,
     pending_note: Option<CreatedDriveNote>,
+    pending_folder: Option<CreatedDriveFolder>,
     workspace: Option<Entity<WebWorkspace>>,
     workspace_subscription: Option<Subscription>,
+    prompt: Entity<Prompt>,
+    _prompt_subscription: Subscription,
+    prompt_open: bool,
+    pending_drive_prompt: Option<PendingDrivePrompt>,
+    pending_rename_start: Option<(String, String)>,
+    pending_move_start: Option<(String, String)>,
     vault_id: String,
     vault_epoch: u64,
     vault_name: String,
@@ -58,6 +126,12 @@ pub struct DriveApp {
     pending_saves: HashMap<NodeId, (u64, String)>,
     dirty_nodes: HashMap<NodeId, String>,
     close_when_saved: bool,
+    reopen_after_sign_in: bool,
+    pending_workspace_state: Option<String>,
+    workspace_saving: bool,
+    vault_workspace_epoch: u64,
+    last_graph_config: Option<String>,
+    pending_heading_rename: Option<(String, u32, String)>,
 }
 
 impl DriveApp {
@@ -65,9 +139,21 @@ impl DriveApp {
         let (client_id, api_key, _) = drive::config();
         let client_id_input = cx.new(|cx| TextInput::new("Google OAuth Client ID", cx));
         let api_key_input = cx.new(|cx| TextInput::new("Google Picker API key", cx));
-        client_id_input.update(cx, |input, cx| input.set_text(client_id, cx));
+        client_id_input.update(cx, |input, cx| input.set_text(client_id.clone(), cx));
         api_key_input.update(cx, |input, cx| input.set_text(api_key, cx));
-        Self {
+        let prompt = cx.new(Prompt::new);
+        let prompt_subscription =
+            cx.subscribe(&prompt, |this, _, event: &PromptEvent, cx| match event {
+                PromptEvent::Submit(name) => this.submit_drive_prompt(name.clone(), cx),
+                PromptEvent::Cancel => {
+                    this.prompt_open = false;
+                    this.pending_drive_prompt = None;
+                    cx.notify();
+                }
+                PromptEvent::Secondary => this.submit_drive_secondary(cx),
+                _ => {}
+            });
+        let mut app = Self {
             client_id: client_id_input,
             api_key: api_key_input,
             status: "Configure Google Drive access to open a Vault.".into(),
@@ -75,8 +161,15 @@ impl DriveApp {
             busy: false,
             pending: None,
             pending_note: None,
+            pending_folder: None,
             workspace: None,
             workspace_subscription: None,
+            prompt,
+            _prompt_subscription: prompt_subscription,
+            prompt_open: false,
+            pending_drive_prompt: None,
+            pending_rename_start: None,
+            pending_move_start: None,
             vault_id: String::new(),
             vault_epoch: 0,
             vault_name: String::new(),
@@ -87,7 +180,50 @@ impl DriveApp {
             pending_saves: HashMap::new(),
             dirty_nodes: HashMap::new(),
             close_when_saved: false,
+            reopen_after_sign_in: false,
+            pending_workspace_state: None,
+            workspace_saving: false,
+            vault_workspace_epoch: 0,
+            last_graph_config: None,
+            pending_heading_rename: None,
+        };
+        if !client_id.trim().is_empty() {
+            app.busy = true;
+            app.status = "Restoring your Google session…".into();
+            cx.spawn(async move |this, cx| {
+                let result = async {
+                    drive::try_resume_sign_in(&client_id).await?;
+                    match drive::last_vault() {
+                        Some((id, name)) => load_vault(id, name).await.map(Some),
+                        None => Ok(None),
+                    }
+                }
+                .await;
+                this.update(cx, |app, cx| {
+                    app.busy = false;
+                    match result {
+                        Ok(Some(vault)) => {
+                            app.signed_in = true;
+                            app.status = format!("Restored {}.", vault.name);
+                            app.pending = Some(vault);
+                        }
+                        Ok(None) => {
+                            app.signed_in = true;
+                            app.status = "Signed in. Choose a Drive folder to open as a Vault.".into();
+                        }
+                        Err(error) => {
+                            app.status = format!(
+                                "Could not resume the Google session: {error}. Reconnect to continue to your last Vault."
+                            );
+                        }
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
         }
+        app
     }
 
     fn configure(&mut self, cx: &mut Context<Self>) {
@@ -96,8 +232,11 @@ impl DriveApp {
         if client_id.is_empty() {
             self.status = "Enter the OAuth Client ID first.".into();
         } else {
-            drive::save_config(&client_id, &api_key);
-            self.status = "Drive configuration saved in this browser.".into();
+            self.status = if drive::save_config(&client_id, &api_key) {
+                "Drive configuration saved in this browser.".into()
+            } else {
+                "Drive configuration is active for this session but could not be saved in browser storage.".into()
+            };
         }
         cx.notify();
     }
@@ -110,7 +249,7 @@ impl DriveApp {
             cx.notify();
             return;
         }
-        drive::save_config(&client_id, &api_key);
+        let config_persisted = drive::save_config(&client_id, &api_key);
         // Call GIS inside the click callback to retain the browser's transient
         // activation. Only the resulting Promise is awaited asynchronously.
         let promise = match drive::begin_sign_in(&client_id) {
@@ -122,7 +261,11 @@ impl DriveApp {
             }
         };
         self.busy = true;
-        self.status = "Waiting for Google sign-in…".into();
+        self.status = if config_persisted {
+            "Waiting for Google sign-in…".into()
+        } else {
+            "Waiting for Google sign-in… Drive settings could not be saved in browser storage.".into()
+        };
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = drive::finish_sign_in(promise).await;
@@ -131,7 +274,13 @@ impl DriveApp {
                 match result {
                     Ok(()) => {
                         app.signed_in = true;
-                        app.status = "Signed in. Choose a Drive folder to open as a Vault.".into();
+                        if app.reopen_after_sign_in {
+                            app.reopen_after_sign_in = false;
+                            app.open_last_vault(cx);
+                        } else {
+                            app.status =
+                                "Signed in. Choose a Drive folder to open as a Vault.".into();
+                        }
                     }
                     Err(error) => {
                         app.status = format!("Sign-in failed: {error}");
@@ -200,6 +349,121 @@ impl DriveApp {
         self.load_vault_id(id, name, cx);
     }
 
+    fn continue_to_last_vault(&mut self, cx: &mut Context<Self>) {
+        self.reopen_after_sign_in = true;
+        self.sign_in(cx);
+    }
+
+    fn schedule_workspace_save(&mut self, state: String, cx: &mut Context<Self>) {
+        if !self.vault_id.is_empty() && !drive::save_local_workspace_state(&self.vault_id, &state) {
+            self.status =
+                "Browser storage is unavailable; workspace recovery relies on Google Drive.".into();
+            cx.notify();
+        }
+        self.pending_workspace_state = Some(state);
+        if self.workspace_saving {
+            return;
+        }
+        let epoch = self.vault_workspace_epoch;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(450))
+                .await;
+            this.update(cx, |app, cx| {
+                if app.vault_workspace_epoch != epoch || app.workspace_saving {
+                    return;
+                }
+                app.start_workspace_save(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn start_workspace_save(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.pending_workspace_state.take() else {
+            return;
+        };
+        if self.vault_id.is_empty() {
+            return;
+        }
+        let root_id = self.vault_id.clone();
+        let saved_state = state.clone();
+        let graph_config = serde_json::from_str::<serde_json::Value>(&state)
+            .ok()
+            .and_then(|value| value.get("graphConfig").cloned())
+            .and_then(|value| serde_json::from_value::<GraphConfig>(value).ok());
+        let graph_config_json = graph_config
+            .as_ref()
+            .and_then(|config| serde_json::to_string(config).ok());
+        let save_graph_config = graph_config_json
+            .as_ref()
+            .is_some_and(|config| self.last_graph_config.as_ref() != Some(config));
+        let has_graph_config = graph_config.is_some();
+        let graph_config_to_save = save_graph_config.then_some(graph_config).flatten();
+        let graph_config_json_to_save = save_graph_config.then_some(graph_config_json).flatten();
+        let epoch = self.vault_workspace_epoch;
+        self.workspace_saving = true;
+        cx.spawn(async move |this, cx| {
+            let graph_result = if let Some(config) = graph_config_to_save.as_ref() {
+                Some(drive::write_graph_config(&root_id, config).await)
+            } else {
+                None
+            };
+            let graph_saved = graph_result.as_ref().is_none_or(Result::is_ok);
+            let state_for_drive = if graph_saved && has_graph_config {
+                let mut value = serde_json::from_str::<serde_json::Value>(&state).ok();
+                if let Some(object) = value.as_mut().and_then(serde_json::Value::as_object_mut) {
+                    object.remove("graphConfig");
+                }
+                value
+                    .and_then(|value| serde_json::to_string(&value).ok())
+                    .unwrap_or_else(|| state.clone())
+            } else {
+                state.clone()
+            };
+            let result = drive::write_web_workspace_state(&root_id, &state_for_drive).await;
+            this.update(cx, |app, cx| {
+                if app.vault_workspace_epoch != epoch {
+                    return;
+                }
+                app.workspace_saving = false;
+                match result {
+                    Ok(()) => {
+                        if graph_saved {
+                            drive::clear_local_workspace_state(&root_id, &saved_state);
+                        }
+                        if let (Some(config_json), Some(Ok(()))) =
+                            (graph_config_json_to_save, graph_result.as_ref())
+                        {
+                            app.last_graph_config = Some(config_json);
+                        }
+                        match graph_result {
+                            Some(Err(error)) => {
+                                app.status = format!(
+                                    "Workspace saved, but Graph settings could not be saved: {error}"
+                                );
+                            }
+                            Some(Ok(())) => {
+                                app.status = "Workspace and Graph settings saved to Google Drive.".into();
+                            }
+                            None => app.status = "Workspace saved to Google Drive.".into(),
+                        }
+                    }
+                    Err(error) => {
+                        app.status = format!("Workspace state could not be saved: {error}");
+                    }
+                }
+                if app.pending_workspace_state.is_some() {
+                    app.start_workspace_save(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn load_vault_id(&mut self, id: String, name: String, cx: &mut Context<Self>) {
         self.busy = true;
         self.status = format!("Loading {name}…");
@@ -255,37 +519,834 @@ impl DriveApp {
         self.save_to_drive(node, contents, generation, cx);
     }
 
-    fn create_note(&mut self, parent_path: &str, cx: &mut Context<Self>) {
+    fn submit_drive_prompt(&mut self, name: String, cx: &mut Context<Self>) {
+        self.prompt_open = false;
+        match self.pending_drive_prompt.clone() {
+            Some(PendingDrivePrompt::CreateNote { parent }) => {
+                self.create_note_named(&parent, name, cx)
+            }
+            Some(PendingDrivePrompt::CreateCanvas { parent }) => {
+                self.create_canvas_named(&parent, name, cx)
+            }
+            Some(PendingDrivePrompt::CreateFolder { parent }) => {
+                self.create_folder_named(&parent, name, cx)
+            }
+            Some(PendingDrivePrompt::CanvasEdgeLabel { file, edge_id }) => {
+                if let Some(workspace) = self.workspace.as_ref() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.set_canvas_edge_label(file, edge_id, name, cx)
+                    });
+                }
+                self.pending_drive_prompt = None;
+            }
+            Some(PendingDrivePrompt::RenameInput { from }) => {
+                self.pending_drive_prompt = None;
+                let name = name.trim();
+                if !name.is_empty() {
+                    let (parent, file_name) = from.rsplit_once('/').unwrap_or(("", &from));
+                    let renamed = match file_name.rsplit_once('.') {
+                        Some((_, extension)) => format!("{name}.{extension}"),
+                        None => name.to_owned(),
+                    };
+                    let to = if parent.is_empty() {
+                        renamed
+                    } else {
+                        format!("{parent}/{renamed}")
+                    };
+                    if to != from {
+                        self.pending_rename_start = Some((from, to));
+                    }
+                }
+            }
+            Some(PendingDrivePrompt::MoveInput { from }) => {
+                self.pending_drive_prompt = None;
+                self.pending_move_start = Some((from, name.trim().to_owned()));
+            }
+            Some(PendingDrivePrompt::RenameHeading { path, line }) => {
+                self.pending_drive_prompt = None;
+                self.pending_heading_rename = Some((path, line, name.trim().to_owned()));
+            }
+            Some(PendingDrivePrompt::DuplicateFile {
+                source_path,
+                source_id,
+                parent_path,
+                parent_id,
+                kind,
+            }) => self.duplicate_drive_file(
+                source_path,
+                source_id,
+                parent_path,
+                parent_id,
+                kind,
+                name,
+                cx,
+            ),
+            Some(PendingDrivePrompt::DeleteFile { path, node, id }) => {
+                self.pending_drive_prompt = None;
+                if self.dirty_nodes.contains_key(&node)
+                    || self.saving_nodes.contains(&node)
+                    || self.pending_saves.contains_key(&node)
+                {
+                    self.status = format!("Save {path} before moving it to trash.");
+                    return;
+                }
+                self.trash_drive_file(path, node, id, cx);
+            }
+            Some(PendingDrivePrompt::Rename { from, to, rewrites }) => {
+                self.pending_drive_prompt = None;
+                self.finish_drive_rename(from, to, rewrites, true, cx);
+            }
+            Some(PendingDrivePrompt::MoveConfirm {
+                from,
+                to,
+                destination,
+                file_id,
+                source_parent_id,
+                destination_parent_id,
+                rewrites,
+            }) => {
+                self.pending_drive_prompt = None;
+                self.finish_drive_move(
+                    from,
+                    to,
+                    destination,
+                    file_id,
+                    source_parent_id,
+                    destination_parent_id,
+                    rewrites,
+                    true,
+                    cx,
+                );
+            }
+            None => {}
+        }
+        cx.notify();
+    }
+
+    fn submit_drive_secondary(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.pending_drive_prompt,
+            Some(PendingDrivePrompt::DeleteFile { .. })
+        ) {
+            self.pending_drive_prompt = None;
+            self.prompt_open = false;
+            cx.notify();
+            return;
+        }
+        let Some(pending) = self.pending_drive_prompt.take() else { return; };
+        self.prompt_open = false;
+        match pending {
+            PendingDrivePrompt::Rename { from, to, rewrites } => {
+                self.finish_drive_rename(from, to, rewrites, false, cx)
+            }
+            PendingDrivePrompt::MoveConfirm {
+                from,
+                to,
+                destination,
+                file_id,
+                source_parent_id,
+                destination_parent_id,
+                rewrites,
+            } => self.finish_drive_move(
+                from,
+                to,
+                destination,
+                file_id,
+                source_parent_id,
+                destination_parent_id,
+                rewrites,
+                false,
+                cx,
+            ),
+            other => self.pending_drive_prompt = Some(other),
+        }
+    }
+
+    fn trash_drive_file(&mut self, path: String, node: NodeId, id: String, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
-        if !parent_path.is_empty() {
-            self.status =
-                "Folder-scoped note creation is not wired to the Drive adapter yet.".into();
+        if self.dirty_nodes.contains_key(&node)
+            || self.saving_nodes.contains(&node)
+            || self.pending_saves.contains_key(&node)
+        {
+            self.status = format!("Save {path} before moving it to trash.");
             cx.notify();
+            return;
+        }
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        self.busy = true;
+        self.status = format!("Moving {path} to Google Drive trash…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = drive::trash_entry(&id).await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok(()) => {
+                        app.entries.retain(|entry| entry.node != node && entry.path != path);
+                        app.dirty_nodes.remove(&node);
+                        app.pending_saves.remove(&node);
+                        app.saving_nodes.remove(&node);
+                        app.save_generation.remove(&node);
+                        app.status = match workspace.update(cx, |workspace, cx| {
+                            workspace.remove_drive_file(node, &path, cx)
+                        }) {
+                            Ok(()) => format!("Moved {path} to Google Drive trash."),
+                            Err(error) => format!("Moved {path} to Drive trash, but could not update the open workspace: {error}"),
+                        };
+                    }
+                    Err(error) => app.status = format!("Could not move {path} to trash: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_drive_heading_rename(
+        &mut self,
+        path: String,
+        line: u32,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if name.is_empty() || self.busy {
             return;
         }
         let Some(workspace) = self.workspace.as_ref() else {
             return;
         };
-        let mut name = drive::ask("New Markdown note name", "Untitled");
+        let own_text = {
+            let workspace = workspace.read(cx);
+            let Some((_node, contents)) = workspace.current_document(cx) else {
+                return;
+            };
+            if workspace.current_path() != Some(path.as_str()) {
+                self.status = "The active note changed before the heading rename was applied.".into();
+                cx.notify();
+                return;
+            }
+            contents
+        };
+        let plan = workspace
+            .read(cx)
+            .plan_heading_rename(&path, line, name, &own_text);
+        let Some(plan) = plan else {
+            return;
+        };
+        let heading_name = plan.heading.text.clone();
+        let result = workspace.update(cx, |workspace, cx| {
+            workspace.apply_heading_rename(&path, &plan, window, cx)
+        });
+        match result {
+            Ok(()) => {
+                self.status = format!("Renamed heading '{heading_name}' in {path}.");
+            }
+            Err(error) => self.status = error,
+        }
+        cx.notify();
+    }
+
+    fn start_drive_rename(
+        &mut self,
+        from: &str,
+        to: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let rewrites = match workspace.read(cx).plan_drive_rename(from, to) {
+            Ok(rewrites) => rewrites,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return;
+            }
+        };
+        let update_automatically = workspace.read(cx).always_update_links();
+        if rewrites.is_empty() || update_automatically {
+            self.finish_drive_rename(from.to_owned(), to.to_owned(), rewrites, true, cx);
+            return;
+        }
+        let link_count = rewrites.iter().map(|rewrite| rewrite.links).sum::<usize>();
+        let file_count = rewrites.len();
+        self.pending_drive_prompt = Some(PendingDrivePrompt::Rename {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            rewrites,
+        });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "Update links?".into(),
+                    detail: vec![format!(
+                        "Update {link_count} link{} in {file_count} file{} to follow this rename?",
+                        if link_count == 1 { "" } else { "s" },
+                        if file_count == 1 { "" } else { "s" },
+                    )
+                    .into()],
+                    confirm: "Update links".into(),
+                    secondary: Some("Don't update".into()),
+                    no_enter: true,
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn request_drive_move(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let suggestions = workspace
+            .read(cx)
+            .move_destination_suggestions(&path)
+            .unwrap_or_default();
+        self.pending_drive_prompt = Some(PendingDrivePrompt::MoveInput { from: path.clone() });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "Move file to...".into(),
+                    detail: vec![path.into()],
+                    input: Some(String::new()),
+                    placeholder: "Type a folder".into(),
+                    suggestions,
+                    confirm: "Move".into(),
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn start_drive_move(
+        &mut self,
+        from: String,
+        destination: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        let destination = destination.trim_matches('/').to_owned();
+        let name = from.rsplit('/').next().unwrap_or(&from);
+        let to = if destination.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{destination}/{name}")
+        };
+        if to == from {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let (rewrites, file_id, source_parent_id, destination_parent_id, update_automatically) = {
+            let workspace = workspace.read(cx);
+            let rewrites = match workspace.plan_drive_rename(&from, &to) {
+                Ok(rewrites) => rewrites,
+                Err(error) => {
+                    self.status = error;
+                    cx.notify();
+                    return;
+                }
+            };
+            let source_parent = from.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            let Some(file_id) = workspace.drive_file_id(&from) else {
+                self.status = format!("Could not find the Drive file for {from}.");
+                cx.notify();
+                return;
+            };
+            let Some(source_parent_id) = workspace.drive_folder_id(source_parent) else {
+                self.status = format!("Could not find the source Drive folder for {from}.");
+                cx.notify();
+                return;
+            };
+            let Some(destination_parent_id) = workspace.drive_folder_id(&destination) else {
+                self.status = format!("Could not find destination folder: {destination}");
+                cx.notify();
+                return;
+            };
+            (
+                rewrites,
+                file_id,
+                source_parent_id,
+                destination_parent_id,
+                workspace.always_update_links(),
+            )
+        };
+        if rewrites.is_empty() || update_automatically {
+            self.finish_drive_move(
+                from,
+                to,
+                destination,
+                file_id,
+                source_parent_id,
+                destination_parent_id,
+                rewrites,
+                true,
+                cx,
+            );
+            return;
+        }
+        let link_count = rewrites.iter().map(|rewrite| rewrite.links).sum::<usize>();
+        let file_count = rewrites.len();
+        self.pending_drive_prompt = Some(PendingDrivePrompt::MoveConfirm {
+            from: from.clone(),
+            to,
+            destination,
+            file_id,
+            source_parent_id,
+            destination_parent_id,
+            rewrites,
+        });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "Update links?".into(),
+                    detail: vec![format!(
+                        "Move {from} and update {link_count} link{} in {file_count} file{}?",
+                        if link_count == 1 { "" } else { "s" },
+                        if file_count == 1 { "" } else { "s" },
+                    )
+                    .into()],
+                    confirm: "Update links".into(),
+                    secondary: Some("Don't update".into()),
+                    no_enter: true,
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn finish_drive_move(
+        &mut self,
+        from: String,
+        to: String,
+        destination: String,
+        file_id: String,
+        source_parent_id: String,
+        destination_parent_id: String,
+        rewrites: Vec<tft_cache::Rewrite>,
+        update_links: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let rewrite_writes = if update_links {
+            let mut writes = Vec::new();
+            for rewrite in rewrites {
+                let Some(id) = workspace.read(cx).drive_file_id(&rewrite.old_path) else {
+                    self.status = format!("Could not find the Drive file for {}.", rewrite.old_path);
+                    cx.notify();
+                    return;
+                };
+                writes.push((id, rewrite));
+            }
+            writes
+        } else {
+            Vec::new()
+        };
+        self.busy = true;
+        self.status = format!("Moving {from} to {destination} in Drive…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let move_etag = drive::move_entry(&file_id, &destination_parent_id, &source_parent_id).await?;
+                let mut applied = Vec::new();
+                let mut failed = Vec::new();
+                for (id, rewrite) in rewrite_writes {
+                    match drive::write_file(&id, &rewrite.text, None).await {
+                        Ok(etag) => applied.push((rewrite, etag, id)),
+                        Err(error) => failed.push(format!("{}: {error}", rewrite.old_path)),
+                    }
+                }
+                Ok::<_, String>((applied, failed, move_etag))
+            }
+            .await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok((applied, failed, move_etag)) => {
+                        let rewritten = applied.iter().map(|(rewrite, _, _)| rewrite.clone()).collect::<Vec<_>>();
+                        let update_result = workspace.update(cx, |workspace, cx| {
+                            workspace.apply_drive_move(&from, &to, &destination, &rewritten, cx)
+                        });
+                        for (_, etag, id) in &applied {
+                            if let Some(entry) = app.entries.iter_mut().find(|entry| &entry.id == id) {
+                                entry.etag = etag.clone();
+                            }
+                        }
+                        if let Some(entry) = app.entries.iter_mut().find(|entry| entry.id == file_id) {
+                            entry.etag = move_etag;
+                            entry.path = to.clone();
+                        }
+                        if let Err(error) = update_result {
+                            app.status = format!("Drive moved the file, but the workspace could not update: {error}");
+                        } else if failed.is_empty() {
+                            app.status = format!("Moved {from} to {to}.");
+                        } else {
+                            app.status = format!("Moved {from} to {to}; some links could not be updated: {}", failed.join("; "));
+                        }
+                    }
+                    Err(error) => app.status = format!("Could not move {from}: {error}"),
+                }
+                app.prompt_open = false;
+                app.pending_drive_prompt = None;
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    fn duplicate_drive_file(
+        &mut self,
+        source_path: String,
+        source_id: String,
+        parent_path: String,
+        parent_id: String,
+        kind: tft_formats::FileKind,
+        input: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let mut name = input.trim().to_owned();
+        if name.is_empty() {
+            self.prompt_open = true;
+            self.prompt.update(cx, |prompt, cx| {
+                prompt.set_error("Enter a name for the copy.", cx)
+            });
+            cx.notify();
+            return;
+        }
+        let source_name = source_path.rsplit('/').next().unwrap_or(&source_path);
+        if let Some((_, extension)) = source_name.rsplit_once('.') {
+            if !name
+                .to_ascii_lowercase()
+                .ends_with(&format!(".{}", extension.to_ascii_lowercase()))
+            {
+                name.push('.');
+                name.push_str(extension);
+            }
+        }
+        if let Err(error) = workspace.read(cx).can_create_note(&parent_path, &name) {
+            self.prompt_open = true;
+            self.prompt
+                .update(cx, |prompt, cx| prompt.set_error(error, cx));
+            cx.notify();
+            return;
+        }
+        self.pending_drive_prompt = None;
+        self.busy = true;
+        self.status = format!("Copying {source_path} in Google Drive…");
+        cx.notify();
+        let workspace = workspace.clone();
+        let vault_id = parent_id.clone();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let copied = drive::duplicate_entry(&source_id, &vault_id, &name).await?;
+                let contents = if matches!(kind, tft_formats::FileKind::Markdown | tft_formats::FileKind::Canvas) {
+                    match drive::read_file(&copied.id).await {
+                        Ok(contents) => Some(contents),
+                        Err(error) => {
+                            let cleanup = drive::delete_entry(&copied.id).await;
+                            return Err(match cleanup {
+                                Ok(()) => format!("Could not read the copy and removed it: {error}"),
+                                Err(cleanup_error) => format!("Could not read the copy: {error}; cleanup failed: {cleanup_error}"),
+                            });
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok::<_, String>((copied, contents))
+            }
+            .await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok((copied, contents)) => {
+                        let copied_path = if parent_path.is_empty() {
+                            copied.name.clone()
+                        } else {
+                            format!("{parent_path}/{}", copied.name)
+                        };
+                        let size = copied
+                            .size
+                            .as_deref()
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        match workspace.update(cx, |workspace, cx| {
+                            workspace.insert_drive_copy(
+                                copied.id.clone(),
+                                copied.name.clone(),
+                                copied_path.clone(),
+                                kind,
+                                size,
+                                copied.modified_millis(),
+                                copied.created_millis(),
+                                contents,
+                                cx,
+                            )
+                        }) {
+                            Ok(node) => {
+                                app.entries.push(IndexedFile {
+                                    node,
+                                    path: copied_path.clone(),
+                                    kind,
+                                    id: copied.id,
+                                    etag: copied.etag,
+                                });
+                                app.status = format!("Created copy {copied_path}.");
+                            }
+                            Err(error) => {
+                                let copied_id = copied.id.clone();
+                                let failure = format!("TFT could not index the Drive copy: {error}");
+                                app.status = format!("{failure}; removing the unindexed copy…");
+                                cx.spawn(async move |this, cx| {
+                                    let cleanup = drive::delete_entry(&copied_id).await;
+                                    this.update(cx, |app, cx| {
+                                        app.status = match cleanup {
+                                            Ok(()) => format!("{failure}. The unindexed copy was removed."),
+                                            Err(cleanup_error) => format!("{failure}; cleanup failed: {cleanup_error}"),
+                                        };
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                })
+                                .detach();
+                            }
+                        }
+                    }
+                    Err(error) => app.status = format!("Could not copy {source_path}: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_drive_rename(
+        &mut self,
+        from: String,
+        to: String,
+        _rewrites: Vec<tft_cache::Rewrite>,
+        update_links: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let rewrites = match workspace.read(cx).plan_drive_rename(&from, &to) {
+            Ok(rewrites) => rewrites,
+            Err(error) => {
+                self.status = error;
+                cx.notify();
+                return;
+            }
+        };
+        let Some(file_id) = workspace.read(cx).drive_file_id(&from) else {
+            self.status = format!("Could not find the Drive file for {from}.");
+            cx.notify();
+            return;
+        };
+        let rewrite_writes = if update_links {
+            let mut writes = Vec::new();
+            for rewrite in rewrites {
+                let Some(id) = workspace.read(cx).drive_file_id(&rewrite.old_path) else {
+                    self.status =
+                        format!("Could not find the Drive file for {}.", rewrite.old_path);
+                    cx.notify();
+                    return;
+                };
+                writes.push((id, rewrite));
+            }
+            writes
+        } else {
+            Vec::new()
+        };
+        let name = to.rsplit('/').next().unwrap_or(&to).to_owned();
+        let workspace = workspace.clone();
+        self.busy = true;
+        self.status = format!("Renaming {from} in Drive…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                let rename_etag = drive::rename_entry_with_etag(&file_id, &name).await?;
+                let mut applied = Vec::new();
+                let mut failed = Vec::new();
+                for (id, rewrite) in rewrite_writes {
+                    match drive::write_file(&id, &rewrite.text, None).await {
+                        Ok(etag) => applied.push((rewrite, etag, id)),
+                        Err(error) => failed.push(format!("{}: {error}", rewrite.old_path)),
+                    }
+                }
+                Ok::<_, String>((applied, failed, rename_etag))
+            }
+            .await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok((applied, failed, rename_etag)) => {
+                        let rewritten = applied
+                            .iter()
+                            .map(|(rewrite, _, _)| rewrite.clone())
+                            .collect::<Vec<_>>();
+                        let update_result = workspace.update(cx, |workspace, cx| {
+                            workspace.apply_drive_rename(&from, &to, &rewritten, cx)
+                        });
+                        for (_, etag, id) in &applied {
+                            if let Some(entry) = app.entries.iter_mut().find(|entry| &entry.id == id)
+                            {
+                                entry.etag = etag.clone();
+                            }
+                        }
+                        if let Some(entry) = app.entries.iter_mut().find(|entry| entry.id == file_id)
+                        {
+                            entry.etag = rename_etag;
+                        }
+                        if let Err(error) = update_result {
+                            app.status = format!("Drive renamed the file, but the workspace could not update: {error}");
+                        } else if failed.is_empty() {
+                            app.status = format!("Renamed {from} to {to}.");
+                        } else {
+                            app.status = format!("Renamed {from} to {to}; some links could not be updated: {}", failed.join("; "));
+                        }
+                        for entry in &mut app.entries {
+                            if entry.path == from {
+                                entry.path = to.clone();
+                            }
+                        }
+                    }
+                    Err(error) => app.status = format!("Could not rename {from}: {error}"),
+                }
+                app.prompt_open = false;
+                app.pending_drive_prompt = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn create_note(&mut self, parent_path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_note_with_initial(parent_path, "Untitled", window, cx);
+    }
+
+    fn create_note_with_initial(
+        &mut self,
+        parent_path: &str,
+        initial: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        self.pending_drive_prompt = Some(PendingDrivePrompt::CreateNote {
+            parent: parent_path.to_owned(),
+        });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "New Markdown note".into(),
+                    input: Some(initial.to_owned()),
+                    placeholder: "Name".into(),
+                    confirm: "Create".into(),
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn create_note_named(&mut self, parent_path: &str, name: String, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let mut name = name;
         name = name.trim().to_owned();
         if name.is_empty() {
+            self.prompt_open = true;
+            self.prompt
+                .update(cx, |prompt, cx| prompt.set_error("Enter a note name.", cx));
+            cx.notify();
             return;
         }
         if !name.to_ascii_lowercase().ends_with(".md") {
             name.push_str(".md");
         }
-        if let Err(error) = workspace.read(cx).can_create_root_note(&name) {
-            self.status = error;
+        if let Err(error) = workspace.read(cx).can_create_note(parent_path, &name) {
+            let error = error.to_string();
+            self.status = error.clone();
+            self.prompt_open = true;
+            self.prompt
+                .update(cx, |prompt, cx| prompt.set_error(error, cx));
             cx.notify();
             return;
         }
         let title = name.strip_suffix(".md").unwrap_or(&name).to_owned();
         let contents = format!("# {title}\n\n");
-        let parent = self.vault_id.clone();
+        let (parent, path) = {
+            let workspace = workspace.read(cx);
+            let Some(parent) = workspace.drive_folder_id(parent_path) else {
+                self.status = format!("Could not find Drive folder: {parent_path}");
+                cx.notify();
+                return;
+            };
+            let path = if parent_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent_path}/{name}")
+            };
+            (parent, path)
+        };
+        self.pending_drive_prompt = None;
         self.busy = true;
-        self.status = format!("Creating {name} in Drive…");
+        self.status = format!("Creating {path} in Drive…");
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = drive::create_note_with_id(&parent, &name).await;
@@ -296,11 +1357,259 @@ impl DriveApp {
                         app.pending_note = Some(CreatedDriveNote {
                             id,
                             name: name.clone(),
+                            path: path.clone(),
                             contents,
+                            kind: tft_formats::FileKind::Markdown,
                         });
-                        app.status = format!("Created {} in Drive.", name);
+                        app.status = format!("Created {} in Drive.", path);
                     }
                     Err(error) => app.status = format!("Could not create note: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn create_folder(&mut self, parent_path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.pending_drive_prompt = Some(PendingDrivePrompt::CreateFolder {
+            parent: parent_path.to_owned(),
+        });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "New folder".into(),
+                    input: Some("Untitled folder".into()),
+                    placeholder: "Folder name".into(),
+                    confirm: "Create".into(),
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn create_canvas(&mut self, parent_path: &str, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let (parent, name, path) = {
+            let workspace = workspace.read(cx);
+            let Some(parent) = workspace.drive_folder_id(parent_path) else {
+                self.status = format!("Could not find Drive folder: {parent_path}");
+                cx.notify();
+                return;
+            };
+            let mut index = 0usize;
+            let (name, path) = loop {
+                let stem = if index == 0 {
+                    "Untitled".to_owned()
+                } else {
+                    format!("Untitled {index}")
+                };
+                let name = format!("{stem}.canvas");
+                if workspace.can_create_note(parent_path, &name).is_ok() {
+                    let path = if parent_path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{parent_path}/{name}")
+                    };
+                    break (name, path);
+                }
+                index += 1;
+            };
+            (parent, name, path)
+        };
+        self.busy = true;
+        self.status = format!("Creating {path} in Drive…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = drive::create_empty_file_with_id(&parent, &name).await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok(id) => {
+                        app.pending_note = Some(CreatedDriveNote {
+                            id,
+                            name: name.clone(),
+                            path: path.clone(),
+                            contents: String::new(),
+                            kind: tft_formats::FileKind::Canvas,
+                        });
+                        app.status = format!("Created {} in Drive.", path);
+                    }
+                    Err(error) => app.status = format!("Could not create canvas: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn create_canvas_with_initial(
+        &mut self,
+        parent_path: &str,
+        initial: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy {
+            return;
+        }
+        self.pending_drive_prompt = Some(PendingDrivePrompt::CreateCanvas {
+            parent: parent_path.to_owned(),
+        });
+        self.prompt_open = true;
+        self.prompt.update(cx, |prompt, cx| {
+            prompt.open(
+                PromptSpec {
+                    title: "New canvas".into(),
+                    input: Some(initial.to_owned()),
+                    placeholder: "Name".into(),
+                    confirm: "Create".into(),
+                    ..PromptSpec::default()
+                },
+                window,
+                cx,
+            )
+        });
+        cx.notify();
+    }
+
+    fn create_canvas_named(&mut self, parent_path: &str, mut name: String, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        name = name.trim().to_owned();
+        if name.is_empty() {
+            self.prompt_open = true;
+            self.prompt.update(cx, |prompt, cx| {
+                prompt.set_error("Enter a canvas name.", cx)
+            });
+            cx.notify();
+            return;
+        }
+        if !name.to_ascii_lowercase().ends_with(".canvas") {
+            name.push_str(".canvas");
+        }
+        if let Err(error) = workspace.read(cx).can_create_note(parent_path, &name) {
+            let error = error.to_string();
+            self.status = error.clone();
+            self.prompt_open = true;
+            self.prompt
+                .update(cx, |prompt, cx| prompt.set_error(error, cx));
+            cx.notify();
+            return;
+        }
+        let (parent, path) = {
+            let workspace = workspace.read(cx);
+            let Some(parent) = workspace.drive_folder_id(parent_path) else {
+                self.status = format!("Could not find Drive folder: {parent_path}");
+                cx.notify();
+                return;
+            };
+            let path = if parent_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{parent_path}/{name}")
+            };
+            (parent, path)
+        };
+        self.pending_drive_prompt = None;
+        self.busy = true;
+        self.status = format!("Creating {path} in Drive…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = drive::create_empty_file_with_id(&parent, &name).await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok(id) => {
+                        app.pending_note = Some(CreatedDriveNote {
+                            id,
+                            name: name.clone(),
+                            path: path.clone(),
+                            contents: String::new(),
+                            kind: tft_formats::FileKind::Canvas,
+                        });
+                        app.status = format!("Created {} in Drive.", path);
+                    }
+                    Err(error) => app.status = format!("Could not create canvas: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn create_folder_named(&mut self, parent_path: &str, name: String, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let Some(workspace) = self.workspace.as_ref() else {
+            return;
+        };
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            self.prompt_open = true;
+            self.prompt.update(cx, |prompt, cx| {
+                prompt.set_error("Enter a folder name.", cx)
+            });
+            cx.notify();
+            return;
+        }
+        if let Err(error) = workspace.read(cx).can_create_note(parent_path, &name) {
+            let error = error.to_string();
+            self.status = error.clone();
+            self.prompt_open = true;
+            self.prompt
+                .update(cx, |prompt, cx| prompt.set_error(error, cx));
+            cx.notify();
+            return;
+        }
+        let Some(parent_id) = workspace.read(cx).drive_folder_id(parent_path) else {
+            self.status = format!("Could not find Drive folder: {parent_path}");
+            cx.notify();
+            return;
+        };
+        let path = if parent_path.is_empty() {
+            name.clone()
+        } else {
+            format!("{parent_path}/{name}")
+        };
+        self.pending_drive_prompt = None;
+        self.busy = true;
+        self.status = format!("Creating folder {path} in Drive…");
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = drive::create_folder_entry(&parent_id, &name).await;
+            this.update(cx, |app, cx| {
+                app.busy = false;
+                match result {
+                    Ok(id) => {
+                        app.pending_folder = Some(CreatedDriveFolder {
+                            id,
+                            name,
+                            path: path.clone(),
+                        });
+                        app.status = format!("Created folder {path} in Drive.");
+                    }
+                    Err(error) => app.status = format!("Could not create folder: {error}"),
                 }
                 cx.notify();
             })
@@ -430,6 +1739,10 @@ impl DriveApp {
 
     fn finish_close_vault(&mut self, cx: &mut Context<Self>) {
         self.vault_epoch = self.vault_epoch.wrapping_add(1);
+        self.vault_workspace_epoch = self.vault_workspace_epoch.wrapping_add(1);
+        self.pending_workspace_state = None;
+        self.workspace_saving = false;
+        self.last_graph_config = None;
         self.workspace = None;
         self.workspace_subscription = None;
         self.entries.clear();
@@ -453,6 +1766,55 @@ impl DriveApp {
 async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
     let mut index: VaultIndex = drive::index_vault(&id).await?;
     let appearance = drive::read_appearance_config(&id).await.unwrap_or_default();
+    let app_config = drive::read_app_config(&id).await.unwrap_or_default();
+    let switcher_config = drive::read_switcher_config(&id).await.unwrap_or_default();
+    let page_preview_config = drive::read_page_preview_config(&id)
+        .await
+        .unwrap_or_default();
+    let hotkeys = drive::read_hotkeys_config(&id).await.unwrap_or_default();
+    let drive_workspace_result = drive::read_web_workspace_state(&id).await;
+    let local_workspace_state = drive::local_workspace_state(&id);
+    let workspace_state = match (local_workspace_state, drive_workspace_result) {
+        (Some(local_state), drive_result) => {
+            let drive_has_local_state = drive_result
+                .as_ref()
+                .ok()
+                .and_then(Option::as_deref)
+                == Some(local_state.as_str());
+            if !drive_has_local_state {
+                // The local copy is the recovery source when Drive reads fail.
+                // A failed read must not prevent a fresh write attempt: if the
+                // outage was transient this restores Drive immediately, while
+                // malformed or inaccessible workspace files still fail safely
+                // in write_web_workspace_state and keep the local copy.
+                if drive::write_web_workspace_state(&id, &local_state)
+                    .await
+                    .is_ok()
+                {
+                    drive::clear_local_workspace_state(&id, &local_state);
+                }
+            }
+            Some(local_state)
+        }
+        (None, Ok(drive_state)) => drive_state,
+        (None, Err(error)) => {
+            return Err(format!("Could not restore the saved workspace: {error}"));
+        }
+    };
+    let graph_config_from_file = drive::read_graph_config(&id).await?;
+    let workspace_graph_config = || {
+        workspace_state
+            .as_deref()
+            .and_then(|state| serde_json::from_str::<serde_json::Value>(state).ok())
+            .and_then(|state| state.get("graphConfig").cloned())
+            .and_then(|value| serde_json::from_value(value).ok())
+    };
+    // A graphConfig still present in tftWeb is either a local recovery copy
+    // or a legacy Web setting not yet migrated to graph.json. Successful
+    // graph.json syncs remove this duplicate, making that file canonical.
+    let graph_config = workspace_graph_config()
+        .or_else(|| graph_config_from_file.clone())
+        .unwrap_or_default();
     let loaded = drive::read_markdown_strict(&index.entries).await?;
     for (node, contents) in loaded {
         index.data.set_text(node, contents);
@@ -470,14 +1832,35 @@ async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
         entries: index.entries,
         initial_node,
         appearance,
+        app_config,
+        switcher_config,
+        page_preview_config,
+        graph_config,
+        graph_config_disk_json: graph_config_from_file
+            .as_ref()
+            .and_then(|config| serde_json::to_string(config).ok()),
+        hotkeys,
+        workspace_state,
     })
 }
 
 impl Render for DriveApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.busy {
+            if let Some((path, line, name)) = self.pending_heading_rename.take() {
+                self.finish_drive_heading_rename(path, line, &name, window, cx);
+            }
+            if let Some((from, to)) = self.pending_rename_start.take() {
+                self.start_drive_rename(&from, &to, window, cx);
+            }
+            if let Some((from, destination)) = self.pending_move_start.take() {
+                self.start_drive_move(from, destination, window, cx);
+            }
+        }
         if self.workspace.is_none() {
             if let Some(vault) = self.pending.take() {
                 self.vault_epoch = self.vault_epoch.wrapping_add(1);
+                self.vault_workspace_epoch = self.vault_workspace_epoch.wrapping_add(1);
                 cx.set_global(Theme::from_appearance(
                     &vault.appearance,
                     drive::system_is_dark(),
@@ -485,24 +1868,231 @@ impl Render for DriveApp {
                 self.vault_id = vault.id;
                 self.vault_name = vault.name;
                 self.entries = vault.entries;
+                self.last_graph_config = vault.graph_config_disk_json;
                 let vault_name = self.vault_name.clone();
+                let workspace_state = vault.workspace_state;
+                let app_config = vault.app_config;
+                let switcher_config = vault.switcher_config;
+                let page_preview_config = vault.page_preview_config;
+                let graph_config = vault.graph_config;
+                let hotkeys = vault.hotkeys;
                 let workspace = cx.new(|cx| {
-                    let mut workspace =
-                        WebWorkspace::from_vault(vault.data, vault.initial_node, window, cx);
+                    let mut workspace = WebWorkspace::from_vault_with_state(
+                        vault.data,
+                        vault.initial_node,
+                        workspace_state,
+                        app_config,
+                        switcher_config,
+                        page_preview_config,
+                        graph_config,
+                        hotkeys,
+                        window,
+                        cx,
+                    );
                     workspace.set_vault_name(vault_name, cx);
                     workspace.set_drive_controls(true, cx);
                     workspace
                 });
-                self.workspace_subscription = Some(cx.subscribe(
+                self.workspace_subscription = Some(cx.subscribe_in(
                     &workspace,
-                    |this, _, event: &WebWorkspaceEvent, cx| match event {
+                    window,
+                    |this, _, event: &WebWorkspaceEvent, window, cx| match event {
                         WebWorkspaceEvent::Edited { node, contents } => {
                             this.schedule_auto_save(*node, contents.clone(), cx)
                         }
                         WebWorkspaceEvent::FileOperationRequested(
                             FileOperationRequest::CreateNote { parent },
-                        ) => this.create_note(parent, cx),
+                        ) => this.create_note(parent, window, cx),
+                        WebWorkspaceEvent::FileOperationRequested(
+                            FileOperationRequest::CreateFolder { parent },
+                        ) => this.create_folder(parent, window, cx),
+                        WebWorkspaceEvent::CreateCanvasRequested { parent } => {
+                            this.create_canvas(parent, cx)
+                        }
+                        WebWorkspaceEvent::CreateFileFromLink { parent, name, kind } => {
+                            if *kind == tft_formats::FileKind::Canvas {
+                                this.create_canvas_with_initial(parent, name, window, cx)
+                            } else {
+                                this.create_note_with_initial(parent, name, window, cx)
+                            }
+                        }
+                        WebWorkspaceEvent::CanvasEdgeLabelRequested {
+                            file,
+                            edge_id,
+                            label,
+                        } => {
+                            this.pending_drive_prompt = Some(PendingDrivePrompt::CanvasEdgeLabel {
+                                file: *file,
+                                edge_id: edge_id.clone(),
+                            });
+                            this.prompt_open = true;
+                            this.prompt.update(cx, |prompt, cx| {
+                                prompt.open(
+                                    PromptSpec {
+                                        title: "Canvas edge label".into(),
+                                        input: Some(label.clone()),
+                                        placeholder: "Label".into(),
+                                        confirm: "Save".into(),
+                                        ..PromptSpec::default()
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                        WebWorkspaceEvent::RenameFileRequested { from, to } => {
+                            this.start_drive_rename(from, to, window, cx)
+                        }
+                        WebWorkspaceEvent::RenameFilePromptRequested { path } => {
+                            if this.busy {
+                                return;
+                            }
+                            let file_name = path.rsplit('/').next().unwrap_or(path);
+                            let initial = file_name
+                                .rsplit_once('.')
+                                .map(|(stem, _)| stem)
+                                .unwrap_or(file_name)
+                                .to_owned();
+                            this.pending_drive_prompt =
+                                Some(PendingDrivePrompt::RenameInput { from: path.clone() });
+                            this.prompt_open = true;
+                            this.prompt.update(cx, |prompt, cx| {
+                                prompt.open(
+                                    PromptSpec {
+                                        title: "Rename file".into(),
+                                        input: Some(initial),
+                                        placeholder: "File name".into(),
+                                        confirm: "Rename".into(),
+                                        ..PromptSpec::default()
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                        WebWorkspaceEvent::MoveFilePromptRequested { path } => {
+                            this.request_drive_move(path.clone(), window, cx);
+                        }
+                        WebWorkspaceEvent::RenameHeadingRequested {
+                            path,
+                            line,
+                            initial,
+                        } => {
+                            this.pending_drive_prompt = Some(PendingDrivePrompt::RenameHeading {
+                                path: path.clone(),
+                                line: *line,
+                            });
+                            this.prompt_open = true;
+                            this.prompt.update(cx, |prompt, cx| {
+                                prompt.open(
+                                    PromptSpec {
+                                        title: "Rename heading".into(),
+                                        input: Some(initial.clone()),
+                                        confirm: "Save".into(),
+                                        ..PromptSpec::default()
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                        WebWorkspaceEvent::DuplicateFileRequested { path } => {
+                            if this.busy {
+                                return;
+                            }
+                            let Some(source) =
+                                this.entries.iter().find(|entry| entry.path == *path)
+                            else {
+                                this.status = format!("Could not find the Drive file for {path}.");
+                                cx.notify();
+                                return;
+                            };
+                            let source_id = source.id.clone();
+                            let kind = source.kind;
+                            let parent_path = path
+                                .rsplit_once('/')
+                                .map(|(parent, _)| parent.to_owned())
+                                .unwrap_or_default();
+                            let Some(workspace) = this.workspace.as_ref() else {
+                                return;
+                            };
+                            let Some(parent_id) = workspace.read(cx).drive_folder_id(&parent_path)
+                            else {
+                                this.status = format!("Could not find Drive folder: {parent_path}");
+                                cx.notify();
+                                return;
+                            };
+                            let file_name = path.rsplit('/').next().unwrap_or(path);
+                            let initial = match file_name.rsplit_once('.') {
+                                Some((stem, extension)) => format!("{stem} copy.{extension}"),
+                                None => format!("{file_name} copy"),
+                            };
+                            this.pending_drive_prompt = Some(PendingDrivePrompt::DuplicateFile {
+                                source_path: path.clone(),
+                                source_id,
+                                parent_path,
+                                parent_id,
+                                kind,
+                            });
+                            this.prompt_open = true;
+                            this.prompt.update(cx, |prompt, cx| {
+                                prompt.open(
+                                    PromptSpec {
+                                        title: "Duplicate file".into(),
+                                        input: Some(initial),
+                                        placeholder: "Copy name".into(),
+                                        confirm: "Duplicate".into(),
+                                        ..PromptSpec::default()
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                        WebWorkspaceEvent::DeleteFileRequested { path } => {
+                            if this.busy {
+                                return;
+                            }
+                            let Some(file) = this.entries.iter().find(|entry| entry.path == *path)
+                            else {
+                                this.status = format!("Could not find the Drive file for {path}.");
+                                cx.notify();
+                                return;
+                            };
+                            let (node, id) = (file.node, file.id.clone());
+                            if this.dirty_nodes.contains_key(&node)
+                                || this.saving_nodes.contains(&node)
+                                || this.pending_saves.contains_key(&node)
+                            {
+                                this.status = format!("Save {path} before moving it to trash.");
+                                cx.notify();
+                                return;
+                            }
+                            this.pending_drive_prompt = Some(PendingDrivePrompt::DeleteFile {
+                                path: path.clone(),
+                                node,
+                                id,
+                            });
+                            this.prompt_open = true;
+                            this.prompt.update(cx, |prompt, cx| {
+                                prompt.open(
+                                    PromptSpec {
+                                        title: "Move to trash?".into(),
+                                        detail: vec![path.clone().into()],
+                                        confirm: "Move to trash".into(),
+                                        secondary: Some("Cancel".into()),
+                                        no_enter: true,
+                                        ..PromptSpec::default()
+                                    },
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
                         WebWorkspaceEvent::SaveRequested => this.save_current(cx),
+                        WebWorkspaceEvent::WorkspaceStateChanged(state) => {
+                            this.schedule_workspace_save(state.clone(), cx)
+                        }
                         WebWorkspaceEvent::SwitchVaultRequested => this.close_vault(cx),
                     },
                 ));
@@ -513,20 +2103,32 @@ impl Render for DriveApp {
         if let Some(note) = self.pending_note.take() {
             if let Some(workspace) = self.workspace.clone() {
                 let result = workspace.update(cx, |workspace, cx| {
-                    workspace.insert_drive_note(
-                        note.id.clone(),
-                        note.name.clone(),
-                        note.contents.clone(),
-                        window,
-                        cx,
-                    )
+                    if note.kind == tft_formats::FileKind::Canvas {
+                        workspace.insert_drive_canvas(
+                            note.id.clone(),
+                            note.name.clone(),
+                            note.path.clone(),
+                            note.contents.clone(),
+                            window,
+                            cx,
+                        )
+                    } else {
+                        workspace.insert_drive_note(
+                            note.id.clone(),
+                            note.name.clone(),
+                            note.path.clone(),
+                            note.contents.clone(),
+                            window,
+                            cx,
+                        )
+                    }
                 });
                 match result {
                     Ok(node) => {
                         self.entries.push(IndexedFile {
                             node,
-                            path: note.name.clone(),
-                            kind: tft_formats::FileKind::Markdown,
+                            path: note.path.clone(),
+                            kind: note.kind,
                             id: note.id,
                             etag: None,
                         });
@@ -539,6 +2141,23 @@ impl Render for DriveApp {
             }
         }
 
+        if let Some(folder) = self.pending_folder.take() {
+            if let Some(workspace) = self.workspace.clone() {
+                let result = workspace.update(cx, |workspace, cx| {
+                    workspace.insert_drive_folder(
+                        folder.id.clone(),
+                        folder.name.clone(),
+                        folder.path.clone(),
+                        cx,
+                    )
+                });
+                match result {
+                    Ok(()) => self.status = format!("Created folder {}.", folder.path),
+                    Err(error) => self.status = format!("Could not open new folder: {error}"),
+                }
+            }
+        }
+
         #[cfg(feature = "drive-smoke-test")]
         self.publish_test_state(cx);
 
@@ -546,12 +2165,25 @@ impl Render for DriveApp {
         let tokens = &theme.tokens;
         if let Some(workspace) = self.workspace.as_ref() {
             let workspace = workspace.clone();
+            let prompt = self.prompt.clone();
             return div()
                 .size_full()
+                .relative()
                 .bg(tokens.background_primary)
                 .text_color(tokens.text_normal)
-                .on_action(cx.listener(|this, _: &SaveCurrent, _, cx| this.save_current(cx)))
-                .child(workspace);
+                .child(workspace)
+                .when(self.prompt_open, |root| {
+                    root.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(gpui::hsla(0., 0., 0., 0.42))
+                            .child(prompt),
+                    )
+                });
         }
 
         let client_id = self.client_id.clone();
@@ -595,9 +2227,19 @@ impl Render for DriveApp {
                                 button("Save configuration", &theme)
                                     .on_click(cx.listener(|this, _, _, cx| this.configure(cx))),
                             )
-                            .child(button("Sign in with Google", &theme).when(!busy, |button| {
-                                button.on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
-                            })),
+                            .when(!signed_in, |row| {
+                                row.child(if last_vault.is_some() {
+                                    button("Continue to last Vault", &theme).when(!busy, |button| {
+                                        button.on_click(cx.listener(|this, _, _, cx| {
+                                            this.continue_to_last_vault(cx)
+                                        }))
+                                    })
+                                } else {
+                                    button("Sign in with Google", &theme).when(!busy, |button| {
+                                        button.on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
+                                    })
+                                })
+                            }),
                     )
                     .when(signed_in, |panel| {
                         panel.child(

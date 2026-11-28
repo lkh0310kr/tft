@@ -3,14 +3,15 @@
 use super::tab_drag::NoDragPreview;
 use super::Workspace;
 use crate::theme::Theme;
-use gpui::{div, prelude::*, px, Context, FocusHandle, Focusable, Pixels, Window};
-use tft_app::{place_new_tab, Tab, ViewMode};
+use gpui::{prelude::*, px, Context, FocusHandle, Focusable, Pixels, Window};
+use std::ops::{Deref, DerefMut};
+use tft_app::{place_new_tab, Tab, ViewMode, WorkspaceDockState};
 
 /// State for the Files dock's visibility, sizing, and keyboard focus.
 pub(super) struct DockState {
     pub(super) focus: FocusHandle,
     pub(super) keyboard: bool,
-    pub(super) visible: bool,
+    pub(super) common: WorkspaceDockState,
     pub(super) width: f64,
     /// The inner edge is being dragged: keep the handle accent-coloured while
     /// the pointer is over the editor and hover no longer reaches it.
@@ -22,10 +23,24 @@ impl DockState {
         Self {
             focus,
             keyboard: false,
-            visible: true,
+            common: WorkspaceDockState::default(),
             width,
             dragging: false,
         }
+    }
+}
+
+impl Deref for DockState {
+    type Target = WorkspaceDockState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.common
+    }
+}
+
+impl DerefMut for DockState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.common
     }
 }
 
@@ -87,27 +102,18 @@ impl Workspace {
     /// A sidebar's resize handle: the 3 px strip on its inner edge, accent-coloured on
     /// hover and while it is being dragged.
     pub(super) fn dock_handle(&self, left: bool, theme: &Theme) -> gpui::Stateful<gpui::Div> {
-        let accent = theme.tokens.interactive_accent;
         let dragging = self.left_dock.dragging;
-        div()
-            .id(if left {
+        crate::ui::workspace_dock_resize_handle(
+            if left {
                 "left-dock-handle"
             } else {
                 "right-dock-handle"
-            })
-            .absolute()
-            .top_0()
-            .h_full()
-            .w(px(3.))
-            .when(left, |d| d.right(px(0.)).border_r_1())
-            .when(!left, |d| d.left(px(0.)).border_l_1())
-            .border_color(theme.tokens.background_modifier_border)
-            .cursor_col_resize()
-            .occlude()
-            .hover(move |s| s.bg(accent).border_color(accent))
-            .active(move |s| s.bg(accent).border_color(accent))
-            .when(dragging, move |d| d.bg(accent).border_color(accent))
-            .on_drag(DockDrag { left }, |_, _, _, cx| cx.new(|_| NoDragPreview))
+            },
+            left,
+            dragging,
+            theme,
+        )
+        .on_drag(DockDrag { left }, |_, _, _, cx| cx.new(|_| NoDragPreview))
     }
 
     /// A sidebar handle dragged: the dock follows the pointer between a header row's
@@ -121,10 +127,13 @@ impl Workspace {
     ) {
         let x = f64::from(f32::from(position.x));
         let row = f64::from(f32::from(bounds.size.width));
-        let max = (row - 2. * MIN_SIDEBAR_WIDTH).max(MIN_SIDEBAR_WIDTH);
         if left {
             let origin = f64::from(f32::from(bounds.origin.x));
-            self.left_dock.width = (x - origin).clamp(MIN_SIDEBAR_WIDTH, max);
+            self.left_dock.width = f64::from(crate::ui::workspace_dock_width_at(
+                x as f32,
+                origin as f32,
+                row as f32,
+            ));
         }
         self.left_dock.dragging = true;
         cx.notify();

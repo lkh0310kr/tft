@@ -31,28 +31,28 @@ impl Workspace {
             .map(|t| t.title())
             .unwrap_or_else(|| leaf_title(view.current.as_deref(), view.mode));
         let crumbs = tft_app::workspace::workspace_breadcrumbs(view.current.as_deref());
-        let mut breadcrumb = div().flex().flex_row().items_center().whitespace_nowrap();
-        for (ix, (label, path)) in crumbs.iter().cloned().enumerate() {
-            breadcrumb = breadcrumb.child(
-                crate::ui::workspace_breadcrumb_item(
-                    ("document-header-folder-crumb", ix),
-                    label,
-                    theme,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.activate_group(id, cx);
-                    this.reveal_in_navigation(&path, window, cx);
-                })),
-            );
-            if ix + 1 < crumbs.len() {
-                breadcrumb = breadcrumb.child(crate::ui::workspace_breadcrumb_separator(theme));
-            }
-        }
+        let breadcrumb = crate::ui::workspace_breadcrumb_trail(
+            crumbs
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(ix, (label, path))| {
+                    crate::ui::workspace_breadcrumb_item(
+                        ("document-header-folder-crumb", ix),
+                        label,
+                        theme,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_group(id, cx);
+                        this.reveal_in_navigation(&path, window, cx);
+                    }))
+                    .into_any_element()
+                })
+                .collect::<Vec<_>>(),
+            theme,
+        );
         // Obsidian's view action shows the current mode: a book while reading, a pencil while editing.
-        let mode_icon = match view.mode {
-            ViewMode::Reading => "book-open",
-            _ => "pencil",
-        };
+        let mode_icon = crate::ui::workspace_document_mode_icon(view.mode);
         let release_notes_leaf = view
             .tabs
             .get(view.active_tab)
@@ -65,83 +65,72 @@ impl Workspace {
             theme.tokens.text_muted
         };
         // Obsidian's view header: 40 px, the title in the small UI size.
-        crate::ui::workspace_view_header(theme)
-            .border_b_1()
-            .border_color(theme.tokens.background_modifier_border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .pl(px(12.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    // `.view-header-title-parent`: `--text-muted`.
-                    .when(!crumbs.is_empty(), |d| {
-                        d.child(breadcrumb)
-                            .child(crate::ui::workspace_breadcrumb_separator(theme))
-                    })
-                    .child(self.render_title(view, title.clone(), title_color, theme, cx)),
-            )
-            .child(
-                div()
-                    .id("document-header-tools")
-                    .flex()
-                    .flex_row()
-                    .h_full()
-                    .items_center()
-                    .pl(px(10.))
-                    .gap(px(2.))
-                    .child(if release_notes_leaf || view.mode == ViewMode::Terminal {
-                        // The release notes and a terminal are not notes: no graph and no mode switch.
-                        div()
-                    } else {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(2.))
-                            .child(
-                                crate::ui::icon_button("graph", "git-fork", theme)
-                                    .when(
-                                        view.mode == ViewMode::Graph && !self.radial_tree.active,
-                                        |d| d.bg(theme.tokens.background_modifier_hover),
-                                    )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.activate_group(id, cx);
-                                        if this.radial_tree.active {
-                                            this.show_force_graph(window, cx)
-                                        } else {
-                                            this.open_graph_action(&OpenGraph, window, cx)
-                                        }
-                                    })),
+        crate::ui::workspace_document_header(
+            crate::ui::workspace_view_header_title()
+                // `.view-header-title-parent`: `--text-muted`.
+                .when(!crumbs.is_empty(), |d| {
+                    d.child(breadcrumb)
+                        .child(crate::ui::workspace_breadcrumb_separator(theme))
+                })
+                .child(self.render_title(view, title.clone(), title_color, theme, cx)),
+            crate::ui::workspace_view_header_tools(("document-header-tools", id)).child(
+                if release_notes_leaf || view.mode == ViewMode::Terminal {
+                    // The release notes and a terminal are not notes: no graph and no mode switch.
+                    div()
+                } else {
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(2.))
+                        .child(
+                            crate::ui::workspace_graph_engine_button(
+                                "graph",
+                                "graph",
+                                false,
+                                view.mode == ViewMode::Graph && !self.radial_tree.active,
+                                theme,
                             )
-                            .child(
-                                crate::ui::icon_button("radial-tree", "folder-tree", theme)
-                                    .when(
-                                        view.mode == ViewMode::Graph && self.radial_tree.active,
-                                        |d| d.bg(theme.tokens.background_modifier_hover),
-                                    )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.activate_group(id, cx);
-                                        if this.radial_tree.active {
-                                            this.show_force_graph(window, cx)
-                                        } else {
-                                            this.show_radial_tree(window, cx)
-                                        }
-                                    })),
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.activate_group(id, cx);
+                                    if this.radial_tree.active {
+                                        this.show_force_graph(window, cx)
+                                    } else {
+                                        this.open_graph_action(&OpenGraph, window, cx)
+                                    }
+                                },
+                            )),
+                        )
+                        .child(
+                            crate::ui::workspace_graph_engine_button(
+                                "radial-tree",
+                                "radial-tree",
+                                true,
+                                view.mode == ViewMode::Graph && self.radial_tree.active,
+                                theme,
                             )
-                            .when(header_shows_mode_switch(&view.current, view.mode), |d| {
-                                d.child(crate::ui::icon_button("mode", mode_icon, theme).on_click(
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.activate_group(id, cx);
-                                        this.toggle_mode(&ToggleMode, window, cx)
-                                    }),
-                                ))
-                            })
-                    }),
-            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.activate_group(id, cx);
+                                    if this.radial_tree.active {
+                                        this.show_force_graph(window, cx)
+                                    } else {
+                                        this.show_radial_tree(window, cx)
+                                    }
+                                },
+                            )),
+                        )
+                        .when(header_shows_mode_switch(&view.current, view.mode), |d| {
+                            d.child(crate::ui::icon_button("mode", mode_icon, theme).on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    this.activate_group(id, cx);
+                                    this.toggle_mode(&ToggleMode, window, cx)
+                                }),
+                            ))
+                        })
+                },
+            ),
+            theme,
+        )
     }
 }

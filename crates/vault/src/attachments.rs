@@ -219,12 +219,10 @@ mod tests {
         );
         let alts: Vec<String> = external_embeds(&text).into_iter().map(|e| e.alt).collect();
         assert_eq!(alts, ["a", "b", "c"]);
-        assert!(
-            external_embeds(&format!(
-                "no images here [x]({M}/img/pic.jpg) ![[local.png]]\n"
-            ))
-            .is_empty()
-        );
+        assert!(external_embeds(&format!(
+            "no images here [x]({M}/img/pic.jpg) ![[local.png]]\n"
+        ))
+        .is_empty());
     }
 
     /// Names, from `s03`, `s03b` and `s03c`.

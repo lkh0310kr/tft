@@ -276,33 +276,24 @@ impl Workspace {
                     children.iter().map(|c| self.dimension_of(c)).collect();
                 let split_path = path.clone();
                 let drag_path = split_path.clone();
-                let mut container = div()
-                    .id(SharedString::from(format!("split-{split_path:?}")))
-                    .flex()
-                    .size_full()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .when(row, |d| d.flex_row())
-                    .when(!row, |d| d.flex_col())
-                    .on_drag_move(cx.listener(
-                        move |this, e: &DragMoveEvent<DividerDrag>, _, cx| {
-                            let drag = e.drag(cx).clone();
-                            if drag.path == drag_path {
-                                this.drag_divider(&drag, e.bounds, e.event.position, cx);
-                            }
-                        },
-                    ));
+                let mut container = crate::ui::workspace_split_container(
+                    SharedString::from(format!("split-{split_path:?}")),
+                    *direction,
+                )
+                .on_drag_move(cx.listener(
+                    move |this, e: &DragMoveEvent<DividerDrag>, _, cx| {
+                        let drag = e.drag(cx).clone();
+                        if drag.path == drag_path {
+                            this.drag_divider(&drag, e.bounds, e.event.position, cx);
+                        }
+                    },
+                ));
                 for (ix, child) in children.iter().enumerate() {
                     path.push(ix);
                     let body = self.render_layout(child, path, window, frame, theme, cx);
                     path.pop();
                     let grow = dims.as_ref().map(|d| d[ix] as f32).unwrap_or(1.0);
-                    let mut cell = div()
-                        .relative()
-                        .min_w_0()
-                        .min_h_0()
-                        .overflow_hidden()
+                    let mut cell = crate::ui::workspace_split_cell(*direction, ix > 0, theme)
                         .flex_basis(px(0.))
                         .child(body);
                     cell.style().flex_grow = Some(grow.max(0.01));
@@ -341,11 +332,7 @@ impl Workspace {
                             .active(move |s| s.bg(accent))
                             .when(dragging, move |d| d.bg(accent))
                             .on_drag(drag, |_, _, _, cx| cx.new(|_| NoDragPreview));
-                        cell = cell
-                            .when(row, |d| d.border_l_1())
-                            .when(!row, |d| d.border_t_1())
-                            .border_color(theme.tokens.background_modifier_border)
-                            .child(handle);
+                        cell = cell.child(handle);
                     }
                     container = container.child(cell);
                 }
@@ -721,26 +708,26 @@ impl Render for Workspace {
         // A pane whose plugin is off has no tab, so it cannot be the one
         // showing.
         let left_body: gpui::AnyElement = self.explorer.clone().into_any_element();
-        let left = crate::ui::workspace_dock(px(self.left_dock.width as f32), &theme)
-            .map(|d| corners.left().apply(d))
-            .child(
-                crate::ui::workspace_dock_header(&theme)
-                    // Past the traffic lights on macOS, where this header
-                    // is the window's top-left corner.
-                    .pl(px(8. + frame.left_space()))
-                    .pr(px(8.))
-                    .gap(px(3.))
-                    .child(window_handle(
-                        div().id("left-dock-space").flex_1().h_full(),
-                        frameless,
-                    ))
-                    // The toggle sits at the right end, against the dock's
-                    // edge.
-                    .child(self.sidebar_toggle(&theme, cx)),
-            )
-            .child(div().flex_1().overflow_hidden().child(left_body))
-            .child(self.render_vault_profile(&theme, window, cx))
-            .child(self.dock_handle(true, &theme));
+        let left = crate::ui::workspace_dock_shell(
+            px(self.left_dock.width as f32),
+            crate::ui::workspace_dock_header(&theme)
+                // Past the traffic lights on macOS, where this header
+                // is the window's top-left corner.
+                .pl(px(8. + frame.left_space()))
+                .pr(px(8.))
+                .gap(px(3.))
+                .child(window_handle(
+                    div().id("left-dock-space").flex_1().h_full(),
+                    frameless,
+                ))
+                // The toggle sits at the right end, against the dock's edge.
+                .child(self.sidebar_toggle(&theme, cx)),
+            left_body,
+            self.render_vault_profile(&theme, window, cx),
+            self.dock_handle(true, &theme),
+            &theme,
+        )
+        .map(|d| corners.left().apply(d));
 
         // The modal and the file menu draw in the window they came up in:
         // this one, unless that was a popout.

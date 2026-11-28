@@ -5,7 +5,7 @@
 use crate::assets::icon;
 use crate::file_menu::{self, Menu, Pick, Target};
 use crate::inline_field;
-use crate::theme::{Theme, ICON_SIZE};
+use crate::theme::{Theme, HEADER_HEIGHT, ICON_SIZE};
 use gpui::{
     actions, canvas, div, prelude::*, px, uniform_list, App, Bounds, Context, DragMoveEvent,
     ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight,
@@ -20,9 +20,6 @@ use std::rc::Rc;
 pub use tft_app::explorer::{
     display_name, drop_folder, drop_moves, kind_name, move_into_label, FileTree, SortOrder,
 };
-
-/// The font size of a row's extension tag.
-const TAG_SIZE: f32 = 10.0;
 
 actions!(
     explorer,
@@ -129,6 +126,8 @@ impl Render for FileGhost {
 /// a file row its folder's (`""` at the root), which is what Obsidian
 /// washed when a file was held over a file row (`s02`, `s03`).
 pub enum ExplorerEvent {
+    SortChanged(SortOrder),
+    FoldersExpanded(Vec<String>),
     Open(String),
     /// The pointer came onto a file's row (`over`) or left it: the row's
     /// bounds anchor the page preview.
@@ -256,6 +255,7 @@ pub struct FileExplorer {
     active: Option<String>,
     scroll: UniformListScrollHandle,
     menu: Option<Menu>,
+    sort_menu_open: bool,
     /// The keyboard the open menu holds, and where it goes back to.
     menu_focus: file_menu::MenuFocus,
     focus_handle: FocusHandle,
@@ -307,6 +307,7 @@ impl FileExplorer {
             active: None,
             scroll: UniformListScrollHandle::new(),
             menu: None,
+            sort_menu_open: false,
             menu_focus: file_menu::MenuFocus::new(cx),
             focus_handle: cx.focus_handle(),
             focused: None,
@@ -453,6 +454,7 @@ impl FileExplorer {
         };
         if row.is_folder {
             self.tree.toggle(&row.path);
+            self.emit_expanded_folders(cx);
             cx.notify();
         } else {
             cx.emit(ExplorerEvent::Open(row.path));
@@ -466,6 +468,7 @@ impl FileExplorer {
         };
         if row.is_folder {
             self.tree.toggle(&row.path);
+            self.emit_expanded_folders(cx);
             cx.notify();
         }
     }
@@ -594,10 +597,70 @@ impl FileExplorer {
         }
     }
 
+    pub fn set_sort(&mut self, order: SortOrder, cx: &mut Context<Self>) {
+        if self.tree.sort() != order {
+            self.tree.set_sort(order);
+            cx.notify();
+        }
+    }
+
+    pub fn set_expanded_folders(
+        &mut self,
+        folders: &std::collections::HashSet<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.tree.expand_folders(folders);
+        cx.notify();
+    }
+
+    fn emit_expanded_folders(&self, cx: &mut Context<Self>) {
+        let mut folders: Vec<_> = self.tree.expanded_folders().into_iter().collect();
+        folders.sort();
+        cx.emit(ExplorerEvent::FoldersExpanded(folders));
+    }
+
     /// Marks `path` as the open file and scrolls it into view.
     pub fn reveal(&mut self, path: &str, cx: &mut Context<Self>) {
         self.active = Some(path.to_string());
         self.show(path, cx);
+    }
+
+    fn render_sort_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        if !self.sort_menu_open {
+            return None;
+        }
+        let current = self.tree.sort();
+        let mut list = crate::ui::menu("explorer-sort-menu", theme)
+            .absolute()
+            .top(px(HEADER_HEIGHT as f32))
+            .left(px(4.))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.sort_menu_open = false;
+                cx.notify();
+            }));
+        for (index, order) in SortOrder::ALL.into_iter().enumerate() {
+            if index > 0 && index % 2 == 0 {
+                list = list.child(crate::ui::file_tree_sort_separator(theme));
+            }
+            list = list.child(
+                crate::ui::file_tree_sort_item(
+                    "explorer-sort-option",
+                    index,
+                    order,
+                    current,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.tree.sort() != order {
+                        this.tree.set_sort(order);
+                        cx.emit(ExplorerEvent::SortChanged(order));
+                    }
+                    this.sort_menu_open = false;
+                    cx.notify();
+                })),
+            );
+        }
+        Some(list.into_any_element())
     }
 
     /// Scrolls `path` into view without claiming it is the open file.
@@ -987,17 +1050,7 @@ impl FileExplorer {
                                     ))
                                 }),
                         )
-                        .children(tag.map(|tag| {
-                            // Obsidian's `nav-file-tag`: small upper-case
-                            // text at the row's right end.
-                            div()
-                                .flex_shrink_0()
-                                .ml_2()
-                                .text_size(px(TAG_SIZE))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(t.nav_tag_color)
-                                .child(tag)
-                        })),
+                        .children(tag.map(|tag| crate::ui::file_tree_row_tag(tag, &theme))),
                 )
             })
             .collect()
@@ -1135,6 +1188,7 @@ impl EntityInputHandler for FileExplorer {
 
 impl Render for FileExplorer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.global::<Theme>().clone();
         let count = self.tree.len();
         // An open menu holds the keyboard, so Escape reaches it first; a
         // closed one hands the keyboard back where it was.
@@ -1152,6 +1206,66 @@ impl Render for FileExplorer {
             self.drop_claim = None;
         }
         let menu = self.render_menu(cx);
+        let sort_menu = self.render_sort_menu(&theme, cx);
+        let toolbar = crate::ui::file_tree_toolbar(&theme)
+            .child(
+                crate::ui::header_button(
+                    "explorer-sort",
+                    "arrow-up-narrow-wide",
+                    "Change sort order",
+                    self.sort_menu_open,
+                    &theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sort_menu_open = !this.sort_menu_open;
+                    cx.notify();
+                })),
+            )
+            .child(
+                crate::ui::header_button(
+                    "explorer-reveal",
+                    "gallery-vertical",
+                    "Auto-reveal current file",
+                    false,
+                    &theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Some(path) = this.active.clone() {
+                        this.reveal(&path, cx);
+                    }
+                })),
+            )
+            .child(
+                crate::ui::header_button(
+                    "explorer-expand",
+                    "chevrons-up-down",
+                    if self.tree.any_expanded() {
+                        "Collapse all"
+                    } else {
+                        "Expand all"
+                    },
+                    false,
+                    &theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.tree.any_expanded() {
+                        this.tree.collapse_all();
+                    } else {
+                        this.tree.expand_all();
+                    }
+                    this.emit_expanded_folders(cx);
+                    cx.notify();
+                })),
+            )
+            .child(
+                crate::ui::header_button("explorer-new-note", "plus", "New note", false, &theme)
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(ExplorerEvent::NewNote {
+                            folder: String::new(),
+                        });
+                    })),
+            )
+            .children(sort_menu);
         let root = div()
             .size_full()
             .flex()
@@ -1175,6 +1289,7 @@ impl Render for FileExplorer {
             .on_action(cx.listener(Self::leave_tree))
             .on_action(cx.listener(Self::rename_focused))
             .on_action(cx.listener(Self::delete_focused))
+            .child(toolbar)
             // The list is wrapped so that the space below the last row
             // takes a right-click of its own: `uniform_list` hands an event
             // outside every row straight through, and a row's own handler
@@ -1234,7 +1349,10 @@ mod menu_tests {
             ExplorerEvent::RenameTo { path, .. } | ExplorerEvent::MoveInto { path, .. } => {
                 Some(path)
             }
-            ExplorerEvent::LeaveFocus | ExplorerEvent::Hover { .. } => None,
+            ExplorerEvent::SortChanged(_)
+            | ExplorerEvent::FoldersExpanded(_)
+            | ExplorerEvent::LeaveFocus
+            | ExplorerEvent::Hover { .. } => None,
         }
     }
 

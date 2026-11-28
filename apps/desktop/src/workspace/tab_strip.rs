@@ -3,8 +3,8 @@
 use super::render::GroupView;
 use super::tab_drag::{measure_for_drag, DragPart, TabDrag, TabDragPreview, DROP_BAR_WIDTH};
 use super::{
-    file_menu, icon, release_notes, window_handle, GoBack, GoForward, Pick, Tab, ViewMode,
-    WindowFrame, Workspace, ICON_SIZE, RIBBON_WIDTH, WINDOW_RADIUS,
+    file_menu, release_notes, window_handle, GoBack, GoForward, Pick, Tab, ViewMode, WindowFrame,
+    Workspace, RIBBON_WIDTH, WINDOW_RADIUS,
 };
 use crate::theme::Theme;
 use gpui::{
@@ -97,7 +97,7 @@ impl Workspace {
             })
             // Back and forward sit in the strip's own cell, as Zed puts them:
             // a fixed pair left of the tabs, parted from them by a hairline.
-            .child(crate::ui::workspace_tab_history_controls(
+            .child(crate::ui::workspace_tab_strip_navigation(
                 crate::ui::icon_button("back", "arrow-left", theme)
                     .when(!can_back, |d| d.opacity(0.4))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -110,186 +110,151 @@ impl Workspace {
                         this.activate_group(group, cx);
                         this.go_forward(&GoForward, window, cx)
                     })),
+                theme,
             ))
-            .child(crate::ui::workspace_tab_strip_divider(theme))
             // The tabs scroll sideways in their own box, so a crowded strip keeps every
             // tab reachable.
-            .child(
-                crate::ui::workspace_tab_strip_scroll(("tab-strip-scroll", group))
-                    .children(tabs.iter().enumerate().map(|(ix, tab)| {
-                        let active = ix == active_ix;
-                        let pinned = tab.pinned;
-                        // No divider between the last tab and the new-tab
-                        // button: that 1 px line read as a stray border.
-                        let divider = !active && ix + 1 != active_ix && ix + 1 != tabs.len();
-                        let title = tab.title();
-                        let drag = TabDrag {
-                            group,
-                            tab: ix,
-                            title: title.clone(),
-                        };
-                        let this = cx.weak_entity();
-                        // A tab showing a file previews it, anchored on the whole tab.
-                        let preview = {
-                            let this = this.clone();
-                            let path = tab.path.clone();
-                            let window = self.window_of_group(group);
-                            move |over, anchor, modifiers, _: &mut Window, cx: &mut App| {
-                                let Some(path) = path.clone() else {
-                                    return;
-                                };
-                                this.update(cx, |this, cx| {
-                                    this.row_hover(
-                                        crate::hover_preview::Source::TabHeader,
-                                        window,
-                                        crate::hover_preview::exact(&path),
-                                        path,
-                                        over,
-                                        anchor,
-                                        modifiers,
-                                        cx,
-                                    )
-                                })
-                                .ok();
-                            }
-                        };
-                        // Obsidian's tab, squared off for TFT: a 32 px row in the
-                        // content colour, no corner arcs, the close button a small
-                        // square. The inner box, not the tab, takes the hover wash.
-                        crate::hover_preview::hover_row(
-                            crate::ui::workspace_tab(("tab", ix), active, group_active, theme),
-                            preview,
-                        )
-                        // The divider on an inactive tab's right edge, as Obsidian's
-                        // `::after`: a 1 px line astride the edge, parting the strip from
-                        // the new-tab button after the last tab. Deferred so the next tab's
-                        // opaque background cannot clip its half.
-                        .when(divider, |d| {
-                            d.child(deferred(
-                                div()
-                                    .absolute()
-                                    .right(px(-0.5))
-                                    .top_0()
-                                    .w(px(1.))
-                                    .h_full()
-                                    .bg(theme.tokens.tab_divider_color),
-                            ))
-                        })
-                        // The active tab's bottom edge is a straight line.
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate_group(group, cx);
-                            this.activate_tab(ix, cx)
-                        }))
-                        // Picking the tab up: the ghost is its title, and the workspace
-                        // shows every group's zones.
-                        .on_drag(drag, move |drag, grab, window, cx| {
-                            let picked = drag.clone();
-                            this.update(cx, |w, cx| w.begin_tab_drag(picked, cx)).ok();
-                            let title = drag.title.clone();
-                            let source = window.window_handle();
-                            cx.new(|_| TabDragPreview {
-                                title,
-                                grab,
-                                source,
-                            })
-                        })
-                        // Where the tab is, for the strip's drop bar; a dropped tab lands
-                        // there, else in front of it.
-                        .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, _| {
-                            if this.tab_drag_state.active {
-                                this.tab_drag_state.tab_bounds.insert((group, ix), e.bounds);
-                            }
-                        }))
-                        .when(self.tab_drag_state.active, |d| {
-                            d.child(measure_for_drag(
-                                &self.tab_drag_state.bounds,
-                                DragPart::Tab(group, ix),
-                            ))
-                        })
-                        .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                            this.drop_tab_at_bar(drag, group, Some(ix), cx)
-                        }))
-                        .on_mouse_down(
-                            gpui::MouseButton::Middle,
-                            cx.listener(move |this, _, _, cx| {
-                                this.activate_group(group, cx);
-                                this.close_tab(ix, cx)
-                            }),
-                        )
-                        .on_mouse_down(
-                            gpui::MouseButton::Right,
-                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.open_tab_menu(group, ix, e.position, cx)
-                            }),
-                        )
-                        .child(
-                            crate::ui::workspace_tab_inner(active, theme)
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .child(title),
+            .child(crate::ui::workspace_tab_strip_tabs(
+                ("tab-strip-scroll", group),
+                tabs.iter().enumerate().map(|(ix, tab)| {
+                    let active = ix == active_ix;
+                    let pinned = tab.pinned;
+                    // No divider between the last tab and the new-tab
+                    // button: that 1 px line read as a stray border.
+                    let divider = !active && ix + 1 != active_ix && ix + 1 != tabs.len();
+                    let title = tab.title();
+                    let drag = TabDrag {
+                        source: tft_app::TabDragSource {
+                            group_id: group,
+                            tab_index: ix,
+                        },
+                        title: title.clone(),
+                    };
+                    let this = cx.weak_entity();
+                    // A tab showing a file previews it, anchored on the whole tab.
+                    let preview = {
+                        let this = this.clone();
+                        let path = tab.path.clone();
+                        let window = self.window_of_group(group);
+                        move |over, anchor, modifiers, _: &mut Window, cx: &mut App| {
+                            let Some(path) = path.clone() else {
+                                return;
+                            };
+                            this.update(cx, |this, cx| {
+                                this.row_hover(
+                                    crate::hover_preview::Source::TabHeader,
+                                    window,
+                                    crate::hover_preview::exact(&path),
+                                    path,
+                                    over,
+                                    anchor,
+                                    modifiers,
+                                    cx,
                                 )
-                                .child(
-                                    crate::ui::workspace_tab_close_button(
-                                        ("tab-close", ix),
-                                        active,
-                                        pinned,
-                                        theme,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.activate_group(group, cx);
-                                            if pinned {
-                                                this.activate_tab(ix, cx);
-                                                this.toggle_pin(cx);
-                                            } else {
-                                                this.close_tab(ix, cx);
-                                            }
-                                        },
-                                    )),
-                                ),
-                        )
-                    }))
-                    .child(
-                        div()
-                            .id("new-tab")
-                            .flex_shrink_0()
-                            .ml(px(2.))
-                            .w(px(32.))
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(0.))
-                            .cursor_pointer()
-                            .group("new-tab")
-                            .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_group(group, cx);
-                                this.new_tab(cx)
-                            }))
-                            // A `clickable-icon`: `--icon-color`, not the text colour.
-                            .child(
-                                icon("plus", ICON_SIZE, theme.tokens.icon_color)
-                                    .opacity(theme.tokens.icon_opacity)
-                                    .group_hover("new-tab", |s| {
-                                        s.opacity(theme.tokens.icon_opacity_hover)
-                                            .text_color(theme.tokens.icon_color_hover)
-                                    }),
-                            ),
+                            })
+                            .ok();
+                        }
+                    };
+                    // Obsidian's tab, squared off for TFT: a 32 px row in the
+                    // content colour, no corner arcs, the close button a small
+                    // square. The inner box, not the tab, takes the hover wash.
+                    crate::hover_preview::hover_row(
+                        crate::ui::workspace_tab(("tab", ix), active, group_active, theme),
+                        preview,
                     )
-                    .child(window_handle(
+                    // The divider on an inactive tab's right edge, as Obsidian's
+                    // `::after`: a 1 px line astride the edge, parting the strip from
+                    // the new-tab button after the last tab. Deferred so the next tab's
+                    // opaque background cannot clip its half.
+                    .when(divider, |d| {
+                        d.child(deferred(crate::ui::workspace_tab_divider(theme)))
+                    })
+                    // The active tab's bottom edge is a straight line.
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_group(group, cx);
+                        this.activate_tab(ix, cx)
+                    }))
+                    // Picking the tab up: the ghost is its title, and the workspace
+                    // shows every group's zones.
+                    .on_drag(drag, move |drag, grab, window, cx| {
+                        let picked = drag.clone();
+                        this.update(cx, |w, cx| w.begin_tab_drag(picked, cx)).ok();
+                        let title = drag.title.clone();
+                        let source = window.window_handle();
+                        cx.new(|_| TabDragPreview {
+                            title,
+                            grab,
+                            source,
+                        })
+                    })
+                    // Where the tab is, for the strip's drop bar; a dropped tab lands
+                    // there, else in front of it.
+                    .on_drag_move(cx.listener(move |this, e: &DragMoveEvent<TabDrag>, _, _| {
+                        if this.tab_drag_state.active {
+                            this.tab_drag_state.tab_bounds.insert((group, ix), e.bounds);
+                        }
+                    }))
+                    .when(self.tab_drag_state.active, |d| {
+                        d.child(measure_for_drag(
+                            &self.tab_drag_state.bounds,
+                            DragPart::Tab(group, ix),
+                        ))
+                    })
+                    .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                        this.drop_tab_at_bar(drag, group, Some(ix), cx)
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            this.activate_group(group, cx);
+                            this.close_tab(ix, cx)
+                        }),
+                    )
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_tab_menu(group, ix, e.position, cx)
+                        }),
+                    )
+                    .child(crate::ui::workspace_tab_content(
+                        title,
+                        crate::ui::workspace_tab_close_button(
+                            ("tab-close", ix),
+                            active,
+                            pinned,
+                            theme,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.activate_group(group, cx);
+                            if pinned {
+                                this.activate_tab(ix, cx);
+                                this.toggle_pin(cx);
+                            } else {
+                                this.close_tab(ix, cx);
+                            }
+                        })),
+                        active,
+                        theme,
+                    ))
+                    .into_any_element()
+                }),
+                crate::ui::workspace_new_tab_button("new-tab", theme).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.activate_group(group, cx);
+                        this.new_tab(cx)
+                    },
+                )),
+                Some(
+                    window_handle(
                         div().id(("tab-strip-space", group)).flex_1().h_full(),
                         frameless,
-                    )),
-            )
+                    )
+                    .into_any_element(),
+                ),
+            ))
             // The drop bar: an accent bar astride the boundary the dragged tab would land
             // at, deferred past the late-painted dividers.
             .when_some(
@@ -360,8 +325,20 @@ impl Workspace {
         }
         match pick {
             Pick::CloseTab => self.close_tab(ix, cx),
-            Pick::CloseOthers => self.close_tabs_but(|i, t| i == ix || t.pinned, Some(ix), cx),
-            Pick::CloseAfter => self.close_tabs_but(|i, t| i <= ix || t.pinned, Some(ix), cx),
+            Pick::CloseOthers => self.close_tabs_but(
+                |i, tab| {
+                    tft_app::tab_close_action_keeps(tft_app::TabCloseAction::Others, i, ix, tab)
+                },
+                Some(ix),
+                cx,
+            ),
+            Pick::CloseAfter => self.close_tabs_but(
+                |i, tab| {
+                    tft_app::tab_close_action_keeps(tft_app::TabCloseAction::After, i, ix, tab)
+                },
+                Some(ix),
+                cx,
+            ),
             Pick::CloseAll => self.close_all_tabs(cx),
             Pick::TogglePin => {
                 self.active_group_state.stash_active_tab();

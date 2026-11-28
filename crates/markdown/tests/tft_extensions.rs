@@ -918,10 +918,7 @@ fn an_indented_empty_marker_is_a_list_item_not_a_setext_underline() {
 /// reads the `-` line as its setext underline.
 #[test]
 fn the_indented_marker_quirk_is_off_for_commonmark() {
-    let doc = tft_markdown::parse_with(
-        "- A\n  - B\n    -\n",
-        &tft_markdown::Options::commonmark(),
-    );
+    let doc = tft_markdown::parse_with("- A\n  - B\n    -\n", &tft_markdown::Options::commonmark());
     assert!(rendered_has_heading(&doc), "plain CommonMark makes the H2");
 }
 

@@ -266,19 +266,6 @@ impl Workspace {
         }
     }
 
-    /// Plain text of a cached heading (markup stripped).
-    pub(super) fn heading_text(raw: &str) -> String {
-        let doc = tft_markdown::parse(raw);
-        match doc.blocks.first().map(|b| &b.kind) {
-            Some(tft_markdown::BlockKind::Paragraph { content }) => {
-                tft_markdown::plain_text(content)
-            }
-            _ => raw.to_string(),
-        }
-        .trim()
-        .to_string()
-    }
-
     /// Lets go of a buffer for a file the editor cannot save. A dirty buffer stays on
     /// screen as belonging to no file; a clean one goes.
     pub(super) fn release_buffer(&mut self, cx: &mut Context<Self>) {
@@ -420,20 +407,7 @@ impl Workspace {
     ) -> Option<usize> {
         let cache = state.cache();
         let meta = cache.file(path)?;
-        match subpath {
-            Subpath::Headings(names) => {
-                let last = names.last()?;
-                meta.headings
-                    .iter()
-                    .find(|h| Self::heading_text(&h.heading).eq_ignore_ascii_case(last.trim()))
-                    .map(|h| h.position.start.offset)
-            }
-            Subpath::Block(id) => meta
-                .blocks
-                .get(&id.to_lowercase())
-                .or_else(|| meta.blocks.get(*id))
-                .map(|b| b.position.start.offset),
-        }
+        tft_app::subpath_offset(meta, subpath)
     }
 
     // ----- page preview ------------------------------------------------------------
@@ -445,23 +419,23 @@ impl Workspace {
         new_tab: bool,
         cx: &mut Context<Self>,
     ) {
-        match target {
-            LinkTarget::Internal(body) => {
-                let Some(state) = self.vault_session.state.clone() else {
-                    return;
-                };
-                let source = self.active_group_state.current.clone().unwrap_or_default();
-                let parsed = tft_markdown::parse_linktext(&body);
-                let resolved = state.cache().resolve(&body, &source).map(str::to_string);
-                match resolved {
-                    Some(path) if new_tab => self.open_link_in_new_tab(path, parsed.subpath, cx),
+        let Some(state) = self.vault_session.state.clone() else {
+            return;
+        };
+        let source = self.active_group_state.current.clone().unwrap_or_default();
+        match tft_app::resolve_link_navigation(state.cache().resolver(), &target, &source) {
+            tft_app::LinkNavigation::Internal(resolved) => {
+                match resolved.path {
+                    Some(path) if new_tab => {
+                        self.open_link_in_new_tab(path, resolved.link.subpath, cx)
+                    }
                     Some(path) => {
                         if path == source {
-                            if let Some(sub) = parsed.subpath {
+                            if let Some(sub) = resolved.link.subpath {
                                 self.scroll_to_subpath(&path, &sub, &state, cx);
                             }
                         } else {
-                            self.open_file(path, parsed.subpath, cx);
+                            self.open_file(path, resolved.link.subpath, cx);
                         }
                     }
                     None => {
@@ -469,14 +443,14 @@ impl Workspace {
                         if new_tab {
                             self.new_tab(cx);
                         }
-                        let name = parsed.path.to_string();
+                        let name = resolved.link.path.to_string();
                         self.create_note_for(&name, None, cx);
                     }
                 }
             }
-            LinkTarget::External(url) => cx.open_url(&url),
-            LinkTarget::Tag(tag) => self.show_search(&format!("tag:#{tag}"), None, cx),
-            LinkTarget::Footnote(n) => {
+            tft_app::LinkNavigation::External(url) => cx.open_url(url),
+            tft_app::LinkNavigation::Tag(tag) => self.show_search(&format!("tag:#{tag}"), None, cx),
+            tft_app::LinkNavigation::Footnote(n) => {
                 // Obsidian's reference anchors to that one definition, not the note's
                 // end; reveal it the same way a heading jump does.
                 let at = self
@@ -493,6 +467,6 @@ impl Workspace {
                         .update(cx, |r, cx| r.scroll_to_end(cx)),
                 }
             }
-        }
+        };
     }
 }

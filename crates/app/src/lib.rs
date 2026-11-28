@@ -5,29 +5,38 @@ pub mod assets;
 #[cfg(feature = "gpui-ui")]
 pub mod canvas;
 #[cfg(feature = "gpui-ui")]
+pub mod command_palette;
+#[cfg(feature = "gpui-ui")]
 pub mod editor;
 pub mod effect;
 pub mod file_switcher;
+pub mod file_tree_menu;
 #[cfg(feature = "gpui-ui")]
 pub mod fixed;
 #[cfg(feature = "gpui-ui")]
 pub mod fold;
+pub mod graph_data;
+pub mod graph_layout;
 #[cfg(feature = "gpui-ui")]
 pub mod gutter;
 #[cfg(feature = "gpui-ui")]
 pub mod inline_field;
 #[cfg(feature = "gpui-ui")]
 pub mod keymap;
+pub mod link;
 #[cfg(feature = "gpui-ui")]
 pub mod math;
 #[cfg(feature = "gpui-ui")]
 pub mod media;
 #[cfg(feature = "gpui-ui")]
 pub mod mermaid;
+pub mod page_preview;
 #[cfg(feature = "gpui-ui")]
 pub mod pdf;
 #[cfg(feature = "gpui-ui")]
 pub mod preview;
+#[cfg(feature = "gpui-ui")]
+pub mod prompt;
 #[cfg(feature = "gpui-ui")]
 pub mod properties;
 #[cfg(feature = "gpui-ui")]
@@ -48,14 +57,21 @@ pub mod ui;
 pub mod workspace;
 
 pub use effect::VaultEffect;
+pub use link::{
+    resolve_internal_link, resolve_link_navigation, InternalLinkResolution, LinkNavigation,
+};
 pub use tft_domain::{
     BackendInstanceId, BackendObjectId, FileMeta, InvariantError, LookupError, NameConflict,
     NodeId, NodeKind, RenameError, ScannedNode, VaultData, VaultEvent, VaultNode,
 };
 pub use workspace::{
-    current_history_entry_mut, history_step, place_new_tab, push_history_entry,
-    FileOperationRequest, HistoryDirection, HistoryEntry, Layout, LeftTab, SplitDirection, Tab,
-    TabGroup, ViewMode, WorkspaceModel,
+    current_history_entry_mut, cycle_tab_index, document_history_state, history_step,
+    insert_tab_at_boundary, normalized_split_position, place_new_tab, push_history_entry,
+    selection_step, split_dimensions_at, subpath_offset, tab_close_action_available,
+    tab_close_action_keeps, transfer_tab_between_strips, update_history_entry_state,
+    ClosedTabHistory, FileOperationRequest, HistoryDirection, HistoryEntry, Layout, LeftTab,
+    SplitDirection, Tab, TabCloseAction, TabDragSource, TabGroup, TabTransferOutcome, ViewMode,
+    WorkspaceDockState, WorkspaceModel,
 };
 
 pub use tft_cache as cache;
@@ -78,4 +94,5 @@ pub use tft_text as text;
 pub mod design;
 pub mod explorer;
 pub mod remote;
+pub mod search_results;
 pub mod vault;

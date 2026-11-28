@@ -4,7 +4,7 @@ use super::layout_write::set_dimension;
 use super::Workspace;
 use gpui::Context;
 use serde_json::Value;
-use tft_app::{Layout, SplitDirection};
+use tft_app::{split_dimensions_at, Layout, SplitDirection};
 
 /// The payload of a divider drag: which split and the boundary between two children.
 #[derive(Debug, Clone)]
@@ -113,12 +113,14 @@ impl Workspace {
             (bounds.origin.y, bounds.size.height)
         };
         let along = if row { position.x } else { position.y };
-        let size = f32::from(size);
-        if size <= 0.0 {
+        let Some(position) = tft_app::normalized_split_position(
+            f32::from(origin) as f64,
+            f32::from(size) as f64,
+            f32::from(along) as f64,
+        ) else {
             return;
-        }
-        let at = (f32::from(along - origin) / size).clamp(0.0, 1.0) as f64 * 100.0;
-        let mut dims: Vec<f64> = match children
+        };
+        let dims: Vec<f64> = match children
             .iter()
             .map(|c| self.dimension_of(c))
             .collect::<Option<Vec<f64>>>()
@@ -126,15 +128,9 @@ impl Workspace {
             Some(dims) => dims,
             None => vec![100.0 / n as f64; n],
         };
-        let before: f64 = dims[..drag.before].iter().sum();
-        let pair = dims[drag.before] + dims[drag.before + 1];
-        const MIN: f64 = 5.0;
-        if pair <= 2.0 * MIN {
+        let Some(dims) = split_dimensions_at(&dims, drag.before, position) else {
             return;
-        }
-        let a = (at - before).clamp(MIN, pair - MIN);
-        dims[drag.before] = a;
-        dims[drag.before + 1] = pair - a;
+        };
         for (ix, d) in dims.into_iter().enumerate() {
             let mut child = drag.path.clone();
             child.push(ix);

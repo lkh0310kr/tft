@@ -4,7 +4,6 @@
 
 use super::layout::{Forces, Layout};
 use super::timelapse;
-use crate::search::inputs;
 use crate::text_input::{InputEvent, TextInput};
 use crate::theme::Theme;
 use crate::workspace::VaultState;
@@ -15,13 +14,14 @@ use gpui::{
     SharedString, Subscription, Task, TextAlign, Window,
 };
 use serde_json::{json, Value};
+#[cfg(test)]
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(test)]
+use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tft_formats::config::{GraphColor, GraphColorGroup, GraphConfig};
-use tft_formats::FileKind;
-use tft_search::{Search, SearchFile};
 
 /// How long after the last change the panel waits before writing
 /// `graph.json`; Obsidian's writes landed about a third of a second after a
@@ -186,87 +186,18 @@ impl Slider {
     }
 }
 
-/// A number the way JavaScript prints it: no decimal point when it is
-/// whole, since Obsidian writes `250` and `1`, not `250.0`.
-fn json_number(value: f32) -> Value {
-    if value.fract() == 0.0 && value.abs() < 1e9 {
-        json!(value as i64)
-    } else {
-        json!(value)
-    }
-}
-
-/// Every number under `value`, the groups' colours included, written the
-/// way [`json_number`] writes one.
-fn integerize(value: &mut Value) {
-    match value {
-        Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                *value = json_number(f as f32);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(integerize),
-        Value::Object(fields) => fields.values_mut().for_each(integerize),
-        _ => {}
-    }
-}
-
 /// `graph.json` as Obsidian creates it: every key, in its order, with the
 /// current values. Used when the file does not exist yet, since a file
 /// written from the struct alone would be sparse and ordered differently.
 pub(crate) fn full_document(config: &GraphConfig) -> Value {
-    let collapsed = |key: &str| {
-        config
-            .extra
-            .get(key)
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-    };
-    let number = |value: Option<f32>, default: Value| match value {
-        Some(v) => json_number(v),
-        None => default,
-    };
-    let mut groups = json!(config.color_groups);
-    integerize(&mut groups);
-    json!({
-        "collapse-filter": collapsed("collapse-filter"),
-        "search": config.search.clone().unwrap_or_default(),
-        "showTags": config.show_tags.unwrap_or(false),
-        "showAttachments": config.show_attachments.unwrap_or(false),
-        "hideUnresolved": config.hide_unresolved.unwrap_or(false),
-        "showOrphans": config.show_orphans.unwrap_or(true),
-        "collapse-color-groups": collapsed("collapse-color-groups"),
-        "colorGroups": groups,
-        "collapse-display": collapsed("collapse-display"),
-        "showArrow": config.show_arrow.unwrap_or(false),
-        "textFadeMultiplier": number(config.text_fade_multiplier, json!(0)),
-        "nodeSizeMultiplier": number(config.node_size_multiplier, json!(1)),
-        "lineSizeMultiplier": number(config.line_size_multiplier, json!(1)),
-        "collapse-forces": collapsed("collapse-forces"),
-        "centerStrength": number(config.center_strength, json!(0.518713248970312)),
-        "repelStrength": number(config.repel_strength, json!(10)),
-        "linkStrength": number(config.link_strength, json!(1)),
-        "linkDistance": number(config.link_distance, json!(250)),
-        "scale": number(config.scale, json!(1)),
-        "close": config.close.unwrap_or(false),
-    })
+    config.full_document()
 }
 
 /// The config as a value to merge into an existing `graph.json`. The
 /// struct skips an empty `colorGroups`, and a merge keeps a key the new
 /// value lacks, so the last group removed has to be written as `[]`.
 fn merge_document(config: &GraphConfig) -> Value {
-    let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
-    if let Some(object) = value.as_object_mut() {
-        if config.color_groups.is_empty() {
-            object.insert("colorGroups".into(), json!([]));
-        }
-        if config.search.is_none() {
-            object.insert("search".into(), json!(""));
-        }
-    }
-    integerize(&mut value);
-    value
+    config.merge_document()
 }
 
 /// The options "Restore default settings" puts back: everything but the
@@ -1825,7 +1756,7 @@ fn frame(
     Some((scale, point(-cx * scale, -cy * scale)))
 }
 
-/// Builds the node and edge lists for the current filters.
+/// Builds the node and edge lists through the shared graph data model.
 fn build(
     state: &VaultState,
     config: &GraphConfig,
@@ -1833,252 +1764,45 @@ fn build(
     local_options: &LocalOptions,
 ) -> Built {
     let cache = state.cache();
-    let vault = state.vault();
-    let texts = state.texts();
-    let show_attachments = config.show_attachments.unwrap_or(false);
-    let show_tags = config.show_tags.unwrap_or(false);
-    let show_orphans = config.show_orphans.unwrap_or(true);
-    let hide_unresolved = config.hide_unresolved.unwrap_or(false);
-
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
-    fn add(
-        index: &mut HashMap<String, usize>,
-        nodes: &mut Vec<Node>,
-        id: String,
-        label: String,
-        kind: NodeKind,
-    ) -> usize {
-        if let Some(&ix) = index.get(&id) {
-            return ix;
-        }
-        let ix = nodes.len();
-        index.insert(id.clone(), ix);
-        nodes.push(Node {
-            id,
-            label: label.into(),
-            kind,
-            degree: 0,
-            color: None,
-        });
-        ix
-    }
-    let label_of = |path: &str| -> String {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        if FileKind::from_path(path) == FileKind::Markdown {
-            name.trim_end_matches(".md").to_string()
-        } else {
-            name.to_string()
-        }
-    };
-
-    // The search filter from graph.json narrows the note set.
-    let filter = config
-        .search
-        .as_deref()
-        .filter(|q| !q.trim().is_empty())
-        .and_then(|q| Search::new(q).ok());
-    // Excluded files are left out of the graph and the local graph, links
-    // into them and out of them with them (Obsidian 1.15.1, observed
-    // 2026-11-16, `excluded-files.mjs` step s05).
+    let vault = state.data();
     let excluded = state.excluded();
-    let passes = |path: &str| -> bool {
-        if excluded.is_excluded(path) {
-            return false;
-        }
-        let Some(search) = &filter else { return true };
-        let (Some(meta), Some(text)) = (cache.file(path), texts.get(path)) else {
-            return true;
-        };
-        let inputs = inputs(meta, text);
-        search
-            .matches(&SearchFile {
-                path,
-                content: text,
-                tags: &inputs.tags,
-                frontmatter: meta.frontmatter.as_ref(),
-                blocks: &inputs.blocks,
-                sections: &inputs.sections,
-                tasks: &inputs.tasks,
+    let data = tft_app::graph_data::build_graph(
+        &vault,
+        &cache,
+        &excluded,
+        config,
+        local,
+        tft_app::graph_data::LocalGraphOptions {
+            jumps: local_options.jumps,
+            backlinks: local_options.backlinks,
+            forelinks: local_options.forelinks,
+            interlinks: local_options.interlinks,
+        },
+    );
+    Built {
+        nodes: data
+            .nodes
+            .into_iter()
+            .map(|node| Node {
+                id: node.id,
+                label: node.label.into(),
+                kind: match node.kind {
+                    tft_app::graph_data::GraphNodeKind::Note => NodeKind::Note,
+                    tft_app::graph_data::GraphNodeKind::Attachment => NodeKind::Attachment,
+                    tft_app::graph_data::GraphNodeKind::Unresolved => NodeKind::Unresolved,
+                    tft_app::graph_data::GraphNodeKind::Tag => NodeKind::Tag,
+                },
+                degree: node.degree,
+                color: node.color.map(|color| {
+                    let mut value: Hsla = gpui::rgb(color.rgb).into();
+                    value.a = color.a.clamp(0.0, 1.0);
+                    value
+                }),
             })
-            .is_some()
-    };
-
-    for (path, _) in cache.files() {
-        if passes(path) {
-            add(
-                &mut index,
-                &mut nodes,
-                path.to_string(),
-                label_of(path),
-                NodeKind::Note,
-            );
-        }
+            .collect(),
+        edges: data.edges,
+        neighbors: data.neighbors,
     }
-    if show_attachments {
-        for file in vault.files() {
-            if file.kind != FileKind::Markdown
-                && file.kind != FileKind::Other
-                && !excluded.is_excluded(&file.path)
-            {
-                add(
-                    &mut index,
-                    &mut nodes,
-                    file.path.clone(),
-                    label_of(&file.path),
-                    NodeKind::Attachment,
-                );
-            }
-        }
-    }
-    // Obsidian's `localFile` is independent of `showAttachments` and of
-    // `showTags`: a local graph is centred on the file the user has open,
-    // whether or not the filters would show that file in the global graph.
-    // Without this the centre is missing from the index and the whole
-    // graph comes back empty.
-    if let Some(center) = local {
-        let kind = if FileKind::from_path(center) == FileKind::Markdown {
-            NodeKind::Note
-        } else {
-            NodeKind::Attachment
-        };
-        add(
-            &mut index,
-            &mut nodes,
-            center.to_string(),
-            label_of(center),
-            kind,
-        );
-    }
-
-    let mut edge_set: HashSet<(u32, u32)> = HashSet::new();
-    let note_paths: Vec<String> = cache.files().map(|(p, _)| p.to_string()).collect();
-    for path in &note_paths {
-        let Some(&from) = index.get(path) else {
-            continue;
-        };
-        if let Some(targets) = cache.resolved_links(path) {
-            for target in targets.keys() {
-                let kind = FileKind::from_path(target);
-                // An edge into the centre is drawn whatever the filters
-                // say about its kind, for the same reason the node is.
-                let is_center = local == Some(target.as_str());
-                if kind != FileKind::Markdown && !show_attachments && !is_center {
-                    continue;
-                }
-                if excluded.is_excluded(target) && !is_center {
-                    continue;
-                }
-                let to = match index.get(target) {
-                    Some(&ix) => ix,
-                    None if kind == FileKind::Markdown => continue, // filtered out
-                    None => add(
-                        &mut index,
-                        &mut nodes,
-                        target.clone(),
-                        label_of(target),
-                        NodeKind::Attachment,
-                    ),
-                };
-                if from != to {
-                    edge_set.insert((from as u32, to as u32));
-                }
-            }
-        }
-        if !hide_unresolved {
-            if let Some(targets) = cache.unresolved_links(path) {
-                for target in targets.keys() {
-                    if target.is_empty() {
-                        continue;
-                    }
-                    let to = add(
-                        &mut index,
-                        &mut nodes,
-                        format!("unresolved:{}", target.to_lowercase()),
-                        target.clone(),
-                        NodeKind::Unresolved,
-                    );
-                    edge_set.insert((from as u32, to as u32));
-                }
-            }
-        }
-        if show_tags {
-            if let Some(meta) = cache.file(path) {
-                for tag in tft_cache::all_tags(meta) {
-                    let to = add(
-                        &mut index,
-                        &mut nodes,
-                        format!("tag:{}", tag.to_lowercase()),
-                        format!("#{tag}"),
-                        NodeKind::Tag,
-                    );
-                    edge_set.insert((from as u32, to as u32));
-                }
-            }
-        }
-    }
-
-    // Color groups: first matching query wins. A group with an empty query is
-    // dropped here rather than asked, the same way the search filter above
-    // drops one: a group nobody has typed a query into yet paints nothing.
-    // Until 2026-10-28 this was not stated anywhere and the group coloured
-    // every note in the graph, because an `All` node with no children used to
-    // be vacuously true in the matcher. That default is gone, so saying it
-    // here is what keeps the behaviour deliberate -- and it keeps
-    // `groups.is_empty()` below meaning "nothing to colour".
-    let groups: Vec<(Search, Hsla)> = config
-        .color_groups
-        .iter()
-        .filter(|g| !g.query.trim().is_empty())
-        .filter_map(|g| {
-            let search = Search::new(&g.query).ok()?;
-            let rgb = g.color.rgb;
-            let mut color: Hsla = gpui::rgb(rgb).into();
-            color.a = g.color.a.clamp(0.0, 1.0);
-            Some((search, color))
-        })
-        .collect();
-    if !groups.is_empty() {
-        for node in nodes.iter_mut().filter(|n| n.kind == NodeKind::Note) {
-            let (Some(meta), Some(text)) = (cache.file(&node.id), texts.get(&node.id)) else {
-                continue;
-            };
-            let inputs = inputs(meta, text);
-            let file = SearchFile {
-                path: &node.id,
-                content: text,
-                tags: &inputs.tags,
-                frontmatter: meta.frontmatter.as_ref(),
-                blocks: &inputs.blocks,
-                sections: &inputs.sections,
-                tasks: &inputs.tasks,
-            };
-            node.color = groups
-                .iter()
-                .find(|(s, _)| s.matches(&file).is_some())
-                .map(|(_, c)| *c);
-        }
-    }
-
-    let mut edges: Vec<(u32, u32)> = edge_set.into_iter().collect();
-    edges.sort();
-
-    // Local graph: the centre and what the Depth and direction options
-    // reach from it.
-    if let Some(center) = local {
-        // Added above whether the filters kept it or not, so the only way
-        // this misses is a centre that is not a vault path at all.
-        let Some(&c) = index.get(center) else {
-            return Built {
-                nodes: Vec::new(),
-                edges: Vec::new(),
-                neighbors: Vec::new(),
-            };
-        };
-        let (keep, edges) = local_subgraph(&edges, c, local_options);
-        return finish(nodes, edges, Some(keep), true);
-    }
-    finish(nodes, edges, None, show_orphans)
 }
 
 /// The local graph's nodes and edges around `center`, from the directed
@@ -2101,6 +1825,7 @@ fn build(
 /// back into the centre is drawn with Incoming links off. What Obsidian does
 /// with the edges of a depth-2 graph is not observed; the depth-1 case, the
 /// one the controls are about, is.
+#[cfg(test)]
 fn local_subgraph(
     edges: &[(u32, u32)],
     center: usize,

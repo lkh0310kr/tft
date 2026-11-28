@@ -126,6 +126,9 @@ impl Workspace {
     ) {
         match request {
             FileOperationRequest::CreateNote { parent } => self.new_note(&parent, window, cx),
+            FileOperationRequest::CreateFolder { parent } => {
+                self.start_new_folder(&parent, window, cx)
+            }
         }
     }
 

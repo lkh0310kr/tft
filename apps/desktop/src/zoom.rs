@@ -712,7 +712,6 @@ impl PlatformWindow for ZoomWindow {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

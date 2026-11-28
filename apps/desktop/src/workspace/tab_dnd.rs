@@ -44,16 +44,12 @@ impl Workspace {
             .map(|((_, ix), b)| (*ix, *b))
             .collect();
         tabs.sort_by_key(|(ix, _)| *ix);
-        let Some((last_ix, last)) = tabs.last().copied() else {
-            return;
-        };
         let pointer = f32::from(position.x);
-        let edges = tabs
+        let tab_edges = tabs
             .iter()
-            .map(|(ix, b)| (*ix, f32::from(b.origin.x)))
-            .chain(std::iter::once((last_ix + 1, f32::from(last.right()))));
-        let Some((at, x)) =
-            edges.min_by(|a, b| (a.1 - pointer).abs().total_cmp(&(b.1 - pointer).abs()))
+            .map(|(ix, bounds)| (*ix, f32::from(bounds.left()), f32::from(bounds.right())))
+            .collect::<Vec<_>>();
+        let Some((at, x)) = tft_app::workspace::nearest_tab_drop_boundary(pointer, &tab_edges)
         else {
             return;
         };
@@ -294,17 +290,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<Tab> {
         let group = &mut self.groups[from_ix];
-        if ix >= group.state.tabs.len() {
-            return None;
-        }
-        let tab = group.state.tabs.remove(ix);
+        let active = group.state.active_tab;
+        let tab = tft_app::workspace::remove_tab_at(
+            &mut group.state.tabs,
+            &mut group.state.active_tab,
+            ix,
+        )?;
         if group.state.tabs.is_empty() {
             return Some(tab);
         }
-        if ix < group.state.active_tab {
-            group.state.active_tab -= 1;
-        } else if ix == group.state.active_tab {
-            group.state.active_tab = ix.min(group.state.tabs.len() - 1);
+        if ix == active {
             self.load_group(from_ix, cx);
             self.load_tab(cx);
             self.stash_active_group();
@@ -342,38 +337,73 @@ impl Workspace {
     ) {
         self.flush_save(cx);
         self.stash_active_group();
-        let (Some(from_ix), Some(to_ix)) = (self.group_ix(drag.group), self.group_ix(to)) else {
+        let (Some(from_ix), Some(to_ix)) = (self.group_ix(drag.source.group_id), self.group_ix(to))
+        else {
             return;
         };
-        let mut at = at.unwrap_or(usize::MAX);
-        let mut empty = false;
-        let tab = if from_ix == to_ix {
-            // A reorder: the strip's views keep showing what they show
-            // until the end, when the dragged tab takes over if it must.
+        if from_ix == to_ix {
+            // Pixel hit testing stays in the host, but the reorder transition
+            // is shared with Web so both strips use the same boundary rules.
             let group = &mut self.groups[to_ix];
-            if drag.tab >= group.state.tabs.len() {
-                return;
-            }
-            if drag.tab < at {
-                at -= 1;
-            }
-            group.state.tabs.remove(drag.tab)
-        } else {
-            let Some(tab) = self.take_tab(from_ix, drag.tab, cx) else {
+            let shown = group.state.tabs.get(group.state.active_tab).cloned();
+            let boundary = at
+                .unwrap_or(group.state.tabs.len())
+                .min(group.state.tabs.len());
+            let Some(_) = tft_app::workspace::move_tab_to_boundary(
+                &mut group.state.tabs,
+                &mut group.state.active_tab,
+                drag.source.tab_index,
+                boundary,
+            ) else {
                 return;
             };
-            empty = self.groups[from_ix].state.tabs.is_empty()
-                && !self.keep_last_main_group(from_ix, cx);
-            tab
-        };
+            self.load_group(to_ix, cx);
+            if shown.as_ref()
+                != self
+                    .active_group_state
+                    .tabs
+                    .get(self.active_group_state.active_tab)
+            {
+                self.load_tab(cx);
+            }
+            cx.notify();
+            return;
+        }
+        let at = at.unwrap_or(usize::MAX);
         // What the target's views show now: the tab that was active there, if any.
         let target = &mut self.groups[to_ix];
-        let shown = (from_ix != to_ix || drag.tab != target.state.active_tab)
-            .then(|| target.state.tabs.get(target.state.active_tab).cloned())
-            .flatten();
-        let at = at.min(target.state.tabs.len());
-        target.state.tabs.insert(at, tab);
-        target.state.active_tab = at;
+        let shown = target.state.tabs.get(target.state.active_tab).cloned();
+        let source_was_active = self.groups[from_ix].state.active_tab == drag.source.tab_index;
+        let transfer = if from_ix < to_ix {
+            let (before_target, target_and_after) = self.groups.split_at_mut(to_ix);
+            tft_app::workspace::transfer_tab_between_strips(
+                &mut before_target[from_ix].state.tabs,
+                &mut before_target[from_ix].state.active_tab,
+                drag.source.tab_index,
+                &mut target_and_after[0].state.tabs,
+                &mut target_and_after[0].state.active_tab,
+                at,
+            )
+        } else {
+            let (before_source, source_and_after) = self.groups.split_at_mut(from_ix);
+            tft_app::workspace::transfer_tab_between_strips(
+                &mut source_and_after[0].state.tabs,
+                &mut source_and_after[0].state.active_tab,
+                drag.source.tab_index,
+                &mut before_source[to_ix].state.tabs,
+                &mut before_source[to_ix].state.active_tab,
+                at,
+            )
+        };
+        let Some(transfer) = transfer else {
+            return;
+        };
+        if source_was_active && !transfer.source_empty {
+            self.load_group(from_ix, cx);
+            self.load_tab(cx);
+            self.stash_active_group();
+        }
+        let empty = transfer.source_empty && !self.keep_last_main_group(from_ix, cx);
         self.load_group(to_ix, cx);
         if shown.is_none()
             || self
@@ -385,7 +415,7 @@ impl Workspace {
             self.load_tab(cx);
         }
         if empty {
-            self.close_group(drag.group, false, cx);
+            self.close_group(drag.source.group_id, false, cx);
         }
         cx.notify();
     }
@@ -404,16 +434,16 @@ impl Workspace {
     ) {
         self.flush_save(cx);
         self.stash_active_group();
-        let Some(from_ix) = self.group_ix(drag.group) else {
+        let Some(from_ix) = self.group_ix(drag.source.group_id) else {
             return;
         };
-        if drag.group == beside && self.groups[from_ix].state.tabs.len() <= 1 {
+        if drag.source.group_id == beside && self.groups[from_ix].state.tabs.len() <= 1 {
             return;
         }
         if self.group_ix(beside).is_none() {
             return;
         }
-        let Some(tab) = self.take_tab(from_ix, drag.tab, cx) else {
+        let Some(tab) = self.take_tab(from_ix, drag.source.tab_index, cx) else {
             return;
         };
         let empty =
@@ -428,7 +458,7 @@ impl Workspace {
         self.load_group(ix, cx);
         self.load_tab(cx);
         if empty {
-            self.close_group(drag.group, false, cx);
+            self.close_group(drag.source.group_id, false, cx);
         }
         cx.notify();
     }

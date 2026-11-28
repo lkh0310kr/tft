@@ -584,4 +584,24 @@ mod tests {
         assert_eq!(bytes("cmd-w"), None);
         assert_eq!(bytes("cmd-p"), None);
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_composing_key_char_is_left_to_the_input_method() {
+        let composing = Keystroke {
+            key: "g".into(),
+            key_char: Some("ㅇ".into()),
+            ..Keystroke::default()
+        };
+        assert_eq!(keystroke_to_bytes(&composing, TermMode::empty()), None);
+        let ascii = Keystroke {
+            key: "g".into(),
+            key_char: Some("g".into()),
+            ..Keystroke::default()
+        };
+        assert_eq!(
+            keystroke_to_bytes(&ascii, TermMode::empty()),
+            Some(b"g".to_vec())
+        );
+    }
 }

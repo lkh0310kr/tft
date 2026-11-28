@@ -240,6 +240,29 @@ impl Documents {
         DocState::Loading
     }
 
+    /// Supplies bytes fetched by a host that cannot expose a local file path,
+    /// while keeping the same page cache and rendering pipeline as local PDFs.
+    pub fn provide_bytes(&self, key: &Path, bytes: Vec<u8>, cx: &mut App) {
+        {
+            let mut inner = Inner::lock(&self.inner);
+            if inner.docs.contains_key(key) {
+                return;
+            }
+            inner.docs.insert(key.to_path_buf(), DocState::Loading);
+        }
+        let this = self.clone();
+        let key = key.to_path_buf();
+        cx.spawn(async move |cx| {
+            let state = cx
+                .background_executor()
+                .spawn(async move { load_bytes(bytes, "", false) })
+                .await;
+            Inner::lock(&this.inner).docs.insert(key, state);
+            cx.update(|cx| cx.refresh_windows());
+        })
+        .detach();
+    }
+
     /// Tries `password` on a locked file; the view shows the outcome on the
     /// next refresh (ready, or locked again with `wrong`).
     pub fn unlock(&self, absolute: &Path, password: &str, cx: &mut App) {
@@ -437,6 +460,10 @@ fn load(path: &Path, password: &str, tried: bool) -> DocState {
         Ok(bytes) => bytes,
         Err(err) => return DocState::Failed(err.to_string()),
     };
+    load_bytes(bytes, password, tried)
+}
+
+fn load_bytes(bytes: Vec<u8>, password: &str, tried: bool) -> DocState {
     match Document::open_with_password(bytes, password) {
         Ok(document) => {
             let sizes = document.sizes();

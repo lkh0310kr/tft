@@ -327,7 +327,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.leave_search_field(window, cx);
-        self.left_dock.visible = true;
+        self.left_dock.set_visible(true);
         self.explorer
             .update(cx, |e, cx| e.reveal_and_focus(path, window, cx));
         cx.notify();

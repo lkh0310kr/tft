@@ -12,41 +12,32 @@ use crate::reading::{self, ReadingView};
 use gpui::{AppContext, Context, Entity, SharedString, Window};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tft_app::{place_new_tab, HistoryEntry, Tab};
+use tft_app::{place_new_tab, ClosedTabHistory as SharedClosedTabHistory, HistoryEntry, Tab};
 use tft_markdown::Subpath;
-
-/// How many closed tabs `workspace:undo-close-pane` can bring back.
-const CLOSED_TABS_KEPT: usize = 20;
 
 /// Session-local undo history for closed tabs, oldest first.
 #[derive(Default)]
 pub(super) struct ClosedTabHistory {
-    tabs: Vec<(usize, Tab)>,
+    shared: SharedClosedTabHistory,
 }
 
 impl ClosedTabHistory {
     fn remember(&mut self, ix: usize, tab: Tab) {
         // Empty tabs are not worth bringing back.
-        if tab.path.is_none()
-            && tab.mode != ViewMode::Graph
-            && tab.mode != ViewMode::Search
-            && tab.mode != ViewMode::Terminal
-            && release_notes::version_of(&tab).is_none()
-        {
-            return;
-        }
-        self.tabs.push((ix, tab));
-        if self.tabs.len() > CLOSED_TABS_KEPT {
-            self.tabs.remove(0);
-        }
+        let restorable = tab.path.is_some()
+            || tab.mode == ViewMode::Graph
+            || tab.mode == ViewMode::Search
+            || tab.mode == ViewMode::Terminal
+            || release_notes::version_of(&tab).is_some();
+        self.shared.remember(ix, tab, restorable);
     }
 
     fn take_last(&mut self) -> Option<(usize, Tab)> {
-        self.tabs.pop()
+        self.shared.take_last()
     }
 
     pub(super) fn clear(&mut self) {
-        self.tabs.clear();
+        self.shared.clear();
     }
 }
 
@@ -379,15 +370,21 @@ impl Workspace {
         }
         self.flush_save(cx);
         self.active_group_state.stash_active_tab();
-        self.active_group_state.active_tab = ix;
+        tft_app::workspace::activate_tab_index(
+            self.active_group_state.tabs.len(),
+            &mut self.active_group_state.active_tab,
+            ix,
+        );
         self.load_tab(cx);
     }
 
     /// `workspace:next-tab` and `previous-tab`: `step` tabs along, wrapping.
-    pub(super) fn cycle_tab(&mut self, step: usize, cx: &mut Context<Self>) {
+    pub(super) fn cycle_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
         let n = self.active_group_state.tabs.len();
-        if n > 1 {
-            self.activate_tab((self.active_group_state.active_tab + step) % n, cx);
+        if let Some(index) =
+            tft_app::cycle_tab_index(self.active_group_state.active_tab, n, forward)
+        {
+            self.activate_tab(index, cx);
         }
     }
 
@@ -436,7 +433,13 @@ impl Workspace {
     /// `workspace:close-others`: every tab but the active one and the pinned ones (observed).
     pub(super) fn close_other_tabs(&mut self, cx: &mut Context<Self>) {
         let active = self.active_group_state.active_tab;
-        self.close_tabs_but(|i, t| i == active || t.pinned, Some(active), cx);
+        self.close_tabs_but(
+            |index, tab| {
+                tft_app::tab_close_action_keeps(tft_app::TabCloseAction::Others, index, active, tab)
+            },
+            Some(active),
+            cx,
+        );
     }
 
     /// The tab header's "Close all": every tab but the pinned ones, the first of which
@@ -444,7 +447,19 @@ impl Workspace {
     pub(super) fn close_all_tabs(&mut self, cx: &mut Context<Self>) {
         self.active_group_state.stash_active_tab();
         if self.active_group_state.tabs.iter().any(|t| t.pinned) {
-            return self.close_tabs_but(|_, t| t.pinned, None, cx);
+            let active = self.active_group_state.active_tab;
+            return self.close_tabs_but(
+                |index, tab| {
+                    tft_app::tab_close_action_keeps(
+                        tft_app::TabCloseAction::All,
+                        index,
+                        active,
+                        tab,
+                    )
+                },
+                None,
+                cx,
+            );
         }
         let group = self.active_group_id();
         for ix in (0..self.active_group_state.tabs.len()).rev() {
@@ -468,6 +483,7 @@ impl Workspace {
         self.active_group_state.stash_active_tab();
         let old_active = self.active_group_state.active_tab;
         let mut kept = Vec::new();
+        let mut closed = Vec::new();
         let (mut preferred, mut was_active) = (None, None);
         for (i, tab) in std::mem::take(&mut self.active_group_state.tabs)
             .into_iter()
@@ -482,8 +498,11 @@ impl Workspace {
                 }
                 kept.push(tab);
             } else {
-                self.remember_closed(i, tab);
+                closed.push((i, tab));
             }
+        }
+        for (index, tab) in closed.into_iter().rev() {
+            self.remember_closed(index, tab);
         }
         debug_assert!(!kept.is_empty());
         if kept.is_empty() {
@@ -770,7 +789,7 @@ impl Workspace {
             self.active_group_state.stash_active_tab();
             let tabs = std::mem::take(&mut self.active_group_state.tabs);
             if remember {
-                for (i, tab) in tabs.into_iter().enumerate() {
+                for (i, tab) in tabs.into_iter().enumerate().rev() {
                     self.remember_closed(i, tab);
                 }
             }
@@ -791,7 +810,7 @@ impl Workspace {
         }
         if remember {
             let tabs = self.groups[ix].state.tabs.clone();
-            for (i, tab) in tabs.into_iter().enumerate() {
+            for (i, tab) in tabs.into_iter().enumerate().rev() {
                 self.remember_closed(i, tab);
             }
         }

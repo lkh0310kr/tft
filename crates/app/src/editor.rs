@@ -1115,6 +1115,40 @@ impl Editor {
         self.request_parse(cx);
     }
 
+    /// Loads a workspace document and applies its persisted reading/editor
+    /// mode before parsing, so restored Live Preview tabs render consistently.
+    pub fn set_workspace_document(
+        &mut self,
+        name: impl Into<SharedString>,
+        raw: String,
+        mode: crate::ViewMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.live_preview = mode == crate::ViewMode::LivePreview;
+        self.set_text(name, raw, cx);
+    }
+
+    /// Replaces a workspace document's buffer while keeping the current byte
+    /// selection in place. Used when another shared view edits the same note.
+    pub fn set_workspace_document_preserving_selection(
+        &mut self,
+        name: impl Into<SharedString>,
+        raw: String,
+        mode: crate::ViewMode,
+        cx: &mut Context<Self>,
+    ) {
+        let selection = self.selection();
+        self.set_workspace_document(name, raw, mode, cx);
+        self.buf.collapse_cursors();
+        self.buf.anchor = self.buf.clamp_offset(selection.start);
+        self.buf.head = self.buf.clamp_offset(selection.end);
+        self.buf.goal = None;
+        self.buf.marked = None;
+        self.update_suggest(false, cx);
+        self.pending_reveal = true;
+        cx.notify();
+    }
+
     /// Live Preview's **Edit this block** over a Mermaid diagram: the caret goes to the widget's
     /// first line, as a click on any other widget does.
     fn edit_block(&mut self, line: usize, cx: &mut Context<Self>) {

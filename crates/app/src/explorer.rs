@@ -1,10 +1,72 @@
 //! The Files view model: ordering, collapse state and visible rows.
 
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashSet};
 use tft_formats::files::VaultFile;
 use tft_formats::FileKind;
 use tft_search::natural_cmp;
+
+#[derive(Default)]
+struct RadialFolder {
+    folders: BTreeMap<String, RadialFolder>,
+    notes: Vec<(String, String)>,
+}
+
+impl RadialFolder {
+    fn folder_mut(&mut self, path: &str) -> &mut RadialFolder {
+        let mut current = self;
+        for part in path.split('/').filter(|part| !part.is_empty()) {
+            current = current.folders.entry(part.to_string()).or_default();
+        }
+        current
+    }
+
+    fn encode(&self, name: &str, paths: &mut Vec<Option<String>>) -> Value {
+        paths.push(None);
+        let mut children = vec![Value::String(name.to_string())];
+        for (name, folder) in &self.folders {
+            children.push(folder.encode(name, paths));
+        }
+        let mut notes = self.notes.clone();
+        notes.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        for (label, path) in notes {
+            paths.push(Some(path));
+            children.push(Value::String(label));
+        }
+        Value::Array(children)
+    }
+}
+
+/// Builds the stable folder/note tree and event-index path map used by the
+/// optional radial explorer in both native and Web hosts.
+pub fn radial_tree_data(
+    vault_name: &str,
+    folders: &[String],
+    files: &[VaultFile],
+) -> (Value, Vec<Option<String>>) {
+    let mut root = RadialFolder::default();
+    for folder in folders {
+        root.folder_mut(folder);
+    }
+    for file in files.iter().filter(|file| file.kind == FileKind::Markdown) {
+        let (parent, leaf) = file
+            .path
+            .rsplit_once('/')
+            .unwrap_or(("", file.path.as_str()));
+        let label = std::path::Path::new(leaf)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(leaf)
+            .to_owned();
+        root.folder_mut(parent)
+            .notes
+            .push((label, file.path.clone()));
+    }
+    let mut paths = Vec::new();
+    let data = root.encode(vault_name, &mut paths);
+    (data, paths)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortOrder {
@@ -240,10 +302,27 @@ impl FileTree {
     }
 
     pub fn from_vault_sorted(data: &tft_domain::VaultData, sort: SortOrder) -> FileTree {
+        Self::from_vault_sorted_with_options(data, sort, false)
+    }
+
+    /// Builds from the indexed vault while applying the same unsupported-file
+    /// visibility option as [`FileTree::new`].
+    pub fn from_vault_with_options(
+        data: &tft_domain::VaultData,
+        show_unsupported: bool,
+    ) -> FileTree {
+        Self::from_vault_sorted_with_options(data, SortOrder::Alphabetical, show_unsupported)
+    }
+
+    pub fn from_vault_sorted_with_options(
+        data: &tft_domain::VaultData,
+        sort: SortOrder,
+        show_unsupported: bool,
+    ) -> FileTree {
         let vault = data
             .children(data.root)
             .iter()
-            .filter_map(|id| vault_entry(data, *id))
+            .filter_map(|id| vault_entry(data, *id, show_unsupported))
             .collect::<Vec<_>>();
         let mut all = Vec::new();
         flatten_vault(&vault, 0, sort, &mut all);
@@ -507,8 +586,17 @@ fn flatten(folder: &Folder, prefix: &str, depth: usize, sort: SortOrder, out: &m
     }
 }
 
-fn vault_entry(data: &tft_domain::VaultData, id: tft_domain::NodeId) -> Option<VaultEntry> {
+fn vault_entry(
+    data: &tft_domain::VaultData,
+    id: tft_domain::NodeId,
+    show_unsupported: bool,
+) -> Option<VaultEntry> {
     let node = data.node(id)?;
+    if matches!(node.kind, tft_domain::NodeKind::File(meta) if meta.kind == FileKind::Other)
+        && !show_unsupported
+    {
+        return None;
+    }
     let path = data.path(id).unwrap_or("").to_string();
     let key = if path.is_empty() {
         format!("#{}", id.0)
@@ -522,7 +610,7 @@ fn vault_entry(data: &tft_domain::VaultData, id: tft_domain::NodeId) -> Option<V
     let children = data
         .children(id)
         .iter()
-        .filter_map(|child| vault_entry(data, *child))
+        .filter_map(|child| vault_entry(data, *child, show_unsupported))
         .collect();
     Some(VaultEntry {
         id,

@@ -312,7 +312,7 @@ impl Workspace {
         // dock's Files tab is what puts its handle on screen.
         if name == "explorer" {
             self.leave_search_field(window, cx);
-            self.left_dock.visible = true;
+            self.left_dock.set_visible(true);
             self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
             cx.notify();
             return Ok(());

@@ -715,6 +715,19 @@ impl PdfView {
         cx.notify();
     }
 
+    /// Shows a PDF supplied by a remote host. `cache_key` is a stable,
+    /// synthetic path used only to key the shared parsed page cache.
+    pub fn load_bytes(
+        &mut self,
+        path: &str,
+        cache_key: PathBuf,
+        bytes: Vec<u8>,
+        cx: &mut Context<Self>,
+    ) {
+        documents(cx).provide_bytes(&cache_key, bytes, cx);
+        self.load(path, cache_key, cx);
+    }
+
     /// What the session remembered, in the shape [`PdfView::view_state_json`]
     /// writes: `page` one-based as a link's `page=` is, `zoom` pdf.js's
     /// value.

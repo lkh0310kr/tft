@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
-use tft_app::SplitDirection;
+use tft_app::{SplitDirection, TabDragSource};
 
 /// Live state for one tab drag, shared by drag coordination and frame rendering.
 #[derive(Default)]
@@ -22,8 +22,7 @@ pub(super) struct TabDragState {
 /// The payload of a tab drag: the group's strip and tab index. The tab stays until the drop.
 #[derive(Debug, Clone)]
 pub(super) struct TabDrag {
-    pub(super) group: u64,
-    pub(super) tab: usize,
+    pub(super) source: TabDragSource,
     pub(super) title: SharedString,
 }
 

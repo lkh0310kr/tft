@@ -1,7 +1,6 @@
 //! The workspace shell: docks, tab groups, the reading/editor area, overlays and popouts.
 //! Commands run by id; hotkeys come from `hotkeys.json`; the vault is indexed in the background.
 
-use crate::assets::icon;
 use crate::canvas::CanvasView;
 use crate::chooser::Chooser;
 use crate::copy_results::CopyResults;
@@ -10,14 +9,13 @@ use crate::export_modals::{ImageExport, PdfExport};
 use crate::file_menu::{self, Pick};
 use crate::graph::GraphView;
 use crate::inline_field;
-use crate::palette::CommandPalette;
 use crate::pdf::view::PdfView;
 use crate::prompt::Prompt;
 use crate::reading::{LinkTarget, ReadingView};
 use crate::search::SearchPane;
 use crate::settings::SettingsView;
 use crate::switcher::QuickSwitcher;
-use crate::theme::{ICON_SIZE, RIBBON_WIDTH, SIDEBAR_WIDTH};
+use crate::theme::{RIBBON_WIDTH, SIDEBAR_WIDTH};
 use gpui::{
     actions, prelude::*, App, Context, Entity, FocusHandle, Focusable, SharedString, Subscription,
     Window,
@@ -27,6 +25,7 @@ use serde_json::json;
 #[cfg(test)]
 use serde_json::Value;
 use std::path::PathBuf;
+use tft_app::command_palette::CommandPalette;
 use tft_cache::basename;
 
 // Files from outside the vault: insert attachment, download attachments, open file.

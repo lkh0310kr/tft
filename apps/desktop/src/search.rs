@@ -29,10 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 use tft_cache::CachedMetadata;
-pub(crate) use tft_search::inputs;
-use tft_search::{
-    context_window, match_lines, natural_cmp, parse, MatchLine, Query, Search, SearchFile,
-};
+use tft_search::{context_window, match_lines, parse, MatchLine, Query, Search, SearchFile};
 
 #[derive(Debug, Clone)]
 pub struct FileResult {
@@ -446,21 +443,7 @@ impl SearchPane {
     }
 
     fn focus_step(&mut self, delta: isize, cx: &mut Context<Self>) {
-        if self.rows.is_empty() {
-            return;
-        }
-        let next = match self.focused {
-            None if delta > 0 => Some(0),
-            None => None,
-            Some(ix) => {
-                let n = ix as isize + delta;
-                if n < 0 {
-                    None
-                } else {
-                    Some((n as usize).min(self.rows.len() - 1))
-                }
-            }
-        };
+        let next = tft_app::selection_step(self.focused, self.rows.len(), delta, false);
         self.focused = next;
         if let Some(ix) = next {
             self.list.scroll_to_reveal_item(ix);
@@ -1362,19 +1345,23 @@ pub fn run_search(search: &Search, state: &VaultState) -> Vec<FileResult> {
 /// the order they had — which is what Obsidian's rows did when the sort was
 /// switched.
 pub fn sort_results(results: &mut [FileResult], order: SortOrder) {
-    let tie = |a: &FileResult, b: &FileResult| b.path.cmp(&a.path);
-    match order {
-        SortOrder::Alphabetical => {
-            results.sort_by(|a, b| natural_cmp(&a.name, &b.name).then_with(|| tie(a, b)));
-        }
-        SortOrder::AlphabeticalReverse => {
-            results.sort_by(|a, b| natural_cmp(&b.name, &a.name).then_with(|| tie(a, b)));
-        }
-        SortOrder::ByModifiedTime => results.sort_by_key(|r| std::cmp::Reverse(r.mtime)),
-        SortOrder::ByModifiedTimeReverse => results.sort_by_key(|r| r.mtime),
-        SortOrder::ByCreatedTime => results.sort_by_key(|r| std::cmp::Reverse(r.ctime)),
-        SortOrder::ByCreatedTimeReverse => results.sort_by_key(|r| r.ctime),
-    }
+    results.sort_by(|a, b| {
+        tft_app::search_results::compare_search_results(
+            tft_app::search_results::SearchSortKey {
+                name: &a.name,
+                path: &a.path,
+                modified: a.mtime,
+                created: a.ctime,
+            },
+            tft_app::search_results::SearchSortKey {
+                name: &b.name,
+                path: &b.path,
+                modified: b.mtime,
+                created: b.ctime,
+            },
+            order,
+        )
+    });
 }
 
 /// The matcher reports name hits against the base name with its extension;

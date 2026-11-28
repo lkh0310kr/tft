@@ -426,6 +426,7 @@ pub struct TerminalView {
     /// The pointer is dragging a selection, and the cell it started on.
     selecting: bool,
     select_anchor: Option<AlacPoint>,
+    select_type: SelectionType,
 
     /// Text an IME is composing; the input method commits it through
     /// [`EntityInputHandler::replace_text_in_range`].
@@ -559,6 +560,7 @@ impl TerminalView {
             viewport_cell: Rc::new(Cell::new((px(0.), px(0.)))),
             selecting: false,
             select_anchor: None,
+            select_type: SelectionType::Simple,
             marked_text: None,
             last_mouse_cell: None,
             mouse_button: None,
@@ -836,8 +838,13 @@ impl TerminalView {
             && let Some(point) = self.point_at(event.position)
         {
             self.select_anchor = Some(point);
+            self.select_type = match event.click_count {
+                2 => SelectionType::Semantic,
+                n if n >= 3 => SelectionType::Lines,
+                _ => SelectionType::Simple,
+            };
             self.state.with_term_mut(|term| {
-                term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+                term.selection = Some(Selection::new(self.select_type, point, Side::Left));
             });
             self.selecting = true;
             cx.notify();
@@ -845,12 +852,7 @@ impl TerminalView {
     }
 
     /// Ends a drag selection; the range stays for Cmd-C.
-    fn on_mouse_up(
-        &mut self,
-        event: &MouseUpEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some((col, row)) = self.screen_cell(event.position)
             && self.mouse_report_mode().is_some()
             && !event.modifiers.shift
@@ -878,7 +880,14 @@ impl TerminalView {
         {
             if self.last_mouse_cell != Some((col, row)) {
                 self.last_mouse_cell = Some((col, row));
-                self.report_mouse(event.pressed_button, col, row, false, true, event.modifiers);
+                self.report_mouse(
+                    event.pressed_button.or(self.mouse_button),
+                    col,
+                    row,
+                    false,
+                    true,
+                    event.modifiers,
+                );
             }
             return;
         }
@@ -976,9 +985,9 @@ impl TerminalView {
         } else {
             let code = if release { 3 + mods } else { code };
             bytes.extend_from_slice(&[0x1b, b'[', b'M']);
-            bytes.push((32 + code) as u8);
-            bytes.push((32 + col as u8 + 1).min(255));
-            bytes.push((32 + row as u8 + 1).min(255));
+            bytes.push((32 + code).min(255) as u8);
+            bytes.push((33 + col).min(255) as u8);
+            bytes.push((33 + row).min(255) as u8);
         }
         let mut writer = self.stdin_writer.lock();
         let _ = writer.write_all(&bytes);
@@ -996,14 +1005,12 @@ impl TerminalView {
         let code = if up { 64 } else { 65 } + mods;
         let mut bytes = Vec::new();
         if mode.contains(TermMode::SGR_MOUSE) {
-            bytes.extend_from_slice(
-                format!("\x1b[<{};{};{}M", code, col + 1, row + 1).as_bytes(),
-            );
+            bytes.extend_from_slice(format!("\x1b[<{};{};{}M", code, col + 1, row + 1).as_bytes());
         } else {
             bytes.extend_from_slice(&[0x1b, b'[', b'M']);
-            bytes.push((32 + code) as u8);
-            bytes.push((32 + col as u8 + 1).min(255));
-            bytes.push((32 + row as u8 + 1).min(255));
+            bytes.push((32 + code).min(255) as u8);
+            bytes.push((33 + col).min(255) as u8);
+            bytes.push((33 + row).min(255) as u8);
         }
         let mut writer = self.stdin_writer.lock();
         let _ = writer.write_all(&bytes);
@@ -1091,6 +1098,14 @@ impl TerminalView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
+        if !event.modifiers.shift
+            && self.mouse_report_mode().is_some()
+            && let Some((col, row)) = self.screen_cell(event.position)
+        {
+            let up = f32::from(event.delta.pixel_delta(px(20.)).y) > 0.0;
+            self.report_wheel(up, col, row, event.modifiers);
+            return;
+        }
         let line_height = self.renderer.cell_height;
         if line_height <= px(0.) {
             return;
@@ -1231,6 +1246,12 @@ impl TerminalView {
     }
 }
 
+fn trace_ime(kind: &str, text: &str) {
+    if std::env::var_os("TFT_TERM_TRACE").is_some() {
+        eprintln!("terminal ime {kind}: {text:?}");
+    }
+}
+
 impl EntityInputHandler for TerminalView {
     fn text_for_range(
         &mut self,
@@ -1273,6 +1294,7 @@ impl EntityInputHandler for TerminalView {
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.marked_text.take().is_some() {
+            trace_ime("unmark", "");
             cx.notify();
         }
     }
@@ -1284,6 +1306,7 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        trace_ime("commit", text);
         self.marked_text = None;
         if !text.is_empty() {
             self.send_text(text);
@@ -1299,6 +1322,7 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        trace_ime("mark", new_text);
         self.marked_text = Some(new_text.to_string());
         cx.notify();
     }

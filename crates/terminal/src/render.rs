@@ -578,7 +578,8 @@ impl TerminalRenderer {
 
                 // The second cell of a wide character is a placeholder.
                 if flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
-                    || flags.contains(alacritty_terminal::term::cell::Flags::LEADING_WIDE_CHAR_SPACER)
+                    || flags
+                        .contains(alacritty_terminal::term::cell::Flags::LEADING_WIDE_CHAR_SPACER)
                 {
                     continue;
                 }
@@ -671,7 +672,10 @@ impl TerminalRenderer {
                         + self.cell_height * (line_idx as f32)
                         + (self.cell_height - glyph_height) / 2.0;
                     let _ = shaped_line.paint(
-                        Point { x: draw_x, y: centered },
+                        Point {
+                            x: draw_x,
+                            y: centered,
+                        },
                         self.cell_height,
                         TextAlign::Left,
                         None,

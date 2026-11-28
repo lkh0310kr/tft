@@ -533,8 +533,8 @@ mod tests {
             .iter()
             .find(|s| s.kind == HighlightKind::CodeBlock)
             .expect("the opening fence's span");
-        assert!(lines[1..3]
+        assert!(lines[1..3].iter().all(|l| l
             .iter()
-            .all(|l| l.iter().any(|s| s.kind == HighlightKind::CodeBlock && s.id == fence.id)));
+            .any(|s| s.kind == HighlightKind::CodeBlock && s.id == fence.id)));
     }
 }

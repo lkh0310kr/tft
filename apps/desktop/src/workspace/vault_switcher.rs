@@ -2,7 +2,7 @@
 
 use super::Workspace;
 use crate::assets::icon;
-use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
+use crate::theme::{Theme, FONT_UI_SMALL};
 use gpui::{anchored, deferred, div, point, prelude::*, px, Context, Window};
 use std::path::{Path, PathBuf};
 use tft_vault::VaultRegistry;
@@ -18,7 +18,6 @@ impl VaultSwitcherState {
     pub(super) fn is_menu_open(&self) -> bool {
         self.menu_open
     }
-
 }
 
 fn now_millis() -> i64 {
@@ -119,79 +118,40 @@ impl Workspace {
     ) -> gpui::Div {
         let menu = self.render_vault_menu(theme, window, cx);
         let theme_menu = self.render_theme_menu(theme, cx);
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .flex_shrink_0()
-            .h(px(HEADER_HEIGHT))
-            .px(px(8.))
-            .gap(px(2.))
-            // `.workspace-sidedock-vault-profile`: secondary background over a divider
-            // hairline; the name is `--vault-profile-color` at weight 500.
-            .border_t_1()
-            .border_color(theme.tokens.divider_color)
+        crate::ui::workspace_dock_footer(theme)
             .child(
-                div()
-                    .id("vault-switcher")
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .min_w_0()
-                    .flex_1()
-                    .h(px(24.))
-                    .pr(px(6.))
-                    .rounded(px(4.))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.tokens.background_modifier_hover))
-                    .when(self.vault_switcher_state.menu_open, |d| {
-                        d.bg(theme.tokens.background_modifier_hover)
-                    })
-                    .on_hover(cx.listener(|this, over: &bool, _, _| {
-                        this.vault_switcher_state.hovered = *over;
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_vault_menu(cx)))
-                    // The menu's anchor is this box: an absolute element left to the
-                    // row's centring would hang from its middle.
-                    .child(div().absolute().top_0().left_0().size_0().children(menu))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .w(px(28.))
-                            .h(px(24.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                icon("chevrons-up-down", ICON_SIZE, theme.tokens.icon_color)
-                                    .opacity(theme.tokens.icon_opacity),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(px(FONT_UI_SMALL))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.tokens.vault_profile_color)
-                            .child(self.vault_session.name.clone()),
-                    ),
+                crate::ui::workspace_dock_profile_button(
+                    "vault-switcher",
+                    self.vault_session.name.clone(),
+                    theme,
+                )
+                .when(self.vault_switcher_state.menu_open, |d| {
+                    d.bg(theme.tokens.background_modifier_hover)
+                })
+                .on_hover(cx.listener(|this, over: &bool, _, _| {
+                    this.vault_switcher_state.hovered = *over;
+                }))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_vault_menu(cx)))
+                // The menu's anchor is this box: an absolute element left to the
+                // row's centring would hang from its middle.
+                .child(div().absolute().top_0().left_0().size_0().children(menu)),
             )
             .child(
                 crate::ui::icon_button("vault-settings", "settings", theme)
                     .tooltip(crate::ui::tooltip("Color scheme"))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_theme_menu(cx)))
-                    .child(div().absolute().top_0().left_0().size_0().children(theme_menu)),
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_0()
+                            .children(theme_menu),
+                    ),
             )
     }
 
-    fn render_theme_menu(
-        &self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
+    fn render_theme_menu(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         if !self.vault_switcher_state.theme_menu_open {
             return None;
         }
@@ -249,7 +209,9 @@ impl Workspace {
                             .flex_shrink_0()
                             .flex()
                             .items_center()
-                            .children(is_selected.then(|| icon("check", 14., theme.tokens.text_muted))),
+                            .children(
+                                is_selected.then(|| icon("check", 14., theme.tokens.text_muted)),
+                            ),
                     )
                     .child(label),
             );

@@ -369,51 +369,51 @@ fn right_click_caret(selection: &std::ops::Range<usize>, at: usize) -> Option<us
 /// the target is disabled rather than left out, as Zed's project panel does.
 /// No icons: the tree's menu is a plain list.
 fn tree_items(target: &Target) -> Vec<Item> {
+    use tft_app::file_tree_menu::{FileTreeMenuAction as A, FileTreeMenuSection as M};
     use Pick as P;
     use Section as S;
     let file = matches!(target, Target::File(_));
     let folder = matches!(target, Target::Folder(_));
-    let row = |label: &'static str, section: Section, pick: Pick, enabled: bool| Item {
-        label: SharedString::new_static(label),
-        icon: "",
-        section,
-        pick,
-        disabled: !enabled,
-        warning: false,
-        checked: false,
-        submenu: Vec::new(),
-    };
-    vec![
-        // A file's creation rows act on the folder that holds it, so they
-        // stay enabled there too: a context menu greys out only what has no
-        // sensible target, never an item whose target is one level up.
-        row("New File", S::ActionPrimary, P::NewNote, true),
-        row("New folder", S::ActionPrimary, P::NewFolder, true),
-        row("New canvas", S::ActionPrimary, P::NewCanvas, true),
-        row("Open in new tab", S::Open, P::OpenInNewTab, file),
-        row("Open to the right", S::Open, P::OpenToRight, file),
-        row("Open in new window", S::Open, P::OpenInNewWindow, file),
-        row("Duplicate", S::Action, P::Duplicate, file || folder),
-        row("Move to...", S::Action, P::Move, file || folder),
-        // A file's "Search in folder" is the folder above it.
-        row(
-            "Search in folder",
-            S::Action,
-            P::SearchInFolder,
-            file || folder,
-        ),
-        row("Copy Path", S::Unsectioned, P::CopyAbsolutePath, file || folder),
-        row("Copy Relative Path", S::Unsectioned, P::CopyPath, file || folder),
-        row("Open in default app", S::System, P::OpenInDefaultApp, file),
-        row(
-            reveal_label(),
-            S::System,
-            P::ShowInSystemExplorer,
-            file || folder,
-        ),
-        row("Rename...", S::Danger, P::Rename, file || folder),
-        row("Delete", S::Danger, P::Delete, file || folder),
-    ]
+    tft_app::file_tree_menu::file_tree_menu_items(file, folder, reveal_label())
+        .into_iter()
+        .map(|row| {
+            let pick = match row.action {
+                A::NewFile => P::NewNote,
+                A::NewFolder => P::NewFolder,
+                A::NewCanvas => P::NewCanvas,
+                A::OpenInNewTab => P::OpenInNewTab,
+                A::OpenToRight => P::OpenToRight,
+                A::OpenInNewWindow => P::OpenInNewWindow,
+                A::Duplicate => P::Duplicate,
+                A::Move => P::Move,
+                A::SearchInFolder => P::SearchInFolder,
+                A::CopyAbsolutePath => P::CopyAbsolutePath,
+                A::CopyRelativePath => P::CopyPath,
+                A::OpenInDefaultApp => P::OpenInDefaultApp,
+                A::RevealInSystemExplorer => P::ShowInSystemExplorer,
+                A::Rename => P::Rename,
+                A::Delete => P::Delete,
+            };
+            let section = match row.section {
+                M::Create => S::ActionPrimary,
+                M::Open => S::Open,
+                M::Organize => S::Action,
+                M::Path => S::Unsectioned,
+                M::System => S::System,
+                M::Danger => S::Danger,
+            };
+            Item {
+                label: SharedString::new_static(row.label),
+                icon: "",
+                section,
+                pick,
+                disabled: !row.enabled,
+                warning: false,
+                checked: false,
+                submenu: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 fn reveal_label() -> &'static str {
@@ -594,9 +594,9 @@ fn tab_items(path: &str, ix: usize, tabs: usize, pinned: bool, active: bool) -> 
     use Pick as P;
     use Section as S;
     let mut out = vec![item("Close", "x", S::Close, P::CloseTab)];
-    if tabs > 1 {
+    if tft_app::tab_close_action_available(tft_app::TabCloseAction::Others, tabs, ix) {
         out.push(item("Close others", "x", S::Close, P::CloseOthers));
-        if ix + 1 < tabs {
+        if tft_app::tab_close_action_available(tft_app::TabCloseAction::After, tabs, ix) {
             out.push(item("Close tabs after", "x", S::Close, P::CloseAfter));
         }
         out.push(item("Close all", "x", S::Close, P::CloseAll));
@@ -908,7 +908,10 @@ pub fn render<V: 'static>(
     // empty icon column: the labels start at the panel's padding.
     let any_icons = items(&menu.target).iter().any(|i| !i.icon.is_empty());
     let hotkey = |pick: Pick| {
-        if !matches!(menu.target, Target::File(_) | Target::Folder(_) | Target::Blank) {
+        if !matches!(
+            menu.target,
+            Target::File(_) | Target::Folder(_) | Target::Blank
+        ) {
             return None;
         }
         let id = match pick {
@@ -988,7 +991,12 @@ pub fn render<V: 'static>(
             })
             .child(div().flex_1().child(item.label.clone()))
             .when_some(hotkey(item.pick), |d, hint| {
-                d.child(div().flex_shrink_0().text_color(theme.tokens.text_muted).child(hint))
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(theme.tokens.text_muted)
+                        .child(hint),
+                )
             })
             .when(item.checked, |d| {
                 d.child(crate::assets::icon("check", 14., theme.tokens.text_muted))

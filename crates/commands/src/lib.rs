@@ -238,17 +238,22 @@ pub fn known_names() -> Vec<(&'static str, &'static str)> {
 /// The label Obsidian shows for a binding, e.g. `Ctrl + Shift + F`
 /// or `Ctrl + Alt + ←`. `Mod` is Ctrl everywhere but macOS.
 pub fn hotkey_label(hotkey: &Hotkey) -> String {
+    let modifier = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else {
+        "Ctrl"
+    };
+    hotkey_label_with_modifier(hotkey, modifier)
+}
+
+/// Formats a hotkey using the runtime platform's `Mod` label. Browser builds
+/// use this because the WASM target does not identify the visitor's OS.
+pub fn hotkey_label_with_modifier(hotkey: &Hotkey, mod_label: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     for m in &hotkey.modifiers {
         parts.push(
             match m.as_str() {
-                "Mod" => {
-                    if cfg!(target_os = "macos") {
-                        "Cmd"
-                    } else {
-                        "Ctrl"
-                    }
-                }
+                "Mod" => mod_label,
                 "Meta" => {
                     if cfg!(target_os = "macos") {
                         "Cmd"

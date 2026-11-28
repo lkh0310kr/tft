@@ -2,7 +2,7 @@
 
 use super::{Commands, Workspace};
 use crate::theme::Theme;
-use gpui::{div, prelude::*, px, Context, SharedString};
+use gpui::{prelude::*, Context, SharedString};
 use tft_commands::{hotkey_label, CommandRegistry};
 
 /// What an empty tab offers, in Obsidian's order: element id, pill label and command.
@@ -71,10 +71,11 @@ impl Workspace {
                 .on_click(
                     cx.listener(move |this, _, window, cx| this.run_command(command, window, cx)),
                 )
+                .into_any_element()
             })
             .collect();
         crate::ui::workspace_empty_tab(theme)
-            .child(div().w(px(240.)).flex().flex_col().children(actions))
+            .child(crate::ui::workspace_empty_action_list(actions))
             .into_any_element()
     }
 }

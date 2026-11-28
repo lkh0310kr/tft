@@ -13,7 +13,6 @@ use gpui::{
 use serde_json::{json, Value};
 use std::ops::Range;
 use std::sync::Arc;
-use tft_app::file_switcher::label_match;
 use tft_cache::frontmatter_aliases;
 use tft_formats::config::SwitcherConfig;
 use tft_formats::FileKind;
@@ -28,13 +27,7 @@ const MAX_RESULTS: usize = 50;
 /// vault-wide "Show all file types" in Files and links: a file the vault
 /// does not list at all cannot be offered here either.
 fn offers(kind: FileKind, show_unsupported: bool, switcher: &SwitcherConfig) -> bool {
-    match kind {
-        FileKind::Other => show_unsupported && switcher.show_all_file_types.unwrap_or(false),
-        FileKind::Image | FileKind::Audio | FileKind::Video | FileKind::Pdf => {
-            switcher.show_attachments.unwrap_or(true)
-        }
-        FileKind::Markdown | FileKind::Canvas => true,
-    }
+    tft_app::file_switcher::offers(kind, show_unsupported, switcher)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,71 +59,22 @@ struct Item {
 /// files and come after every other match, as in Obsidian 1.15.1 (observed
 /// 2026-11-16, `excluded-files.mjs` steps s03 and s10).
 fn rank(candidates: &[Candidate], recent: &[String], query: &str) -> Vec<Item> {
-    let mut items: Vec<(f64, Item)> = Vec::new();
-    if query.is_empty() {
-        for (ix, path) in recent.iter().enumerate() {
-            if let Some(c) = candidates
-                .iter()
-                .find(|c| c.kind == ItemKind::File && &c.path == path && !c.downranked)
-            {
-                items.push((
-                    -(ix as f64),
-                    Item {
-                        candidate: c.clone(),
-                        ranges: Vec::new(),
-                    },
-                ));
-            }
-        }
-    } else {
-        for c in candidates {
-            let by_label = label_match(query, &c.label);
-            let by_path = if c.kind == ItemKind::File {
-                // A folder-only hit remains useful, but stays below every
-                // filename match. Compress its score to preserve ordering.
-                label_match(query, &c.path)
-                    .map(|(score, _)| (10_000.0 + 9_000.0 * score / (score + 50_000.0), Vec::new()))
-            } else {
-                None
-            };
-            let best = match (by_label, by_path) {
-                (Some((label_score, ranges)), Some((path_score, _)))
-                    if label_score >= path_score =>
-                {
-                    Some((label_score, ranges))
-                }
-                // A path match highlights nothing in the basename.
-                (_, Some((path_score, ranges))) => Some((path_score, ranges)),
-                (Some((label_score, ranges)), None) => Some((label_score, ranges)),
-                (None, None) => None,
-            };
-            if let Some((score, ranges)) = best {
-                let penalty = match c.kind {
-                    ItemKind::File => 0.0,
-                    ItemKind::Alias => 500.0,
-                };
-                items.push((
-                    score - penalty,
-                    Item {
-                        candidate: c.clone(),
-                        ranges,
-                    },
-                ));
-            }
-        }
-        items.sort_by(|a, b| {
-            a.1.candidate
-                .downranked
-                .cmp(&b.1.candidate.downranked)
-                .then_with(|| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| a.1.candidate.label.len().cmp(&b.1.candidate.label.len()))
-                .then_with(|| a.1.candidate.path.cmp(&b.1.candidate.path))
-        });
-    }
-    items
+    let shared = candidates
+        .iter()
+        .map(|candidate| tft_app::file_switcher::SwitchCandidate {
+            path: &candidate.path,
+            label: &candidate.label,
+            alias: candidate.kind == ItemKind::Alias,
+            downranked: candidate.downranked,
+        })
+        .collect::<Vec<_>>();
+    tft_app::file_switcher::rank_candidates(&shared, recent, query)
         .into_iter()
-        .map(|(_, i)| i)
         .take(MAX_RESULTS)
+        .map(|ranked| Item {
+            candidate: candidates[ranked.candidate_index].clone(),
+            ranges: ranked.ranges,
+        })
         .collect()
 }
 
@@ -201,7 +145,7 @@ impl QuickSwitcher {
             }
             let name = file.path.rsplit('/').next().unwrap_or(&file.path);
             let label = if file.kind == FileKind::Markdown {
-                name.trim_end_matches(".md").to_string()
+                tft_app::explorer::display_name(name).to_owned()
             } else {
                 name.to_string()
             };

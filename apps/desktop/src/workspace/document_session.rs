@@ -6,7 +6,7 @@ use crate::reading::{self, TaskMarker};
 use gpui::{Context, Entity, Task, Window};
 use std::time::Duration;
 use tft_app::{
-    current_history_entry_mut, history_step, push_history_entry, HistoryDirection, HistoryEntry,
+    history_step, push_history_entry, update_history_entry_state, HistoryDirection, HistoryEntry,
 };
 use tft_markdown::Subpath;
 
@@ -94,7 +94,7 @@ impl Workspace {
 
     /// The editing mode a note opens in: Editing view in Live Preview.
     pub fn editing_mode(&self) -> ViewMode {
-        ViewMode::LivePreview
+        ViewMode::markdown_document_mode(None)
     }
 
     pub fn default_mode(&self) -> ViewMode {
@@ -154,16 +154,13 @@ impl Workspace {
             self.active_group_state.current = Some(path);
             return;
         };
-        // A note opened from a terminal is another tab: the shell keeps its
-        // pane, as a note opened beside a running terminal does in Zed.
-        if self.active_group_state.mode == ViewMode::Terminal {
-            self.new_tab(cx);
-        }
-        // A pinned tab keeps its file: anything opened from it — a link
-        // followed, a switcher pick — goes to a new tab (observed).
-        if self.active_group_state.active_tab_pinned()
-            && self.active_group_state.current.as_deref() != Some(path.as_str())
-        {
+        if tft_app::workspace::linked_note_opens_new_tab(
+            self.active_group_state.mode,
+            self.active_group_state.active_tab_pinned(),
+            self.active_group_state.current.as_deref(),
+            &path,
+            false,
+        ) {
             self.new_tab(cx);
         }
         // The graph is a toggle, not a place a note can open in: a note
@@ -268,26 +265,19 @@ impl Workspace {
         let Some(current) = self.active_group_state.current.clone() else {
             return;
         };
-        let mode = if self.active_group_state.mode == ViewMode::Graph {
-            self.active_group_state.mode_before_graph
-        } else {
-            self.active_group_state.mode
-        };
-        let offset = if mode == ViewMode::Reading {
-            self.active_reading().read(cx).top_offset().unwrap_or(0)
-        } else {
-            self.active_editor().read(cx).selection().start
-        };
-        let Some(entry) = current_history_entry_mut(
+        let (mode, offset) = tft_app::document_history_state(
+            self.active_group_state.mode,
+            Some(self.active_group_state.mode_before_graph),
+            self.active_reading().read(cx).top_offset(),
+            self.active_editor().read(cx).selection().start,
+        );
+        update_history_entry_state(
             &mut self.active_group_state.history,
             self.active_group_state.history_ix,
-        ) else {
-            return;
-        };
-        if entry.path == current {
-            entry.mode = mode;
-            entry.offset = offset;
-        }
+            &current,
+            mode,
+            offset,
+        );
     }
 
     /// A task checkbox clicked in Reading takes the editor's path: one undo step, the

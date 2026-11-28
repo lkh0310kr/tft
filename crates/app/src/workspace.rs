@@ -9,6 +9,7 @@ use serde_json::{json, Map, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileOperationRequest {
     CreateNote { parent: String },
+    CreateFolder { parent: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +25,28 @@ pub enum ViewMode {
     Terminal,
 }
 
+/// Pane limit used by workspace split controls and command availability.
+pub const MAX_WORKSPACE_GROUPS: usize = 8;
+
+pub fn workspace_can_split(group_count: usize) -> bool {
+    group_count < MAX_WORKSPACE_GROUPS
+}
+
 impl ViewMode {
+    /// Default mode for a newly opened editable Markdown document.
+    pub const fn default_editing() -> Self {
+        Self::LivePreview
+    }
+
+    /// Returns a saved Markdown view mode, falling back to the shared editing
+    /// default for empty tabs and non-document modes such as Graph or Search.
+    pub fn markdown_document_mode(mode: Option<Self>) -> Self {
+        match mode {
+            Some(mode @ (Self::Reading | Self::LivePreview | Self::Source)) => mode,
+            _ => Self::default_editing(),
+        }
+    }
+
     pub fn is_editing(self) -> bool {
         matches!(self, ViewMode::LivePreview | ViewMode::Source)
     }
@@ -36,6 +58,16 @@ impl ViewMode {
             editing_mode
         } else {
             Self::Reading
+        }
+    }
+
+    /// Switches between the two Markdown editing presentations. Reading,
+    /// Graph, Search and Terminal are not source/live-preview states.
+    pub fn toggle_source_preview(self) -> Option<Self> {
+        match self {
+            Self::LivePreview => Some(Self::Source),
+            Self::Source => Some(Self::LivePreview),
+            _ => None,
         }
     }
 
@@ -57,6 +89,7 @@ impl ViewMode {
             "source" => Some(ViewMode::Source),
             "graph" => Some(ViewMode::Graph),
             "search" => Some(ViewMode::Search),
+            "terminal" => Some(ViewMode::Terminal),
             _ => None,
         }
     }
@@ -127,10 +160,116 @@ pub fn workspace_header_shows_mode_switch(path: Option<&str>, mode: ViewMode) ->
         )
 }
 
+/// Opening a linked note from a special pane or a pinned tab uses a fresh tab.
+/// An explicit new-tab request always takes precedence; reopening the current
+/// pinned note stays in place, matching the Desktop workspace rule.
+pub fn linked_note_opens_new_tab(
+    mode: ViewMode,
+    active_tab_pinned: bool,
+    active_path: Option<&str>,
+    target_path: &str,
+    explicitly_new_tab: bool,
+) -> bool {
+    explicitly_new_tab
+        || mode == ViewMode::Terminal
+        || (active_tab_pinned && active_path != Some(target_path))
+}
+
+/// Chooses the position a document view stores in workspace history. Reading
+/// views store their top visible block; editing views store the caret/selection
+/// start. Graph tabs use the document mode they had before opening Graph.
+pub fn document_history_state(
+    mode: ViewMode,
+    mode_before_graph: Option<ViewMode>,
+    reading_top_offset: Option<usize>,
+    selection_start: usize,
+) -> (ViewMode, usize) {
+    let document_mode = if mode == ViewMode::Graph {
+        mode_before_graph.unwrap_or(ViewMode::Reading)
+    } else {
+        mode
+    };
+    let offset = if document_mode == ViewMode::Reading {
+        reading_top_offset.unwrap_or(0)
+    } else {
+        selection_start
+    };
+    (document_mode, offset)
+}
+
+/// Resolves a wikilink heading or block subpath to the start offset shared by
+/// Desktop and Web. Heading comparison uses the same Markdown parser as the
+/// editor and strips inline markup before matching.
+pub fn subpath_offset(
+    metadata: &tft_cache::CachedMetadata,
+    subpath: &tft_markdown::Subpath<'_>,
+) -> Option<usize> {
+    match subpath {
+        tft_markdown::Subpath::Headings(names) => {
+            let last = names.last()?;
+            metadata
+                .headings
+                .iter()
+                .find(|heading| {
+                    let parsed = tft_markdown::parse(&heading.heading);
+                    let text = match parsed.blocks.first().map(|block| &block.kind) {
+                        Some(tft_markdown::BlockKind::Paragraph { content }) => {
+                            tft_markdown::plain_text(content)
+                        }
+                        _ => heading.heading.clone(),
+                    };
+                    text.trim().eq_ignore_ascii_case(last.trim())
+                })
+                .map(|heading| heading.position.start.offset)
+        }
+        tft_markdown::Subpath::Block(id) => metadata
+            .blocks
+            .get(&id.to_lowercase())
+            .or_else(|| metadata.blocks.get(*id))
+            .map(|block| block.position.start.offset),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeftTab {
     Files,
     Search,
+}
+
+/// Platform-neutral state and transitions for the workspace's left dock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceDockState {
+    pub visible: bool,
+    pub tab: LeftTab,
+}
+
+impl Default for WorkspaceDockState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            tab: LeftTab::Files,
+        }
+    }
+}
+
+impl WorkspaceDockState {
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    pub fn toggle(&mut self) -> bool {
+        self.visible = !self.visible;
+        self.visible
+    }
+
+    pub fn show(&mut self, tab: LeftTab) {
+        self.tab = tab;
+        self.visible = true;
+    }
+
+    pub fn select(&mut self, tab: LeftTab) {
+        self.tab = tab;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,6 +334,27 @@ pub fn current_history_entry_mut(
     history.get_mut(history_ix.checked_sub(1)?)
 }
 
+/// Updates the visible view state only when the history cursor still points at
+/// the expected note. Hosts use this when saving a caret or reading position
+/// before switching modes or navigating elsewhere.
+pub fn update_history_entry_state(
+    history: &mut [HistoryEntry],
+    history_ix: usize,
+    expected_path: &str,
+    mode: ViewMode,
+    offset: usize,
+) -> bool {
+    let Some(entry) = current_history_entry_mut(history, history_ix) else {
+        return false;
+    };
+    if entry.path != expected_path {
+        return false;
+    }
+    entry.mode = mode;
+    entry.offset = offset;
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HistoryDirection {
     Back,
@@ -211,6 +371,47 @@ pub struct Tab {
     pub leaf: Option<Value>,
     pub view_state: Option<Value>,
     pub pinned: bool,
+}
+
+/// Session-local history for recently closed tabs. Hosts decide whether a
+/// special tab is restorable; the shared history owns ordering and retention.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ClosedTabHistory {
+    tabs: Vec<(usize, Tab)>,
+}
+
+impl ClosedTabHistory {
+    pub const LIMIT: usize = 20;
+
+    pub fn remember(&mut self, index: usize, tab: Tab, restorable: bool) {
+        if !restorable {
+            return;
+        }
+        self.tabs.push((index, tab));
+        if self.tabs.len() > Self::LIMIT {
+            self.tabs.remove(0);
+        }
+    }
+
+    pub fn take_last(&mut self) -> Option<(usize, Tab)> {
+        self.tabs.pop()
+    }
+
+    pub fn clear(&mut self) {
+        self.tabs.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+}
+
+/// Platform-neutral identity of a tab being dragged. Each host adds its own
+/// visual preview and computes drop geometry in its native coordinate space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabDragSource {
+    pub group_id: u64,
+    pub tab_index: usize,
 }
 
 impl Tab {
@@ -336,6 +537,127 @@ pub fn remove_tab_at(tabs: &mut Vec<Tab>, active: &mut usize, ix: usize) -> Opti
     Some(removed)
 }
 
+/// Inserts a transferred tab at a strip boundary and makes it active. The
+/// boundary is clamped so a stale drop index safely means append.
+pub fn insert_tab_at_boundary(
+    tabs: &mut Vec<Tab>,
+    active: &mut usize,
+    boundary: usize,
+    tab: Tab,
+) -> usize {
+    let index = boundary.min(tabs.len());
+    tabs.insert(index, tab);
+    *active = index;
+    index
+}
+
+/// Moves a tab between two distinct tab strips, activates it in the target,
+/// and reports whether the source became empty. Both workspace hosts use this
+/// transition while retaining ownership of their live view and layout updates.
+pub fn transfer_tab_between_strips(
+    source_tabs: &mut Vec<Tab>,
+    source_active: &mut usize,
+    source_index: usize,
+    target_tabs: &mut Vec<Tab>,
+    target_active: &mut usize,
+    boundary: usize,
+) -> Option<TabTransferOutcome> {
+    let tab = remove_tab_at(source_tabs, source_active, source_index)?;
+    let source_empty = source_tabs.is_empty();
+    let target_index = insert_tab_at_boundary(target_tabs, target_active, boundary, tab);
+    Some(TabTransferOutcome {
+        source_empty,
+        target_index,
+    })
+}
+
+/// Moves a tab to the insertion boundary in the same tab strip and activates it.
+/// `boundary` is measured in the original list and may equal `tabs.len()` to
+/// place the tab last.
+pub fn move_tab_to_boundary(
+    tabs: &mut Vec<Tab>,
+    active: &mut usize,
+    source: usize,
+    boundary: usize,
+) -> Option<usize> {
+    if source >= tabs.len() || boundary > tabs.len() {
+        return None;
+    }
+    let tab = tabs.remove(source);
+    let destination = if source < boundary {
+        boundary - 1
+    } else {
+        boundary
+    };
+    tabs.insert(destination, tab);
+    *active = destination;
+    Some(destination)
+}
+
+/// Finds the nearest insertion boundary from measured tab boxes. Each box is
+/// `(tab_index, left_x, right_x)` in the same coordinate space as `pointer_x`.
+/// Hosts can supply one hovered box for local half-tab hit testing or every
+/// box for a strip-wide nearest-edge target.
+pub fn nearest_tab_drop_boundary(
+    pointer_x: f32,
+    tabs: &[(usize, f32, f32)],
+) -> Option<(usize, f32)> {
+    let (last_index, _, last_right) = tabs.iter().max_by_key(|(index, _, _)| *index)?;
+    tabs.iter()
+        .map(|(index, left, _)| (*index, *left))
+        .chain(std::iter::once((*last_index + 1, *last_right)))
+        .min_by(|left, right| {
+            (left.1 - pointer_x)
+                .abs()
+                .total_cmp(&(right.1 - pointer_x).abs())
+        })
+}
+
+/// Selects a tab index when it is within the current tab list.
+pub fn activate_tab_index(tab_count: usize, active: &mut usize, ix: usize) -> bool {
+    if ix >= tab_count {
+        return false;
+    }
+    *active = ix;
+    true
+}
+
+/// A tab-strip context menu action that closes a set of tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabCloseAction {
+    Others,
+    After,
+    All,
+}
+
+/// Whether a close action has any meaningful rows for the selected tab.
+pub fn tab_close_action_available(
+    action: TabCloseAction,
+    tab_count: usize,
+    selected: usize,
+) -> bool {
+    match action {
+        TabCloseAction::Others | TabCloseAction::All => tab_count > 1,
+        TabCloseAction::After => selected.saturating_add(1) < tab_count,
+    }
+}
+
+/// The pinned-tab rule shared by Desktop and Web tab menus. The active target
+/// remains for Close others; Close after preserves tabs through the target;
+/// Close all preserves only pinned tabs.
+pub fn tab_close_action_keeps(
+    action: TabCloseAction,
+    index: usize,
+    selected: usize,
+    tab: &Tab,
+) -> bool {
+    match action {
+        TabCloseAction::Others => index == selected || tab.pinned,
+        TabCloseAction::After => index <= selected || tab.pinned,
+        TabCloseAction::All => tab.pinned,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitDirection {
     Vertical,
@@ -356,6 +678,87 @@ impl SplitDirection {
             _ => SplitDirection::Vertical,
         }
     }
+}
+
+/// Converts a pointer coordinate on one split axis to a normalized position.
+/// Returns `None` for invalid geometry so a host can ignore a stale drag.
+pub fn normalized_split_position(origin: f64, size: f64, coordinate: f64) -> Option<f64> {
+    if !origin.is_finite() || !size.is_finite() || size <= 0.0 || !coordinate.is_finite() {
+        return None;
+    }
+    Some(((coordinate - origin) / size).clamp(0.0, 1.0))
+}
+
+/// Rebalances the two children adjacent to a split divider at a normalized
+/// pointer position. Shares are preserved for other children and each side
+/// keeps at least five percent of the split's total size.
+pub fn split_dimensions_at(dimensions: &[f64], before: usize, position: f64) -> Option<Vec<f64>> {
+    if before >= dimensions.len().saturating_sub(1)
+        || !position.is_finite()
+        || dimensions
+            .iter()
+            .any(|dimension| !dimension.is_finite() || *dimension <= 0.0)
+    {
+        return None;
+    }
+    let total = dimensions.iter().sum::<f64>();
+    if !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+    let minimum = total * 0.05;
+    let pair = dimensions[before] + dimensions[before + 1];
+    if pair <= minimum * 2.0 {
+        return None;
+    }
+    let preceding = dimensions[..before].iter().sum::<f64>();
+    let first = (position.clamp(0.0, 1.0) * total - preceding).clamp(minimum, pair - minimum);
+    let mut resized = dimensions.to_vec();
+    resized[before] = first;
+    resized[before + 1] = pair - first;
+    Some(resized)
+}
+
+/// Advances a selected list index. Desktop search uses a clamped cursor that
+/// clears when moving above the first row; palette-style lists wrap around.
+pub fn selection_step(
+    selected: Option<usize>,
+    item_count: usize,
+    delta: isize,
+    wrap: bool,
+) -> Option<usize> {
+    if item_count == 0 || delta == 0 {
+        return None;
+    }
+    if wrap {
+        let current = selected
+            .map(|index| index % item_count)
+            .unwrap_or(if delta > 0 { item_count - 1 } else { 0 });
+        return Some(if delta > 0 {
+            (current + 1) % item_count
+        } else {
+            current.checked_sub(1).unwrap_or(item_count - 1)
+        });
+    }
+    match selected {
+        None if delta > 0 => Some(0),
+        None => None,
+        Some(index) if delta < 0 && index == 0 => None,
+        Some(index) if delta < 0 => Some(index - 1),
+        Some(index) => Some((index + 1).min(item_count - 1)),
+    }
+}
+
+/// Returns the adjacent tab index, wrapping at either end of a tab strip.
+pub fn cycle_tab_index(active: usize, tab_count: usize, forward: bool) -> Option<usize> {
+    if tab_count <= 1 {
+        return None;
+    }
+    let active = active.min(tab_count - 1);
+    Some(if forward {
+        (active + 1) % tab_count
+    } else {
+        active.checked_sub(1).unwrap_or(tab_count - 1)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -483,7 +886,7 @@ impl Layout {
         let Layout::Split {
             direction: own,
             children,
-            ..
+            node,
         } = self
         else {
             return None;
@@ -491,7 +894,16 @@ impl Layout {
         let ix = children.iter().position(|c| c.contains(id))?;
         if matches!(children[ix], Layout::Group(g) if g == id) {
             if *own == direction {
-                children.insert(if after { ix + 1 } else { ix }, Layout::Group(new));
+                let old_len = children.len();
+                let insertion = if after { ix + 1 } else { ix };
+                let dimensions = layout_dimensions(node, old_len);
+                children.insert(insertion, Layout::Group(new));
+                if let Some(mut dimensions) = dimensions {
+                    let half = dimensions[ix] / 2.0;
+                    dimensions[ix] = half;
+                    dimensions.insert(insertion, half);
+                    node.insert("dimensions".into(), json!(dimensions));
+                }
                 return Some(false);
             }
             let pair = if after {
@@ -506,20 +918,32 @@ impl Layout {
     }
 
     pub fn remove(&mut self, id: u64) -> bool {
-        let Layout::Split { children, .. } = self else {
+        let Layout::Split { children, node, .. } = self else {
             return false;
         };
         let Some(ix) = children.iter().position(|c| c.contains(id)) else {
             return false;
         };
         if matches!(children[ix], Layout::Group(g) if g == id) {
+            let old_len = children.len();
+            let dimensions = layout_dimensions(node, old_len);
             children.remove(ix);
+            if let Some(mut dimensions) = dimensions {
+                dimensions.remove(ix);
+                node.insert("dimensions".into(), json!(dimensions));
+            }
             return true;
         }
         let removed = children[ix].remove(id);
         if removed && matches!(&children[ix], Layout::Split { children, .. } if children.is_empty())
         {
+            let old_len = children.len();
+            let dimensions = layout_dimensions(node, old_len);
             children.remove(ix);
+            if let Some(mut dimensions) = dimensions {
+                dimensions.remove(ix);
+                node.insert("dimensions".into(), json!(dimensions));
+            }
         }
         removed
     }
@@ -557,6 +981,23 @@ impl Layout {
     }
 }
 
+/// Reads only a well-formed child-size vector. Unknown or malformed layout
+/// metadata is left untouched so a host can retain its own representation.
+fn layout_dimensions(node: &Map<String, Value>, child_count: usize) -> Option<Vec<f64>> {
+    let dimensions = node.get("dimensions")?.as_array()?;
+    if dimensions.len() != child_count {
+        return None;
+    }
+    let dimensions = dimensions
+        .iter()
+        .map(|value| value.as_f64())
+        .collect::<Option<Vec<_>>>()?;
+    dimensions
+        .iter()
+        .all(|dimension| dimension.is_finite() && *dimension > 0.0)
+        .then_some(dimensions)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabGroup {
     pub id: u64,
@@ -585,6 +1026,18 @@ impl TabGroup {
 
     pub fn active_mut(&mut self) -> Option<&mut Tab> {
         self.tabs.get_mut(self.active_tab)
+    }
+
+    /// Selects a tab by its current strip index.
+    pub fn activate(&mut self, ix: usize) -> bool {
+        activate_tab_index(self.tabs.len(), &mut self.active_tab, ix)
+    }
+
+    /// Toggles a tab's pinned state and returns the new value.
+    pub fn toggle_pin(&mut self, ix: usize) -> Option<bool> {
+        let tab = self.tabs.get_mut(ix)?;
+        tab.pinned = !tab.pinned;
+        Some(tab.pinned)
     }
 
     pub fn open(&mut self, path: String, mode: ViewMode) -> usize {
@@ -669,8 +1122,13 @@ pub struct WorkspaceModel {
     pub groups: Vec<TabGroup>,
     pub layout: Layout,
     pub active_group: u64,
-    pub left_tab: LeftTab,
-    pub left_visible: bool,
+    pub dock: WorkspaceDockState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabTransferOutcome {
+    pub source_empty: bool,
+    pub target_index: usize,
 }
 
 impl WorkspaceModel {
@@ -680,8 +1138,7 @@ impl WorkspaceModel {
             groups: vec![TabGroup::new(id, mode)],
             layout: Layout::split(SplitDirection::Vertical, vec![Layout::Group(id)]),
             active_group: id,
-            left_tab: LeftTab::Files,
-            left_visible: true,
+            dock: WorkspaceDockState::default(),
         }
     }
 
@@ -699,6 +1156,15 @@ impl WorkspaceModel {
 
     pub fn active_mut(&mut self) -> Option<&mut TabGroup> {
         self.group_mut(self.active_group)
+    }
+
+    /// Activates a group only when it is present in both the model and layout.
+    pub fn activate_group(&mut self, group: u64) -> bool {
+        if self.group(group).is_none() || !self.layout.contains(group) {
+            return false;
+        }
+        self.active_group = group;
+        true
     }
 
     pub fn open(&mut self, group: u64, path: String, mode: ViewMode) -> Option<usize> {
@@ -757,12 +1223,37 @@ impl WorkspaceModel {
         self.group_mut(group).is_some_and(|g| g.close(ix))
     }
 
+    pub fn activate_tab(&mut self, group: u64, ix: usize) -> bool {
+        self.group_mut(group).is_some_and(|g| g.activate(ix))
+    }
+
+    pub fn toggle_tab_pin(&mut self, group: u64, ix: usize) -> Option<bool> {
+        self.group_mut(group)?.toggle_pin(ix)
+    }
+
     pub fn split(&mut self, group: u64, direction: SplitDirection, after: bool) -> Option<u64> {
         let new = self.groups.iter().map(|g| g.id).max().unwrap_or(0) + 1;
         let before = self.group(group)?.active()?.mode;
         self.layout.insert_beside(group, new, direction, after)?;
         self.groups.push(TabGroup::new(new, before));
         self.active_group = new;
+        Some(new)
+    }
+
+    /// Splits beside `group`, copies its current tab into the new group, and
+    /// activates that group. Host views are created separately from the
+    /// returned group state.
+    pub fn split_with_active_tab(
+        &mut self,
+        group: u64,
+        direction: SplitDirection,
+        after: bool,
+    ) -> Option<u64> {
+        let active = self.group(group)?.active()?.clone();
+        let new = self.split(group, direction, after)?;
+        let target = self.group_mut(new)?;
+        target.tabs = vec![active];
+        target.active_tab = 0;
         Some(new)
     }
 
@@ -777,6 +1268,85 @@ impl WorkspaceModel {
             self.active_group = ids.first().copied().unwrap_or(1);
         }
         true
+    }
+
+    /// Resizes the two children adjacent to a divider in the layout tree.
+    /// `position` is normalized across the whole split and the same minimum
+    /// pane share used by both hosts is enforced by `split_dimensions_at`.
+    pub fn resize_split_at(&mut self, path: &[usize], before: usize, position: f64) -> bool {
+        let Some(Layout::Split { children, node, .. }) = self.layout.node_at(path) else {
+            return false;
+        };
+        let count = children.len();
+        let dimensions = layout_dimensions(node, count).unwrap_or_else(|| vec![1.0; count]);
+        let Some(dimensions) = split_dimensions_at(&dimensions, before, position) else {
+            return false;
+        };
+        let Some(Layout::Split { node, .. }) = self.layout.node_at_mut(path) else {
+            return false;
+        };
+        node.insert("dimensions".into(), json!(dimensions));
+        true
+    }
+
+    /// Transfers a tab between distinct groups, activates it in the target,
+    /// and removes the source group if its last tab moved away. UI hosts keep
+    /// ownership of editor/view synchronization and persistence.
+    pub fn transfer_tab(
+        &mut self,
+        source_group: u64,
+        source_index: usize,
+        target_group: u64,
+        boundary: usize,
+    ) -> Option<TabTransferOutcome> {
+        if source_group == target_group
+            || self.group(source_group).is_none()
+            || self.group(target_group).is_none()
+            || !self.layout.contains(source_group)
+            || !self.layout.contains(target_group)
+        {
+            return None;
+        }
+        let source_index_in_model = self
+            .groups
+            .iter()
+            .position(|group| group.id == source_group)?;
+        let target_index_in_model = self
+            .groups
+            .iter()
+            .position(|group| group.id == target_group)?;
+        let outcome = if source_index_in_model < target_index_in_model {
+            let (left, right) = self.groups.split_at_mut(target_index_in_model);
+            transfer_tab_between_strips(
+                &mut left[source_index_in_model].tabs,
+                &mut left[source_index_in_model].active_tab,
+                source_index,
+                &mut right[0].tabs,
+                &mut right[0].active_tab,
+                boundary,
+            )?
+        } else {
+            let (left, right) = self.groups.split_at_mut(source_index_in_model);
+            transfer_tab_between_strips(
+                &mut right[0].tabs,
+                &mut right[0].active_tab,
+                source_index,
+                &mut left[target_index_in_model].tabs,
+                &mut left[target_index_in_model].active_tab,
+                boundary,
+            )?
+        };
+        let source_empty = outcome.source_empty;
+        if source_empty && !self.close_group(source_group) {
+            return None;
+        }
+        if !self.activate_group(target_group) {
+            return None;
+        }
+        Some(TabTransferOutcome {
+            source_empty,
+            target_index: outcome.target_index,
+        })
     }
 }
 

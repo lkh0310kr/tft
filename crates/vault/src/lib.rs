@@ -11,11 +11,11 @@ pub use registry::{VaultEntry, VaultRegistry};
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use tft_cache::LinkResolver;
-use tft_formats::FileKind;
 use tft_formats::config::{
-    AppConfig, AppearanceConfig, CanvasConfig, CorePlugins, DEFAULT_CONFIG_DIR, GraphConfig,
-    Hotkeys, PagePreviewConfig, PropertyTypes, SwitcherConfig, merge_config,
+    merge_config, AppConfig, AppearanceConfig, CanvasConfig, CorePlugins, GraphConfig, Hotkeys,
+    PagePreviewConfig, PropertyTypes, SwitcherConfig, DEFAULT_CONFIG_DIR,
 };
+use tft_formats::FileKind;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -873,12 +873,10 @@ mod tests {
                 fs::read_to_string(outside.path().join("secret")).unwrap(),
                 "s"
             );
-            assert!(
-                fs::symlink_metadata(r.join("note.md"))
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
+            assert!(fs::symlink_metadata(r.join("note.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink());
             // A link may be moved or removed as an entry, not written through.
             assert!(vault.entry_path("note.md").is_ok());
             assert!(matches!(

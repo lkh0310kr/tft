@@ -2,11 +2,47 @@
 //! menu frames, prompts and pickers.
 
 use crate::assets::icon;
-use crate::theme::{Theme, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
+use crate::explorer::SortOrder;
+use crate::theme::{Theme, FONT_UI_MEDIUM, FONT_UI_SMALL, HEADER_HEIGHT, ICON_SIZE};
+use crate::workspace::SplitDirection;
 use gpui::{
-    div, prelude::*, px, AnyView, App, Div, ElementId, Pixels, Render, SharedString, Stateful,
-    Window,
+    canvas, div, prelude::*, px, AnyElement, AnyView, App, Bounds, Div, ElementId, Modifiers,
+    Pixels, Render, SharedString, Stateful, Window,
 };
+use std::cell::Cell;
+use std::rc::Rc;
+
+/// Reports hover transitions with the element's window-space bounds. The
+/// caller owns preview policy, delays, and the preview content.
+pub fn hover_row(
+    element: Stateful<Div>,
+    report: impl Fn(bool, Bounds<Pixels>, Modifiers, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    hover_row_bordered(element, 0.0, report)
+}
+
+/// `hover_row` for an element whose own border must be included in the anchor.
+pub fn hover_row_bordered(
+    element: Stateful<Div>,
+    border: f32,
+    report: impl Fn(bool, Bounds<Pixels>, Modifiers, &mut Window, &mut App) + 'static,
+) -> Stateful<Div> {
+    let bounds = Rc::new(Cell::new(Bounds::default()));
+    let set_bounds = bounds.clone();
+    element
+        .relative()
+        .child(
+            canvas(move |bounds, _, _| set_bounds.set(bounds), |_, _, _, _| {})
+                .absolute()
+                .top(px(-border))
+                .left(px(-border))
+                .right(px(-border))
+                .bottom(px(-border)),
+        )
+        .on_hover(move |over, window, cx| {
+            report(*over, bounds.get(), window.modifiers(), window, cx)
+        })
+}
 
 /// The tab shell shared by the native workspace and the GPUI Web composition.
 /// The caller supplies tab actions and inner content; active/group colors and
@@ -87,6 +123,27 @@ pub fn workspace_tab_inner(active: bool, theme: &Theme) -> Div {
         })
 }
 
+/// Shared title truncation and close-slot layout inside a workspace tab.
+/// Hosts keep their own close/pin actions and provide the resulting elements.
+pub fn workspace_tab_content(
+    title: impl IntoElement,
+    close_slot: impl IntoElement,
+    active: bool,
+    theme: &Theme,
+) -> Div {
+    workspace_tab_inner(active, theme)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(title),
+        )
+        .child(close_slot)
+}
+
 /// Shared close/pin slot for a workspace tab. Hosts attach close or unpin
 /// behavior to the returned button.
 pub fn workspace_tab_close_button(
@@ -123,6 +180,57 @@ pub fn workspace_tab_close_button(
         )
 }
 
+/// The inactive tab's hairline divider, deferred by the host so the next tab's
+/// opaque surface cannot cover its center pixel.
+pub fn workspace_tab_divider(theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .right(px(-0.5))
+        .top_0()
+        .w(px(1.))
+        .h_full()
+        .bg(theme.tokens.tab_divider_color)
+}
+
+/// Accent insertion marker shown while dragging a tab through a strip.
+pub fn workspace_tab_drop_indicator(after: bool, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .when(after, |marker| marker.right(px(-3.)))
+        .when(!after, |marker| marker.left(px(-3.)))
+        .bottom(px(6.))
+        .w(px(6.))
+        .h(px(25.))
+        .rounded(px(3.))
+        .bg(theme.tokens.interactive_accent)
+}
+
+/// Shared square new-tab button; the host supplies the tab-creation action.
+pub fn workspace_new_tab_button(id: impl Into<ElementId>, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .ml(px(2.))
+        .w(px(32.))
+        .h_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(0.))
+        .cursor_pointer()
+        .group("new-tab")
+        .hover(|style| style.bg(theme.tokens.background_modifier_hover))
+        .child(
+            icon("plus", ICON_SIZE, theme.tokens.icon_color)
+                .opacity(theme.tokens.icon_opacity)
+                .group_hover("new-tab", |style| {
+                    style
+                        .opacity(theme.tokens.icon_opacity_hover)
+                        .text_color(theme.tokens.icon_color_hover)
+                }),
+        )
+}
+
 /// Horizontal, shrinkable tab viewport shared by each host's tab strip.
 pub fn workspace_tab_strip_scroll(id: impl Into<ElementId>) -> Stateful<Div> {
     div()
@@ -134,6 +242,22 @@ pub fn workspace_tab_strip_scroll(id: impl Into<ElementId>) -> Stateful<Div> {
         .min_w(px(0.))
         .h_full()
         .overflow_x_scroll()
+}
+
+/// The horizontal tab viewport, its host-provided tab elements, the new-tab
+/// action, and an optional trailing host control in one shared composition.
+pub fn workspace_tab_strip_tabs(
+    id: impl Into<ElementId>,
+    tabs: impl IntoIterator<Item = AnyElement>,
+    new_tab: impl IntoElement,
+    trailing: Option<AnyElement>,
+) -> Stateful<Div> {
+    let strip = workspace_tab_strip_scroll(id).children(tabs).child(new_tab);
+    if let Some(trailing) = trailing {
+        strip.child(trailing)
+    } else {
+        strip
+    }
 }
 
 /// Fixed history-control cell at the start of a workspace tab strip.
@@ -149,6 +273,60 @@ pub fn workspace_tab_history_controls(back: impl IntoElement, forward: impl Into
         .pr(px(4.))
         .child(back)
         .child(forward)
+}
+
+/// Navigation controls and their divider, shared by each host's tab strip.
+pub fn workspace_tab_strip_navigation(
+    back: impl IntoElement,
+    forward: impl IntoElement,
+    theme: &Theme,
+) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h_full()
+        .child(workspace_tab_history_controls(back, forward))
+        .child(workspace_tab_strip_divider(theme))
+}
+
+/// Base flex layout for a row or column of workspace groups.
+pub fn workspace_split_container(
+    id: impl Into<ElementId>,
+    direction: SplitDirection,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .size_full()
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden()
+        .when(direction == SplitDirection::Vertical, |layout| {
+            layout.flex_row()
+        })
+        .when(direction == SplitDirection::Horizontal, |layout| {
+            layout.flex_col()
+        })
+}
+
+/// Base geometry and separator for one group inside a workspace split.
+pub fn workspace_split_cell(direction: SplitDirection, separated: bool, theme: &Theme) -> Div {
+    div()
+        .relative()
+        .min_w_0()
+        .min_h_0()
+        .overflow_hidden()
+        .when(separated && direction == SplitDirection::Vertical, |cell| {
+            cell.border_l_1()
+        })
+        .when(
+            separated && direction == SplitDirection::Horizontal,
+            |cell| cell.border_t_1(),
+        )
+        .when(separated, |cell| {
+            cell.border_color(theme.tokens.background_modifier_border)
+        })
 }
 
 /// Hairline separating history navigation from the horizontally scrolling tabs.
@@ -168,10 +346,83 @@ pub fn workspace_view_header(theme: &Theme) -> Div {
         .flex_row()
         .items_center()
         .h(px(crate::theme::HEADER_HEIGHT))
+        .border_b_1()
+        .border_color(theme.tokens.background_modifier_border)
         .pr(px(16.))
         .gap(px(10.))
         .text_size(px(FONT_UI_SMALL))
         .text_color(theme.tokens.text_normal)
+}
+
+/// Icon used by the document header to switch between reading and editing.
+pub fn workspace_document_mode_icon(mode: crate::workspace::ViewMode) -> &'static str {
+    if mode == crate::workspace::ViewMode::Reading {
+        "book-open"
+    } else {
+        "pencil"
+    }
+}
+
+/// Shared document-header assembly. The host supplies the breadcrumb/title
+/// lane and the platform-specific tool lane.
+pub fn workspace_document_header(
+    title_lane: impl IntoElement,
+    tools_lane: impl IntoElement,
+    theme: &Theme,
+) -> Div {
+    workspace_view_header(theme)
+        .child(title_lane)
+        .child(tools_lane)
+}
+
+/// Shared breadcrumb and title lane below a workspace tab strip.
+pub fn workspace_view_header_title() -> Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .pl(px(12.))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .whitespace_nowrap()
+        .overflow_hidden()
+}
+
+/// Shared tool lane at the end of a workspace document header.
+pub fn workspace_view_header_tools(id: impl Into<ElementId>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .h_full()
+        .items_center()
+        .pl(px(10.))
+        .gap(px(2.))
+}
+
+/// Shared selector button for the force graph and radial tree engines.
+/// Hosts attach their own navigation action while sharing icon and selected styling.
+pub fn workspace_graph_engine_button(
+    id: impl Into<ElementId>,
+    group: impl Into<SharedString>,
+    radial_tree: bool,
+    selected: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_with_id(
+        id,
+        group,
+        if radial_tree {
+            "folder-tree"
+        } else {
+            "git-fork"
+        },
+        theme,
+    )
+    .when(selected, |button| {
+        button.bg(theme.tokens.background_modifier_hover)
+    })
 }
 
 /// One folder label in a document breadcrumb; the host attaches navigation.
@@ -202,6 +453,22 @@ pub fn workspace_breadcrumb_separator(theme: &Theme) -> Div {
         .child("/")
 }
 
+/// Lays out breadcrumb buttons and separators with one shared trail geometry.
+pub fn workspace_breadcrumb_trail(
+    items: impl IntoIterator<Item = AnyElement>,
+    theme: &Theme,
+) -> Div {
+    let mut items = items.into_iter().peekable();
+    let mut trail = div().flex().flex_row().items_center().whitespace_nowrap();
+    while let Some(item) = items.next() {
+        trail = trail.child(item);
+        if items.peek().is_some() {
+            trail = trail.child(workspace_breadcrumb_separator(theme));
+        }
+    }
+    trail
+}
+
 /// Centered empty-tab content shared by the native and Web workspaces.
 /// Hosts add their own available actions so platform-specific commands stay
 /// with the host while spacing, typography, and hover treatment stay aligned.
@@ -213,6 +480,77 @@ pub fn workspace_empty_tab(theme: &Theme) -> Div {
         .items_center()
         .justify_center()
         .text_color(theme.tokens.text_muted)
+}
+
+/// Shared action-list geometry for an empty workspace tab. Hosts decide which
+/// actions their platform supports and provide the corresponding rows.
+pub fn workspace_empty_action_list(actions: impl IntoIterator<Item = AnyElement>) -> Div {
+    div().w(px(240.)).flex().flex_col().children(actions)
+}
+
+/// Centered notice used when a restored workspace view is not implemented by
+/// the current host. The host supplies the available follow-up action.
+pub fn workspace_notice(
+    title: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    action: impl IntoElement,
+    theme: &Theme,
+) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(theme.tokens.text_muted)
+        .child(
+            div()
+                .w(px(360.))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(FONT_UI_MEDIUM))
+                        .text_color(theme.tokens.text_normal)
+                        .child(title.into()),
+                )
+                .child(
+                    div()
+                        .text_size(px(FONT_UI_SMALL))
+                        .text_center()
+                        .child(detail.into()),
+                )
+                .child(div().pt_2().child(action.into_element())),
+        )
+}
+
+/// Shared search surface used by the workspace Search view and the Files dock.
+pub fn workspace_search_view(
+    id: impl Into<ElementId>,
+    input: impl IntoElement,
+    controls: impl IntoElement,
+    results: impl IntoElement,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .size_full()
+        .bg(theme.tokens.background_primary)
+        .child(
+            div()
+                .w_full()
+                .px_2()
+                .py_1()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .child(div().flex_1().min_w_0().child(input))
+                .child(controls),
+        )
+        .child(div().flex_1().min_h_0().child(results))
 }
 
 /// One action in the shared empty-tab list. Callers attach their command or
@@ -252,6 +590,114 @@ pub fn workspace_dock(width: Pixels, theme: &Theme) -> Div {
         .w(width)
         .h_full()
         .bg(theme.tokens.tab_container_background)
+}
+
+/// Shared left-dock composition. Hosts provide their platform header, panel,
+/// profile footer, and resize interaction while the dock's vertical layout
+/// stays consistent.
+pub fn workspace_dock_shell(
+    width: Pixels,
+    header: impl IntoElement,
+    panel: impl IntoElement,
+    footer: impl IntoElement,
+    resize_handle: impl IntoElement,
+    theme: &Theme,
+) -> Div {
+    workspace_dock(width, theme)
+        .child(header)
+        .child(div().flex_1().min_h_0().overflow_hidden().child(panel))
+        .child(footer)
+        .child(resize_handle)
+}
+
+/// Shared footer row at the bottom of the workspace dock.
+pub fn workspace_dock_footer(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_shrink_0()
+        .h(px(HEADER_HEIGHT))
+        .px(px(8.))
+        .gap(px(2.))
+        .border_t_1()
+        .border_color(theme.tokens.divider_color)
+}
+
+/// Vault profile button shared by native and browser workspace footers.
+pub fn workspace_dock_profile_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_row()
+        .items_center()
+        .min_w_0()
+        .flex_1()
+        .h(px(24.))
+        .pr(px(6.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.tokens.background_modifier_hover))
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(px(28.))
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    icon("chevrons-up-down", ICON_SIZE, theme.tokens.icon_color)
+                        .opacity(theme.tokens.icon_opacity),
+                ),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .text_size(px(FONT_UI_SMALL))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.tokens.vault_profile_color)
+                .child(label.into()),
+        )
+}
+
+/// Shared resize affordance at the inner edge of a workspace dock.
+pub fn workspace_dock_resize_handle(
+    id: impl Into<ElementId>,
+    left: bool,
+    dragging: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let accent = theme.tokens.interactive_accent;
+    div()
+        .id(id)
+        .absolute()
+        .top_0()
+        .h_full()
+        .w(px(3.))
+        .when(left, |d| d.right(px(0.)).border_r_1())
+        .when(!left, |d| d.left(px(0.)).border_l_1())
+        .border_color(theme.tokens.background_modifier_border)
+        .cursor_col_resize()
+        .occlude()
+        .hover(move |s| s.bg(accent).border_color(accent))
+        .active(move |s| s.bg(accent).border_color(accent))
+        .when(dragging, move |d| d.bg(accent).border_color(accent))
+}
+
+/// Computes the left dock width from a pointer position while preserving the
+/// minimum width for both the dock and the workspace content area.
+pub fn workspace_dock_width_at(pointer_x: f32, origin_x: f32, total_width: f32) -> f32 {
+    const MIN_DOCK_WIDTH: f32 = 150.0;
+    let max = (total_width - MIN_DOCK_WIDTH * 2.0).max(MIN_DOCK_WIDTH);
+    (pointer_x - origin_x).clamp(MIN_DOCK_WIDTH, max)
 }
 
 /// Shared top row for a workspace dock. Hosts insert their own tabs and
@@ -413,6 +859,47 @@ pub fn file_tree_row_label() -> Div {
         .text_ellipsis()
 }
 
+/// Extension tag at the trailing edge of a file-tree row.
+pub fn file_tree_row_tag(tag: impl Into<SharedString>, theme: &Theme) -> Div {
+    div()
+        .flex_shrink_0()
+        .ml_2()
+        .text_size(px(10.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(theme.tokens.nav_tag_color)
+        .child(tag.into())
+}
+
+/// Shared Files dock toolbar frame; hosts provide controls and their actions.
+pub fn file_tree_toolbar(theme: &Theme) -> Div {
+    div()
+        .h(px(HEADER_HEIGHT))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap(px(2.))
+        .border_b_1()
+        .border_color(theme.tokens.tab_outline_color)
+        .relative()
+}
+
+/// One shared sort option for the Files tree's host-owned menu.
+pub fn file_tree_sort_item(
+    prefix: &'static str,
+    index: usize,
+    order: SortOrder,
+    current: SortOrder,
+    theme: &Theme,
+) -> Stateful<Div> {
+    menu_item(prefix, index, None, order.label(), order == current, theme)
+}
+
+/// Sort menu section divider, paired with [`file_tree_sort_item`].
+pub fn file_tree_sort_separator(theme: &Theme) -> Div {
+    menu_separator(theme)
+}
+
 /// The small label a button shows on hover.
 pub struct Tooltip {
     text: SharedString,
@@ -520,6 +1007,28 @@ pub fn icon_button(id: &'static str, name: &'static str, theme: &Theme) -> State
     )
 }
 
+/// Icon button with a caller-generated ID for repeated controls such as pane headers.
+pub fn icon_button_with_id(
+    id: impl Into<ElementId>,
+    group: impl Into<SharedString>,
+    name: &'static str,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        group.into(),
+        None,
+        name,
+        None,
+        false,
+        28.,
+        24.,
+        ICON_SIZE,
+        13.,
+        theme,
+    )
+}
+
 /// The explorer's header buttons: [`icon_button`] with a tooltip and the
 /// `is-active` state.
 pub fn header_button(
@@ -532,6 +1041,30 @@ pub fn header_button(
     icon_button_in(
         id,
         id.into(),
+        None,
+        name,
+        Some(label.into()),
+        active,
+        28.,
+        24.,
+        ICON_SIZE,
+        13.,
+        theme,
+    )
+}
+
+/// Header button with a caller-generated ID for repeated pane actions.
+pub fn header_button_with_id(
+    id: impl Into<ElementId>,
+    group: impl Into<SharedString>,
+    name: &'static str,
+    label: impl Into<SharedString>,
+    active: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    icon_button_in(
+        id,
+        group.into(),
         None,
         name,
         Some(label.into()),
@@ -866,10 +1399,29 @@ pub fn menu_item(
     checked: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let glyph: Option<gpui::Svg> = if checked {
-        Some(icon("check", 14., theme.tokens.text_muted))
+    menu_item_with_enabled(prefix, ix, icon_name, title, checked, true, theme)
+}
+
+/// A menu item with a shared disabled appearance. Disabled rows do not react
+/// to hover and use the muted text/icon tokens.
+pub fn menu_item_with_enabled(
+    prefix: &'static str,
+    ix: usize,
+    icon_name: Option<&'static str>,
+    title: impl Into<SharedString>,
+    checked: bool,
+    enabled: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let icon_color = if enabled {
+        theme.tokens.text_muted
     } else {
-        icon_name.map(|n| icon(n, ICON_SIZE, theme.tokens.text_muted))
+        theme.tokens.text_faint
+    };
+    let glyph: Option<gpui::Svg> = if checked {
+        Some(icon("check", 14., icon_color))
+    } else {
+        icon_name.map(|n| icon(n, ICON_SIZE, icon_color))
     };
     div()
         .id((prefix, ix))
@@ -880,8 +1432,13 @@ pub fn menu_item(
         .px(px(8.))
         .py(px(4.))
         .rounded(px(4.))
-        .cursor_pointer()
-        .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+        .when(enabled, |row| {
+            row.cursor_pointer()
+                .hover(|s| s.bg(theme.tokens.background_modifier_hover))
+        })
+        .when(!enabled, |row| {
+            row.cursor_default().text_color(theme.tokens.text_faint)
+        })
         .child(
             div()
                 .w(px(16.))
@@ -892,5 +1449,5 @@ pub fn menu_item(
                 .justify_center()
                 .children(glyph),
         )
-        .child(div().whitespace_nowrap().child(title))
+        .child(div().whitespace_nowrap().child(title.into()))
 }

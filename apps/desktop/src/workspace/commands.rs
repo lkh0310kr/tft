@@ -368,11 +368,9 @@ impl Workspace {
                 }
             }
             "editor:toggle-source" => {
-                let mode = match self.active_group_state.mode {
-                    ViewMode::LivePreview => ViewMode::Source,
-                    _ => ViewMode::LivePreview,
-                };
-                self.set_mode(mode, window, cx);
+                if let Some(mode) = self.active_group_state.mode.toggle_source_preview() {
+                    self.set_mode(mode, window, cx);
+                }
             }
             "switcher:open" => self.open_switcher("", window, cx),
             "global-search:open" => self.open_search_action(&OpenSearch, window, cx),
@@ -617,7 +615,7 @@ impl Workspace {
             "app:go-forward" => self.go_forward(&GoForward, window, cx),
             "app:open-settings" => self.open_settings_menu_from_button(window, cx),
             "app:toggle-left-sidebar" => {
-                self.left_dock.visible = !self.left_dock.visible;
+                self.left_dock.toggle();
                 if !self.left_dock.visible {
                     self.leave_search_field(window, cx);
                     // Hiding the dock unmounts the tree, and a row holding the
@@ -632,7 +630,7 @@ impl Workspace {
             }
             "file-explorer:open" => {
                 self.leave_search_field(window, cx);
-                self.left_dock.visible = true;
+                self.left_dock.set_visible(true);
                 self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
                 cx.notify();
             }
@@ -640,7 +638,7 @@ impl Workspace {
                 Some(current) => self.reveal_in_navigation(&current, window, cx),
                 None => {
                     self.leave_search_field(window, cx);
-                    self.left_dock.visible = true;
+                    self.left_dock.set_visible(true);
                     self.explorer.update(cx, |e, cx| e.focus_tree(window, cx));
                     cx.notify();
                 }
@@ -710,10 +708,8 @@ impl Workspace {
                     }
                 }
             }
-            "workspace:next-tab" => self.cycle_tab(1, cx),
-            "workspace:previous-tab" => {
-                self.cycle_tab(self.active_group_state.tabs.len().saturating_sub(1), cx)
-            }
+            "workspace:next-tab" => self.cycle_tab(true, cx),
+            "workspace:previous-tab" => self.cycle_tab(false, cx),
             "workspace:goto-last-tab" => {
                 self.activate_tab(self.active_group_state.tabs.len().saturating_sub(1), cx)
             }

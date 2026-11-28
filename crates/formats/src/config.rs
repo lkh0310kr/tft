@@ -284,6 +284,81 @@ pub struct GraphConfig {
     pub extra: Map<String, Value>,
 }
 
+impl GraphConfig {
+    /// Complete `graph.json` document used when a Vault does not have one yet.
+    pub fn full_document(&self) -> Value {
+        let collapsed = |key: &str| self.extra.get(key).and_then(Value::as_bool).unwrap_or(true);
+        let number = |value: Option<f32>, default: Value| match value {
+            Some(value) => graph_json_number(value),
+            None => default,
+        };
+        let mut groups = serde_json::json!(self.color_groups);
+        integerize_graph_numbers(&mut groups);
+        serde_json::json!({
+            "collapse-filter": collapsed("collapse-filter"),
+            "search": self.search.clone().unwrap_or_default(),
+            "showTags": self.show_tags.unwrap_or(false),
+            "showAttachments": self.show_attachments.unwrap_or(false),
+            "hideUnresolved": self.hide_unresolved.unwrap_or(false),
+            "showOrphans": self.show_orphans.unwrap_or(true),
+            "collapse-color-groups": collapsed("collapse-color-groups"),
+            "colorGroups": groups,
+            "collapse-display": collapsed("collapse-display"),
+            "showArrow": self.show_arrow.unwrap_or(false),
+            "textFadeMultiplier": number(self.text_fade_multiplier, serde_json::json!(0)),
+            "nodeSizeMultiplier": number(self.node_size_multiplier, serde_json::json!(1)),
+            "lineSizeMultiplier": number(self.line_size_multiplier, serde_json::json!(1)),
+            "collapse-forces": collapsed("collapse-forces"),
+            "centerStrength": number(
+                self.center_strength,
+                serde_json::json!(0.518713248970312),
+            ),
+            "repelStrength": number(self.repel_strength, serde_json::json!(10)),
+            "linkStrength": number(self.link_strength, serde_json::json!(1)),
+            "linkDistance": number(self.link_distance, serde_json::json!(250)),
+            "scale": number(self.scale, serde_json::json!(1)),
+            "close": self.close.unwrap_or(false),
+        })
+    }
+
+    /// Sparse update to merge into an existing `graph.json`. Empty groups and
+    /// search are explicit so removing the last entry clears the old value.
+    pub fn merge_document(&self) -> Value {
+        let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
+        if let Some(object) = value.as_object_mut() {
+            if self.color_groups.is_empty() {
+                object.insert("colorGroups".into(), serde_json::json!([]));
+            }
+            if self.search.is_none() {
+                object.insert("search".into(), serde_json::json!(""));
+            }
+        }
+        integerize_graph_numbers(&mut value);
+        value
+    }
+}
+
+fn graph_json_number(value: f32) -> Value {
+    if value.fract() == 0.0 && value.abs() < 1e9 {
+        serde_json::json!(value as i64)
+    } else {
+        serde_json::json!(value)
+    }
+}
+
+fn integerize_graph_numbers(value: &mut Value) {
+    match value {
+        Value::Number(number) => {
+            if let Some(number_value) = number.as_f64() {
+                *value = graph_json_number(number_value as f32);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(integerize_graph_numbers),
+        Value::Object(fields) => fields.values_mut().for_each(integerize_graph_numbers),
+        _ => {}
+    }
+}
+
 /// `switcher.json`: the quick switcher's options.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SwitcherConfig {

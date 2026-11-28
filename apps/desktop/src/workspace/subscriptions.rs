@@ -9,7 +9,6 @@ use crate::explorer::{ExplorerEvent, FileExplorer};
 use crate::export_modals::{ImageExport, ImageExportEvent, PdfExport, PdfExportEvent};
 use crate::file_menu;
 use crate::graph::{GraphEvent, GraphView};
-use crate::palette::{CommandPalette, PaletteEvent};
 use crate::pdf::view::{PdfEvent, PdfView};
 use crate::prompt::{Prompt, PromptEvent};
 use crate::reading::{PropertyItemRemoved, ReadingEvent, ReadingView, TaskToggled};
@@ -17,6 +16,7 @@ use crate::search::{SearchEvent, SearchPane};
 use crate::settings::{SettingsEvent, SettingsView};
 use crate::switcher::{QuickSwitcher, SwitcherEvent};
 use gpui::{Anchor, ClipboardItem, Context, Entity, Subscription, Window};
+use tft_app::command_palette::{CommandPalette, PaletteEvent};
 use tft_app::FileOperationRequest;
 
 /// Connects every Workspace-owned view and panel entity to the Workspace event handlers.
@@ -71,6 +71,14 @@ pub(super) fn workspace_subscriptions(
             explorer,
             window,
             |this, _, event: &ExplorerEvent, window, cx| match event {
+                ExplorerEvent::SortChanged(sort) => {
+                    this.layout_persistence.set_file_tree_sort(*sort);
+                    this.save_layout(cx);
+                }
+                ExplorerEvent::FoldersExpanded(folders) => {
+                    this.layout_persistence.set_file_tree_expanded(folders);
+                    this.save_layout(cx);
+                }
                 ExplorerEvent::Open(path) => {
                     // A row's click or Enter hands the keyboard to the note it opened.
                     this.open_file(path.clone(), None, cx);
@@ -239,7 +247,7 @@ pub(super) fn workspace_subscriptions(
                     // the sidebar hidden. Show it there too: the row is
                     // selected and scrolled into view, while the keyboard
                     // stays on the note that just opened.
-                    this.left_dock.visible = true;
+                    this.left_dock.set_visible(true);
                     this.explorer.update(cx, |e, cx| e.reveal(&path, cx));
                     cx.notify();
                 }

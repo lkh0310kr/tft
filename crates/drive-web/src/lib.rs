@@ -15,12 +15,16 @@ use wasm_bindgen_futures::JsFuture;
 extern "C" {
     #[wasm_bindgen(js_name = getConfig)]
     fn get_config() -> String;
+    #[wasm_bindgen(js_name = modifierKeyLabel)]
+    fn modifier_key_label_js() -> String;
     #[wasm_bindgen(js_name = saveConfig)]
-    fn save_config_js(client_id: &str, api_key: &str);
+    fn save_config_js(client_id: &str, api_key: &str) -> bool;
     #[wasm_bindgen(js_name = initTokenClient, catch)]
     fn init_token_client(client_id: &str) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = requestToken)]
     fn request_token() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = tryResumeToken)]
+    fn try_resume_token(client_id: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = pickFolder)]
     fn pick_folder_js(api_key: &str, app_id: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = driveFetch)]
@@ -29,6 +33,20 @@ extern "C" {
     fn update_text_file(id: &str, content: &str, etag: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = driveBlobUrl)]
     fn drive_blob_url(id: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = driveFileBytes)]
+    fn drive_file_bytes(id: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = toggleAudio)]
+    fn toggle_audio_js(id: &str, url: &str) -> String;
+    #[wasm_bindgen(js_name = audioState)]
+    fn audio_state_js(id: &str) -> String;
+    #[wasm_bindgen(js_name = seekAudio)]
+    fn seek_audio_js(id: &str, position: f64);
+    #[wasm_bindgen(js_name = toggleAudioMute)]
+    fn toggle_audio_mute_js(id: &str, url: &str) -> String;
+    #[wasm_bindgen(js_name = openVideoPlayer)]
+    fn open_video_player_js(url: &str, title: &str);
+    #[wasm_bindgen(js_name = openDriveFile)]
+    fn open_drive_file_js(id: &str);
     #[wasm_bindgen(js_name = createFolder)]
     fn create_folder(name: &str, parent: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = createTextFile)]
@@ -37,18 +55,28 @@ extern "C" {
     fn rename_file(id: &str, name: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = deleteFile)]
     fn delete_file(id: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = duplicateFile)]
+    fn duplicate_file(id: &str, parent: &str, name: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = moveFile)]
+    fn move_file(id: &str, add_parent: &str, remove_parent: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = trashFile)]
+    fn trash_file(id: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = internalLinkAt)]
     fn internal_link_at(target: JsValue) -> String;
     #[wasm_bindgen(js_name = copyText)]
     fn copy_text(text: &str) -> js_sys::Promise;
-    #[wasm_bindgen(js_name = promptText)]
-    fn prompt_text(message: &str, value: &str) -> String;
     #[wasm_bindgen(js_name = confirmAction)]
     fn confirm_action(message: &str) -> bool;
     #[wasm_bindgen(js_name = savedVault)]
     fn saved_vault() -> String;
     #[wasm_bindgen(js_name = saveVault)]
     fn save_vault(id: &str, name: &str);
+    #[wasm_bindgen(js_name = savedWorkspace)]
+    fn saved_workspace(root_id: &str) -> String;
+    #[wasm_bindgen(js_name = saveWorkspace)]
+    fn save_workspace(root_id: &str, state: &str) -> bool;
+    #[wasm_bindgen(js_name = clearWorkspace)]
+    fn clear_workspace(root_id: &str, state: &str);
     #[wasm_bindgen(js_name = getPref)]
     fn get_pref(key: &str, fallback: &str) -> String;
     #[wasm_bindgen(js_name = setPref)]
@@ -71,6 +99,16 @@ pub struct DriveItem {
     #[serde(rename = "createdTime")]
     pub created_time: Option<String>,
     pub etag: Option<String>,
+}
+
+impl DriveItem {
+    pub fn modified_millis(&self) -> u64 {
+        millis(&self.modified_time)
+    }
+
+    pub fn created_millis(&self) -> u64 {
+        millis(&self.created_time)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -267,6 +305,115 @@ pub async fn read_appearance_config(root_id: &str) -> Result<AppearanceConfig, S
     serde_json::from_str(&contents).map_err(|error| format!("appearance.json: {error}"))
 }
 
+/// Reads a typed configuration document inside the root `.tft` folder.
+/// Missing files use the format defaults; malformed files stay visible as an
+/// error to callers instead of silently becoming writable defaults.
+async fn read_config<T: for<'de> Deserialize<'de> + Default>(
+    root_id: &str,
+    file_name: &str,
+) -> Result<T, String> {
+    let Some(tft_folder) = find_child(root_id, ".tft", true).await? else {
+        return Ok(T::default());
+    };
+    let Some(file) = find_child(&tft_folder.id, file_name, false).await? else {
+        return Ok(T::default());
+    };
+    let contents = read_file(&file.id).await?;
+    serde_json::from_str(contents.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("{file_name}: {error}"))
+}
+
+pub async fn read_app_config(root_id: &str) -> Result<tft_formats::config::AppConfig, String> {
+    read_config(root_id, "app.json").await
+}
+
+pub async fn read_switcher_config(
+    root_id: &str,
+) -> Result<tft_formats::config::SwitcherConfig, String> {
+    read_config(root_id, "switcher.json").await
+}
+
+pub async fn read_page_preview_config(
+    root_id: &str,
+) -> Result<tft_formats::config::PagePreviewConfig, String> {
+    read_config(root_id, "page-preview.json").await
+}
+
+pub async fn read_hotkeys_config(root_id: &str) -> Result<tft_formats::config::Hotkeys, String> {
+    read_config(root_id, "hotkeys.json").await
+}
+
+pub async fn read_graph_config(
+    root_id: &str,
+) -> Result<Option<tft_formats::config::GraphConfig>, String> {
+    let Some(folder) = find_child(root_id, ".tft", true).await? else {
+        return Ok(None);
+    };
+    let Some(file) = find_child(&folder.id, "graph.json", false).await? else {
+        return Ok(None);
+    };
+    let contents = read_file(&file.id).await?;
+    serde_json::from_str(contents.trim_start_matches('\u{feff}'))
+        .map(Some)
+        .map_err(|error| format!("graph.json: {error}"))
+}
+
+/// Writes the shared Graph settings to `.tft/graph.json`, preserving unknown
+/// keys, BOM, and CRLF/LF. Malformed existing JSON is never overwritten.
+pub async fn write_graph_config(
+    root_id: &str,
+    config: &tft_formats::config::GraphConfig,
+) -> Result<(), String> {
+    let folder = match find_child(root_id, ".tft", true).await? {
+        Some(folder) => folder.id,
+        None => create_entry(".tft", root_id, None).await?,
+    };
+    let existing = find_child(&folder, "graph.json", false).await?;
+    let (document, file_id, bom, crlf) = if let Some(file) = existing {
+        let raw = read_file(&file.id).await?;
+        let bom = raw.starts_with('\u{feff}');
+        let source = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+        let crlf = source.contains("\r\n");
+        let document: serde_json::Value = serde_json::from_str(source)
+            .map_err(|error| format!("graph.json was not changed: {error}"))?;
+        let Some(object) = document.as_object() else {
+            return Err("graph.json was not changed: root must be an object".into());
+        };
+        (
+            serde_json::Value::Object(object.clone()),
+            Some(file.id),
+            bom,
+            crlf,
+        )
+    } else {
+        (config.full_document(), None, false, false)
+    };
+    let mut document = document;
+    let update = if file_id.is_some() {
+        config.merge_document()
+    } else {
+        serde_json::Value::Null
+    };
+    if let Some(object) = document.as_object_mut() {
+        if let Some(updates) = update.as_object() {
+            object.extend(updates.clone());
+        }
+    }
+    let mut output = serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
+    if crlf {
+        output = output.replace('\n', "\r\n");
+    }
+    if bom {
+        output.insert(0, '\u{feff}');
+    }
+    if let Some(file_id) = file_id {
+        write_file(&file_id, &output, None).await?;
+    } else {
+        create_entry("graph.json", &folder, Some(&output)).await?;
+    }
+    Ok(())
+}
+
 async fn find_child(parent: &str, name: &str, folder: bool) -> Result<Option<DriveItem>, String> {
     let query = format!("'{parent}' in parents and name = '{name}' and trashed = false");
     let url = format!(
@@ -282,6 +429,69 @@ async fn find_child(parent: &str, name: &str, folder: bool) -> Result<Option<Dri
                 .as_deref()
                 .is_some_and(|mime| (mime == "application/vnd.google-apps.folder") == folder)
     }))
+}
+
+/// Reads only the Web workspace extension, leaving the native workspace layout
+/// opaque so each host can keep its own layout representation.
+pub async fn read_web_workspace_state(root_id: &str) -> Result<Option<String>, String> {
+    let Some(folder) = find_child(root_id, ".tft", true).await? else {
+        return Ok(None);
+    };
+    let Some(file) = find_child(&folder.id, "workspace.json", false).await? else {
+        return Ok(None);
+    };
+    let contents = read_file(&file.id).await?;
+    let parsed: serde_json::Value = serde_json::from_str(contents.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("workspace.json: {error}"))?;
+    Ok(parsed.get("tftWeb").map(ToString::to_string))
+}
+
+/// Updates the Web extension while preserving all existing workspace keys and
+/// the file's BOM and newline convention. Invalid JSON is never overwritten.
+pub async fn write_web_workspace_state(root_id: &str, state_json: &str) -> Result<(), String> {
+    let state: serde_json::Value = serde_json::from_str(state_json)
+        .map_err(|error| format!("Web workspace state: {error}"))?;
+    let Some(state) = state.as_object() else {
+        return Err("Web workspace state must be a JSON object".into());
+    };
+    let folder = match find_child(root_id, ".tft", true).await? {
+        Some(folder) => folder.id,
+        None => create_entry(".tft", root_id, None).await?,
+    };
+    let existing = find_child(&folder, "workspace.json", false).await?;
+    let (mut document, file_id, bom, crlf) = if let Some(file) = existing {
+        let raw = read_file(&file.id).await?;
+        let bom = raw.starts_with('\u{feff}');
+        let source = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+        let crlf = source.contains("\r\n");
+        let document: serde_json::Value = serde_json::from_str(source)
+            .map_err(|error| format!("workspace.json was not changed: {error}"))?;
+        let Some(object) = document.as_object() else {
+            return Err("workspace.json was not changed: root must be an object".into());
+        };
+        (
+            serde_json::Value::Object(object.clone()),
+            Some(file.id),
+            bom,
+            crlf,
+        )
+    } else {
+        (serde_json::json!({}), None, false, false)
+    };
+    document["tftWeb"] = serde_json::Value::Object(state.clone());
+    let mut output = serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
+    if crlf {
+        output = output.replace('\n', "\r\n");
+    }
+    if bom {
+        output.insert(0, '\u{feff}');
+    }
+    if let Some(file_id) = file_id {
+        write_file(&file_id, &output, None).await?;
+    } else {
+        create_entry("workspace.json", &folder, Some(&output)).await?;
+    }
+    Ok(())
 }
 
 async fn create_entry(name: &str, parent: &str, content: Option<&str>) -> Result<String, String> {
@@ -328,15 +538,72 @@ pub async fn create_note_with_id(parent: &str, name: &str) -> Result<String, Str
     create_entry(name, parent, Some(&content)).await
 }
 
+pub async fn create_empty_file_with_id(parent: &str, name: &str) -> Result<String, String> {
+    create_entry(name, parent, Some("")).await
+}
+
+pub async fn create_folder_entry(parent: &str, name: &str) -> Result<String, String> {
+    create_entry(name, parent, None).await
+}
+
 pub async fn rename_entry(id: &str, name: &str) -> Result<(), String> {
-    JsFuture::from(rename_file(id, name))
+    rename_entry_with_etag(id, name).await.map(|_| ())
+}
+
+pub async fn rename_entry_with_etag(id: &str, name: &str) -> Result<Option<String>, String> {
+    let body = JsFuture::from(rename_file(id, name))
+        .await
+        .map_err(text)?
+        .as_string()
+        .unwrap_or_default();
+    Ok(serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("etag")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        }))
+}
+
+pub async fn delete_entry(id: &str) -> Result<(), String> {
+    JsFuture::from(delete_file(id))
         .await
         .map_err(text)
         .map(|_| ())
 }
 
-pub async fn delete_entry(id: &str) -> Result<(), String> {
-    JsFuture::from(delete_file(id))
+pub async fn duplicate_entry(id: &str, parent: &str, name: &str) -> Result<DriveItem, String> {
+    let body = JsFuture::from(duplicate_file(id, parent, name))
+        .await
+        .map_err(text)?
+        .as_string()
+        .unwrap_or_default();
+    serde_json::from_str(&body).map_err(|error| format!("Drive duplicate response: {error}"))
+}
+
+pub async fn move_entry(
+    id: &str,
+    add_parent: &str,
+    remove_parent: &str,
+) -> Result<Option<String>, String> {
+    let body = JsFuture::from(move_file(id, add_parent, remove_parent))
+        .await
+        .map_err(text)?
+        .as_string()
+        .unwrap_or_default();
+    Ok(serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("etag")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        }))
+}
+
+pub async fn trash_entry(id: &str) -> Result<(), String> {
+    JsFuture::from(trash_file(id))
         .await
         .map_err(text)
         .map(|_| ())
@@ -351,10 +618,6 @@ pub async fn copy_to_clipboard(value: &str) -> Result<(), String> {
         .await
         .map_err(text)
         .map(|_| ())
-}
-
-pub fn ask(message: &str, value: &str) -> String {
-    prompt_text(message, value)
 }
 
 pub fn confirm(message: &str) -> bool {
@@ -410,6 +673,39 @@ pub async fn blob_url(id: &str) -> Result<String, String> {
         .ok_or_else(|| "Drive media returned no URL".to_string())
 }
 
+pub async fn file_bytes(id: &str) -> Result<Vec<u8>, String> {
+    let value = JsFuture::from(drive_file_bytes(id)).await.map_err(text)?;
+    Ok(js_sys::Uint8Array::new(&value).to_vec())
+}
+
+/// Toggles a browser-native audio element from a user click. The JavaScript
+/// call itself invokes `play()` synchronously to retain browser activation.
+pub fn toggle_audio(id: &str, url: &str) -> String {
+    toggle_audio_js(id, url)
+}
+
+pub fn audio_state(id: &str) -> String {
+    audio_state_js(id)
+}
+
+pub fn seek_audio(id: &str, position: f64) {
+    seek_audio_js(id, position);
+}
+
+pub fn toggle_audio_mute(id: &str, url: &str) -> String {
+    toggle_audio_mute_js(id, url)
+}
+
+pub fn open_video_player(url: &str, title: &str) {
+    open_video_player_js(url, title);
+}
+
+/// Opens a Drive file in Google's browser preview. Call from a user click so
+/// popup blockers recognize the new tab as user initiated.
+pub fn open_drive_file(id: &str) {
+    open_drive_file_js(id);
+}
+
 pub async fn read_file(id: &str) -> Result<String, String> {
     fetch(&format!(
         "https://www.googleapis.com/drive/v3/files/{id}?alt=media"
@@ -445,6 +741,11 @@ pub fn config() -> (String, String, String) {
     (get("clientId"), get("apiKey"), get("appId"))
 }
 
+/// Browser platform modifier used by workspace shortcut hints.
+pub fn modifier_key_label() -> String {
+    modifier_key_label_js()
+}
+
 pub async fn sign_in(client_id: &str) -> Result<(), String> {
     JsFuture::from(begin_sign_in(client_id)?)
         .await
@@ -464,8 +765,17 @@ pub async fn finish_sign_in(promise: js_sys::Promise) -> Result<(), String> {
     Ok(())
 }
 
-pub fn save_config(client_id: &str, api_key: &str) {
-    save_config_js(client_id, api_key);
+/// Attempts to obtain a token from the existing Google browser session without
+/// showing account or consent UI. A user-initiated sign-in remains the fallback.
+pub async fn try_resume_sign_in(client_id: &str) -> Result<(), String> {
+    JsFuture::from(try_resume_token(client_id))
+        .await
+        .map_err(text)?;
+    Ok(())
+}
+
+pub fn save_config(client_id: &str, api_key: &str) -> bool {
+    save_config_js(client_id, api_key)
 }
 
 pub async fn pick_folder(api_key: &str, app_id: &str) -> Result<(String, String), String> {
@@ -515,6 +825,19 @@ pub fn last_vault() -> Option<(String, String)> {
 
 pub fn remember_vault(id: &str, name: &str) {
     save_vault(id, name);
+}
+
+pub fn local_workspace_state(root_id: &str) -> Option<String> {
+    let state = saved_workspace(root_id);
+    (!state.is_empty()).then_some(state)
+}
+
+pub fn save_local_workspace_state(root_id: &str, state: &str) -> bool {
+    save_workspace(root_id, state)
+}
+
+pub fn clear_local_workspace_state(root_id: &str, state: &str) {
+    clear_workspace(root_id, state);
 }
 
 pub fn pref(key: &str, fallback: &str) -> String {
