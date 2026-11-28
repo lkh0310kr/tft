@@ -1235,6 +1235,15 @@ impl Editor {
         }
     }
 
+    /// How many Live Preview table widgets the last parse produced. Exposed
+    /// for browser tests, which cannot read the GPUI canvas.
+    pub fn table_widget_count(&self) -> usize {
+        self.widgets
+            .iter()
+            .filter(|(_, widget)| matches!(widget.block, RBlock::Table { .. }))
+            .count()
+    }
+
     /// Whether `cmd` would do anything at the cursor; the palette lists a table command only then.
     pub fn table_command_applies(&self, cmd: TableCommand) -> bool {
         self.table_command_target(cmd)

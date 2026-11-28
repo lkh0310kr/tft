@@ -540,6 +540,9 @@ pub struct WebWorkspace {
     graph_hovered: std::cell::Cell<Option<usize>>,
     graph_slider_drag: std::cell::Cell<Option<WebGraphSlider>>,
     group_views: std::collections::HashMap<u64, GroupViews>,
+    /// Live Preview widgets (tables, Mermaid, embeds) are built only when the
+    /// Editor has an embed source, so every Web editor shares this snapshot.
+    embed_source: Arc<WebEmbedSource>,
     title_editing: WebTitleEditing,
     command_palette: Entity<CommandPalette>,
     command_palette_open: bool,
@@ -968,13 +971,28 @@ impl WebWorkspace {
         } else {
             initial_node
         };
+        let embed_source = Arc::new(WebEmbedSource::new(&vault));
         let editor = cx.new(|cx| Editor::new(window, cx));
+        editor.update(cx, |editor, cx| {
+            editor.set_vault(
+                Some(embed_source.clone()),
+                reading::BuildOptions::default(),
+                cx,
+            );
+        });
         let reading = cx.new(ReadingView::new);
         let pdf = cx.new(PdfView::new);
         let group_id = model.active_group;
         let mut group_views = std::collections::HashMap::new();
         for group in model.groups.iter().filter(|group| group.id != group_id) {
             let editor = cx.new(|cx| Editor::new(window, cx));
+            editor.update(cx, |editor, cx| {
+                editor.set_vault(
+                    Some(embed_source.clone()),
+                    reading::BuildOptions::default(),
+                    cx,
+                );
+            });
             let reading = cx.new(ReadingView::new);
             let pdf = cx.new(PdfView::new);
             if let Some(tab) = group.active() {
@@ -1423,6 +1441,7 @@ impl WebWorkspace {
             graph_hovered: std::cell::Cell::new(None),
             graph_slider_drag: std::cell::Cell::new(None),
             group_views,
+            embed_source,
             title_editing: WebTitleEditing {
                 focus: title_focus,
                 editing: None,
@@ -2301,6 +2320,32 @@ impl WebWorkspace {
                     .into_any_element()
             })
             .into_any_element()
+    }
+
+    fn install_embed_source(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) {
+        let source = self.embed_source.clone();
+        editor.update(cx, |editor, cx| {
+            editor.set_vault(Some(source), reading::BuildOptions::default(), cx);
+        });
+    }
+
+    /// Widgets bake Vault text into the editor's parse, so refresh the shared
+    /// snapshot and reparse every editor after files or bodies change.
+    fn refresh_embed_source(&mut self, cx: &mut Context<Self>) {
+        self.embed_source.refresh(&self.vault);
+        let mut editors = self
+            .group_views
+            .values()
+            .map(|views| views.editor.clone())
+            .collect::<Vec<_>>();
+        editors.extend(
+            self.preview_editors
+                .values()
+                .map(|preview| preview.editor.clone()),
+        );
+        for editor in editors {
+            self.install_embed_source(&editor, cx);
+        }
     }
 
     fn active_editor(&self) -> &Entity<Editor> {
@@ -3475,6 +3520,7 @@ impl WebWorkspace {
         };
         let text = document_text(&self.vault, preview.node);
         let editor = cx.new(|cx| Editor::new(window, cx));
+        self.install_embed_source(&editor, cx);
         editor.update(cx, |editor, cx| {
             editor.set_readable_line_length(false);
             editor.set_show_inline_title(false);
@@ -6164,6 +6210,7 @@ impl WebWorkspace {
         }
         let path: SharedString = self.vault.path(file).unwrap_or_default().into();
         let editor = cx.new(|cx| Editor::new(window, cx));
+        self.install_embed_source(&editor, cx);
         editor.update(cx, |editor, cx| {
             editor.set_readable_line_length(false);
             editor.set_live_preview(true, cx);
@@ -7270,6 +7317,7 @@ impl WebWorkspace {
         cx: &mut Context<Self>,
     ) {
         let editor = cx.new(|cx| Editor::new(window, cx));
+        self.install_embed_source(&editor, cx);
         let reading = cx.new(ReadingView::new);
         let pdf = cx.new(PdfView::new);
         let path = tab.path.clone().unwrap_or_default();
@@ -9292,6 +9340,7 @@ impl WebWorkspace {
         if kind == tft_formats::FileKind::Markdown {
             self.upsert_search_document(node, path.clone(), document_text(&self.vault, node));
         }
+        self.refresh_embed_source(cx);
         self.schedule_graph_rebuild(cx, false);
         self.open(node, path, false, window, cx);
         Ok(node)
@@ -9360,6 +9409,7 @@ impl WebWorkspace {
         tree.preserve_view_from(&self.tree);
         self.tree_selection.retain_in(&tree);
         self.tree = tree;
+        self.refresh_embed_source(cx);
         self.schedule_graph_rebuild(cx, false);
         self.emit_workspace_state(cx);
         self.publish_test_state();
@@ -9458,6 +9508,7 @@ impl WebWorkspace {
         for group_id in &groups {
             self.sync_group_document(*group_id, cx);
         }
+        self.refresh_embed_source(cx);
         self.schedule_graph_rebuild(cx, false);
         self.emit_workspace_state(cx);
         self.publish_test_state();
@@ -9588,6 +9639,7 @@ impl WebWorkspace {
                 });
             }
         }
+        self.refresh_embed_source(cx);
         self.schedule_graph_rebuild(cx, false);
         cx.notify();
     }
@@ -9621,6 +9673,7 @@ impl WebWorkspace {
         self.loading_folders.remove(&parent);
         self.loaded_folders.insert(parent);
         self.vault.apply_partial_scan(scanned);
+        self.refresh_embed_source(cx);
         let mut tree = FileTree::from_vault_sorted(&self.vault, self.tree.sort());
         tree.preserve_view_from(&self.tree);
         if tree.is_collapsed(path) {
@@ -10300,6 +10353,10 @@ impl WebWorkspace {
             ("mode", JsValue::from_str(mode)),
             ("vaultText", JsValue::from_f64(vault_text as f64)),
             ("editorText", JsValue::from_f64(editor_text as f64)),
+            (
+                "tableWidgets",
+                JsValue::from_f64(self.active_editor().read(cx).table_widget_count() as f64),
+            ),
             (
                 "activeLoaded",
                 JsValue::from_bool(node.is_some_and(|node| self.loaded_texts.contains(&node))),
@@ -12792,6 +12849,65 @@ impl EmbedSource for VaultEmbedSource<'_> {
     fn read(&self, path: &str) -> Option<String> {
         let node = self.vault.lookup(path).ok()?;
         self.vault.text(node).map(|text| text.as_ref().clone())
+    }
+
+    fn absolute(&self, path: &str) -> PathBuf {
+        PathBuf::from(path)
+    }
+}
+
+/// An owned Live Preview embed source over a Vault snapshot. Editors build
+/// widgets (tables, Mermaid, embeds) on a background thread and cannot borrow
+/// `WebWorkspace`'s vault, so the host refreshes this snapshot when the vault
+/// gains files or text.
+struct WebEmbedSource {
+    snapshot: Mutex<WebEmbedSnapshot>,
+}
+
+struct WebEmbedSnapshot {
+    resolver: LinkResolver,
+    texts: HashMap<String, Arc<String>>,
+}
+
+impl WebEmbedSource {
+    fn new(vault: &VaultData) -> Self {
+        Self {
+            snapshot: Mutex::new(WebEmbedSnapshot::from_vault(vault)),
+        }
+    }
+
+    fn refresh(&self, vault: &VaultData) {
+        if let Ok(mut snapshot) = self.snapshot.lock() {
+            *snapshot = WebEmbedSnapshot::from_vault(vault);
+        }
+    }
+}
+
+impl WebEmbedSnapshot {
+    fn from_vault(vault: &VaultData) -> Self {
+        Self {
+            resolver: vault_resolver(vault),
+            texts: vault
+                .file_ids()
+                .into_iter()
+                .filter_map(|(node, file)| vault.text(node).map(|text| (file.path, text.clone())))
+                .collect(),
+        }
+    }
+}
+
+impl EmbedSource for WebEmbedSource {
+    fn resolve(&self, linktext: &str, source_path: &str) -> Option<String> {
+        let snapshot = self.snapshot.lock().ok()?;
+        snapshot
+            .resolver
+            .resolve(linktext, source_path)
+            .map(str::to_owned)
+    }
+
+    fn read(&self, path: &str) -> Option<String> {
+        let snapshot = self.snapshot.lock().ok()?;
+        snapshot.texts.get(path).map(|text| text.as_ref().clone())
     }
 
     fn absolute(&self, path: &str) -> PathBuf {
