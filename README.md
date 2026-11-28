@@ -29,10 +29,11 @@ release 바이너리를 `TFT.app` 번들로 만들어 `/Applications`에 덮어�
 tools/macos-install.sh              # release build → /Applications/TFT.app → 앱 재실행
 tools/macos-install.sh --no-launch  # 설치만
 TFT_APP_DIR="$HOME/Applications" tools/macos-install.sh
+TFT_KEEP_RUNNING=1 tools/macos-install.sh   # 다른 TFT 인스턴스를 닫지 않음
 ```
 
-기존 앱이 실행 중이면 먼저 종료하고, 번들을 ad-hoc 서명(hardened runtime)한 뒤 교체합니다.
-Apple Silicon에서 이모지 렌더링에 필요한 runtime flag가 여기 포함됩니다.
+기존 앱과 다른 TFT 인스턴스(개발 빌드 등)를 먼저 종료하고, 번들을 ad-hoc 서명(hardened runtime)한
+뒤 교체합니다. Apple Silicon에서 이모지 렌더링에 필요한 runtime flag가 여기 포함됩니다.
 
 ## 웹 (Google Drive)
 

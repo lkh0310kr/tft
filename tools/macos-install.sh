@@ -5,6 +5,7 @@
 #   tools/macos-install.sh --no-launch     # install without opening it again
 #   TFT_APP_DIR="$HOME/Applications" tools/macos-install.sh
 #   TFT_BUNDLE_ID=com.example.tft tools/macos-install.sh
+#   TFT_KEEP_RUNNING=1 tools/macos-install.sh   # do not close other running TFTs
 #
 # The binary is ad-hoc signed with the hardened runtime. Apple Color Emoji is
 # painted through CoreText, which SIGBUSes on Apple Silicon when that flag is
@@ -24,7 +25,7 @@ for arg in "$@"; do
   case "$arg" in
     --no-launch) LAUNCH=0 ;;
     --help|-h)
-      sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -173,6 +174,23 @@ fi
 printf '==> Installing %s\n' "$APP_BUNDLE"
 ditto "$STAGE" "$APP_BUNDLE"
 xattr -dr com.apple.quarantine "$APP_BUNDLE" >/dev/null 2>&1 || true
+
+# A second TFT (a dev build, for example) holding the last vault answers the
+# new launch's handover socket and the updated app exits with no window.
+# Close those instances so the bundle just installed is the one that opens.
+if [ "${TFT_KEEP_RUNNING:-0}" != "1" ]; then
+  for pid in $(pgrep -x "$BIN_NAME" 2>/dev/null || true); do
+    printf '==> Closing the other running TFT (pid %s)\n' "$pid"
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  done
+  for _ in $(seq 1 20); do
+    if ! pgrep -x "$BIN_NAME" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  pkill -x "$BIN_NAME" >/dev/null 2>&1 || true
+fi
 
 if [ "$LAUNCH" = "1" ]; then
   printf '==> Launching\n'
