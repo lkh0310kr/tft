@@ -27,6 +27,15 @@ apply_patch() {
     # shellcheck disable=SC2086
     git -C "$GPUI_ROOT" checkout -- $paths
     printf 'Reset cached GPUI files before patching %s\n' "$GPUI_ROOT"
+    if ! git -C "$GPUI_ROOT" apply --check "$patch" >/dev/null 2>&1; then
+      printf 'GPUI checkout still does not match the patch base: %s\n' "$GPUI_ROOT" >&2
+      git -C "$GPUI_ROOT" rev-parse HEAD >&2 || true
+      git -C "$GPUI_ROOT" status --short | head -20 >&2 || true
+      for path in $paths; do
+        printf '%s %s\n' "$(git -C "$GPUI_ROOT" hash-object "$path" 2>/dev/null || true)" "$path" >&2
+      done
+      git -C "$GPUI_ROOT" apply --check --verbose "$patch" >&2 || true
+    fi
   fi
   git -C "$GPUI_ROOT" apply "$patch"
   printf 'Applied GPUI Web patch to %s\n' "$GPUI_ROOT"
