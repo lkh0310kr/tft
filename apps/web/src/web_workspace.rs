@@ -6866,10 +6866,14 @@ impl WebWorkspace {
         };
         let path = path.unwrap_or_default();
         // A split can expose a tab that was never active, so its lazy body
-        // has not been requested yet.
-        if mode != ViewMode::Graph {
-            if let (Some(node), false) = (node, path.is_empty()) {
-                if !self.has_text(node) {
+        // has not been requested yet. Only Markdown has a text body.
+        if mode != ViewMode::Graph && !path.is_empty() {
+            if let Some(node) = node {
+                let is_markdown = matches!(
+                    self.vault.node(node).map(|entry| &entry.kind),
+                    Some(NodeKind::File(meta)) if meta.kind == tft_formats::FileKind::Markdown
+                );
+                if is_markdown && !self.has_text(node) {
                     self.request_note_text(node, &path, cx);
                 }
             }
