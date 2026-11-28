@@ -556,6 +556,9 @@ pub struct WebWorkspace {
     editor_context_menu: Option<EditorContextMenu>,
     dock_width: f32,
     dock_dragging: bool,
+    /// A narrow viewport shows the dock as an overlay instead of letting it
+    /// squeeze the document.
+    narrow_dock_open: bool,
     tab_drop_boundary: Option<usize>,
     split_dragging: Option<(Vec<usize>, usize)>,
     model: WorkspaceModel,
@@ -1400,6 +1403,7 @@ impl WebWorkspace {
             editor_context_menu: None,
             dock_width,
             dock_dragging: false,
+            narrow_dock_open: false,
             tab_drop_boundary: None,
             split_dragging: None,
             model,
@@ -6804,6 +6808,7 @@ impl WebWorkspace {
 
     fn toggle_left_dock(&mut self, cx: &mut Context<Self>) {
         self.model.dock.toggle();
+        self.narrow_dock_open = self.model.dock.visible;
         cx.notify();
         self.publish_test_state();
         self.emit_workspace_state(cx);
@@ -11197,6 +11202,7 @@ impl Render for WebWorkspace {
                 })
                 .collect::<Vec<_>>();
 
+        let narrow_viewport = f32::from(window.bounds().size.width) < 510.;
         let dock_header = tft_app::ui::workspace_dock_header(&theme)
             .gap(px(3.))
             .px_2()
@@ -11204,7 +11210,10 @@ impl Render for WebWorkspace {
             .child(
                 tft_app::ui::icon_button("web-sidebar-toggle", "panel-left", &theme)
                     .opacity(0.72)
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if narrow_viewport {
+                            this.narrow_dock_open = false;
+                        }
                         this.set_left_dock_visible(false, cx);
                     })),
             );
@@ -11228,8 +11237,17 @@ impl Render for WebWorkspace {
         let viewport_width = f32::from(window.bounds().size.width);
         let dock_width =
             tft_app::ui::workspace_dock_width_for_viewport(self.dock_width, viewport_width);
-        let dock_visible = self.model.dock.visible && dock_width.is_some();
-        let dock_width = dock_width.unwrap_or(0.);
+        let dock_visible = self.model.dock.visible
+            && (dock_width.is_some() || (narrow_viewport && self.narrow_dock_open));
+        let dock_width = if narrow_viewport {
+            if self.narrow_dock_open {
+                (viewport_width - 140.).clamp(150., 300.)
+            } else {
+                0.
+            }
+        } else {
+            dock_width.unwrap_or(0.)
+        };
         div()
             .size_full()
             .relative()
@@ -11483,7 +11501,7 @@ impl Render for WebWorkspace {
                             .when(self.model.groups.len() == 1, |area| area.child(
                                 tft_app::ui::workspace_tab_strip_shell(&theme)
                                     .flex_shrink_0()
-                                    .when(!dock_visible && viewport_width >= 510., |strip| {
+                                    .when(!dock_visible, |strip| {
                                         strip.child(
                                             tft_app::ui::icon_button(
                                                 "web-sidebar-restore",
@@ -11491,7 +11509,10 @@ impl Render for WebWorkspace {
                                                 &theme,
                                             )
                                             .on_click(
-                                                cx.listener(|this, _, _, cx| {
+                                                cx.listener(move |this, _, _, cx| {
+                                                    if narrow_viewport {
+                                                        this.narrow_dock_open = true;
+                                                    }
                                                     this.set_left_dock_visible(true, cx);
                                                 }),
                                             ),
