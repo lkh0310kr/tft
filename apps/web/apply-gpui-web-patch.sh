@@ -17,38 +17,38 @@ GPUI_ROOT="$(cd "$GPUI_ROOT" && pwd)"
 # files the patch owns before applying it again.
 apply_patch() {
   local patch="$1"
-  if git -C "$GPUI_ROOT" apply --reverse --check "$patch" >/dev/null 2>&1; then
+  if git -C "$GPUI_ROOT" apply --ignore-whitespace --reverse --check "$patch" >/dev/null 2>&1; then
     printf 'GPUI Web patch already applied at %s\n' "$GPUI_ROOT"
     return
   fi
-  if ! git -C "$GPUI_ROOT" apply --check "$patch" >/dev/null 2>&1; then
+  if ! git -C "$GPUI_ROOT" apply --ignore-whitespace --check "$patch" >/dev/null 2>&1; then
     local paths
     paths="$(sed -n 's|^+++ b/||p' "$patch")"
     # shellcheck disable=SC2086
-    git -C "$GPUI_ROOT" checkout -- $paths
+    git -C "$GPUI_ROOT" checkout HEAD -- $paths
     printf 'Reset cached GPUI files before patching %s\n' "$GPUI_ROOT"
-    if ! git -C "$GPUI_ROOT" apply --check "$patch" >/dev/null 2>&1; then
+    if ! git -C "$GPUI_ROOT" apply --ignore-whitespace --check "$patch" >/dev/null 2>&1; then
       printf 'GPUI checkout still does not match the patch base: %s\n' "$GPUI_ROOT" >&2
       git -C "$GPUI_ROOT" rev-parse HEAD >&2 || true
       git -C "$GPUI_ROOT" status --short | head -20 >&2 || true
       for path in $paths; do
         printf '%s %s\n' "$(git -C "$GPUI_ROOT" hash-object "$path" 2>/dev/null || true)" "$path" >&2
       done
-      git -C "$GPUI_ROOT" apply --check --verbose "$patch" >&2 || true
+      git -C "$GPUI_ROOT" apply --ignore-whitespace --check --verbose "$patch" >&2 || true
     fi
   fi
-  git -C "$GPUI_ROOT" apply "$patch"
+  git -C "$GPUI_ROOT" apply --ignore-whitespace "$patch"
   printf 'Applied GPUI Web patch to %s\n' "$GPUI_ROOT"
 }
 
 apply_patch "$PATCH_FILE"
-if ! git -C "$GPUI_ROOT" apply --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
+if ! git -C "$GPUI_ROOT" apply --ignore-whitespace --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
   printf 'GPUI checkout does not match the expected patched revision: %s\n' "$GPUI_ROOT" >&2
   exit 1
 fi
 
 apply_patch "$CLIPBOARD_PATCH_FILE"
-if ! git -C "$GPUI_ROOT" apply --reverse --check "$CLIPBOARD_PATCH_FILE" >/dev/null 2>&1; then
+if ! git -C "$GPUI_ROOT" apply --ignore-whitespace --reverse --check "$CLIPBOARD_PATCH_FILE" >/dev/null 2>&1; then
   printf 'GPUI checkout does not match the expected clipboard patch revision: %s\n' "$GPUI_ROOT" >&2
   exit 1
 fi
