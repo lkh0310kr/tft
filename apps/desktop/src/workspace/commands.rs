@@ -268,6 +268,10 @@ pub const RUNNABLE: &[&str] = &[
     "window:zoom-out",
     "window:reset-zoom",
     "terminal:open",
+    "terminal:new",
+    "terminal:toggle",
+    "terminal:close",
+    "terminal:rename",
 ];
 
 /// Binds every runnable command's hotkeys in the Workspace context and the reading
@@ -308,6 +312,38 @@ pub fn bind_keys(cx: &mut App, registry: &CommandRegistry) {
     // Tab steps into the Files tree from the main area; the tree's own Tab
     // hands the keyboard back (Explorer's binding, which wins over this one).
     // The editor, text fields and an open menu keep Tab for themselves.
+    // Terminal keys that would otherwise be taken by Workspace's editor
+    // commands (Cmd-F search, Cmd-K insert link): the terminal's own actions
+    // win while its context is focused.
+    cx.bind_keys([
+        KeyBinding::new("secondary-f", tft_terminal::Find, Some("Terminal")),
+        KeyBinding::new("secondary-k", tft_terminal::Clear, Some("Terminal")),
+        // Shift+Enter in the terminal's find field walks back through the
+        // hits, as the editor's find does.
+        KeyBinding::new(
+            "shift-enter",
+            tft_terminal::FindPrevious,
+            Some("Terminal && TextInput"),
+        ),
+    ]);
+    // Zed's terminal panel keys: Ctrl+` covers and reveals it, Ctrl+Shift+`
+    // starts another shell.
+    cx.bind_keys([
+        KeyBinding::new(
+            "ctrl-`",
+            RunCommand {
+                id: "terminal:toggle".into(),
+            },
+            Some("Workspace"),
+        ),
+        KeyBinding::new(
+            "ctrl-shift-`",
+            RunCommand {
+                id: "terminal:new".into(),
+            },
+            Some("Workspace"),
+        ),
+    ]);
     let into_tree = Some("Workspace && !Editor && !TextInput && !Explorer && !Menu");
     cx.bind_keys([
         KeyBinding::new("tab", FocusExplorer, into_tree),
@@ -778,7 +814,10 @@ impl Workspace {
             }
             // Zoom in/out/reset: half a level between -2.5 and +3, on the vault
             // window (see [[Specification#Window zoom]]).
-            "terminal:open" => self.open_terminal(window, cx),
+            "terminal:open" | "terminal:new" => self.open_terminal(window, cx),
+            "terminal:toggle" => self.toggle_terminal(window, cx),
+            "terminal:close" => self.close_terminal(window, cx),
+            "terminal:rename" => self.start_rename_terminal(window, cx),
             "window:zoom-in" => self.zoom_main(zoom::stepped(self.main_window.zoom_level(), 1), cx),
             "window:zoom-out" => {
                 self.zoom_main(zoom::stepped(self.main_window.zoom_level(), -1), cx)

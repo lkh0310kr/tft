@@ -130,6 +130,13 @@ export function initTokenClient(clientId) {
         p?.resolve(accessToken);
       }
     },
+    error_callback: (error) => {
+      if (generation !== tokenClientGeneration) return;
+      const p = pending;
+      pending = null;
+      if (p?.timer) clearTimeout(p.timer);
+      p?.reject(new Error(error?.type || "Google token request failed"));
+    },
   });
 }
 
@@ -141,13 +148,21 @@ export function requestToken() {
 }
 
 export async function tryResumeToken(clientId) {
+  // A token from this browser needs no network round trip and no GIS load:
+  // use it before waiting for the Google script. GIS is initialized only as
+  // a best effort so the token can be refreshed when it expires.
+  if (restoreSessionToken(clientId)) {
+    try {
+      initTokenClient(clientId);
+    } catch {}
+    return accessToken;
+  }
   if (!(await waitFor(() => window.google?.accounts?.oauth2))) {
     throw new Error("Google Identity Services did not load");
   }
   initTokenClient(clientId);
-  // Reuse the short-lived token across reloads and tabs. Expired tokens still
-  // go through Google's silent GIS flow; refresh tokens are never stored.
-  if (restoreSessionToken(clientId)) return accessToken;
+  // Expired tokens still go through Google's silent GIS flow; refresh tokens
+  // are never stored.
   return requestAccessToken({ prompt: "none" });
 }
 
@@ -246,7 +261,7 @@ export async function driveFetch(url) {
 }
 
 async function authorizedFetch(url, init = {}) {
-  if (!accessToken || !tokenClient) throw new Error("Sign in first");
+  if (!accessToken) throw new Error("Sign in first");
   await refreshTokenIfExpired();
   const send = () => {
     const headers = new Headers(init.headers || {});
@@ -255,6 +270,9 @@ async function authorizedFetch(url, init = {}) {
   };
   let response = await send();
   if (response.status === 401) {
+    // Only a live GIS client can mint a replacement token; a restored token
+    // still works for reads until it expires even when GIS did not load.
+    if (!tokenClient) throw new Error("The Google session expired; sign in again");
     await requestAccessToken({ prompt: "none" });
     response = await send();
   }
@@ -263,6 +281,9 @@ async function authorizedFetch(url, init = {}) {
 
 async function refreshTokenIfExpired() {
   if (accessTokenExpiresAt && Date.now() >= accessTokenExpiresAt) {
+    if (!tokenClient) {
+      throw new Error("The Google session expired; sign in again");
+    }
     await requestAccessToken({ prompt: "none" });
   }
 }

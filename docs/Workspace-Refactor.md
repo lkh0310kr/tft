@@ -14,6 +14,7 @@ Web 화면을 Desktop workspace와 같은 정보 구조와 조작 흐름으로 �
 
 ## 경계 원칙
 
+- **공통 동작과 UI는 `crates/app`에 모읍니다.** Desktop과 Web이 같은 의미로 쓰는 상태 전이, 화면 조각, command와 사용자 동작은 공유 경계에 두고, 각 host는 플랫폼 차이와 callback/event 연결만 제공합니다. 같은 UI나 전이를 호스트별로 복사하지 않습니다.
 - `crates/app`: 두 호스트가 같은 의미로 제공하는 workspace UI 조각, 화면 모델, 사용자 동작 전이, 앱 서비스.
 - `apps/desktop`: native window/frame, OS 단축키·파일 선택, 로컬 Vault watcher와 파일 I/O, Desktop 전용 패널 및 효과.
 - `apps/web`: 브라우저 부트스트랩, Drive 로그인·권한·업로드, URL 및 브라우저 API 어댑터.
@@ -44,10 +45,9 @@ Web 화면을 Desktop workspace와 같은 정보 구조와 조작 흐름으로 �
 - [x] Web에서 Cmd/Ctrl+\\로 좌측 파일 dock을 토글하고 상태를 저장한다.
 - [x] 좌측 dock의 shell·폭 제한 규칙·footer/profile geometry를 공통 UI로 옮긴다.
 - [x] `WorkspaceDockState`의 표시/선택 전이 API를 Desktop과 Web이 함께 사용한다.
-- [x] Files 툴바 frame과 정렬·현재 파일 표시·전체 펼침·새 노트 진입점을 Desktop/Web 양쪽에 제공한다.
+- [x] Files 툴바 frame과 정렬·현재 파일 표시·전체 펼침·새 노트 진입점을 Desktop/Web 양쪽에서 제거했다. 두 호스트의 좌측 dock은 Files 트리 하나만 두고, Search는 Desktop과 같이 메인 영역 탭으로 연다.
 - [x] Files sort menu의 선택 행과 구분선, 옵션 순서를 `app::ui`에서 공유한다.
-- [x] Files 정렬 설정을 Web `tftWeb` 상태와 Desktop `tft.fileTreeSort`에 저장·복원한다.
-- [x] Desktop 파일 트리에서 펼쳐진 폴더 경로를 `tft.fileTreeExpanded`에 저장·복원한다.
+- [x] Web Files 정렬 설정을 `tftWeb` workspace 상태에 저장·복원한다.
 - [x] 파일 트리 표시 설정과 Search 상호작용을 대조했다. Desktop의 unsupported-file 설정은 현재 공통 상수로 고정되어 있으며 Indexed `VaultData` 경로도 동일하게 숨긴다. Search의 공통 엔진, 매치 하이라이트, 결과 이동·접기·컨텍스트 메뉴 동작은 Web에 연결되어 있다.
 - [x] `.tft/app.json`의 제외 파일 규칙을 Web Search와 Graph에 적용하고, `.tft/switcher.json`의 첨부파일 표시·제외 결과 우선순위를 Web 빠른 파일 전환기에 적용한다. 빠른 전환기의 파일 종류 필터, 파일명/경로/alias 점수, 최근 파일 목록, 제외 순위와 tie-break를 `crates/app::file_switcher`에서 두 호스트가 공유한다.
 - [x] Web Search 결과에 공통 검색 엔진의 이름/본문 매치 하이라이트, 결과 수, 6종 정렬, 전체 접기/펼치기를 연결한다.
@@ -263,9 +263,9 @@ Desktop과 Web의 split divider 드래그가 동일한 `split_dimensions_at` 전
 
 파일 트리 행의 확장자 태그 표시를 `file_tree_row_tag`로 추출해 Desktop과 Web이 같은 타입 크기·색·간격을 사용한다. Desktop/Web WASM `cargo check`와 `git diff --check`가 통과했다.
 
-Files 정렬 순서를 Web은 `tftWeb` workspace 상태로, Desktop은 기존 `workspace.json`의 `tft.fileTreeSort` 확장 키로 저장하고 복원한다. Desktop 파일 트리의 펼침 상태도 `tft.fileTreeExpanded`에 보존한다. 정렬이나 폴더 펼침이 바뀌면 설정을 즉시 기록하며 기본 정렬/기본 펼침 상태면 불필요한 키를 제거하고 알 수 없는 `tft` 키를 유지한다. Desktop 및 Web WASM compile check와 `git diff --check`가 통과했다.
+Web Files 정렬 순서는 `tftWeb` workspace 상태로 저장하고 복원한다. Desktop과 Web 모두 네 개의 Files 툴바 동작과 관련 sort/expand 설정 UI를 두지 않는다. 기존 `workspace.json`에 남아 있는 `tft.fileTreeSort`와 `tft.fileTreeExpanded` 값은 알 수 없는 키로 보존하며 읽거나 적용하지 않는다.
 
-Web에만 있던 Files 툴바를 Desktop Explorer에도 추가했다. 양쪽의 툴바 geometry와 sort option row/separator를 공통 `app::ui`로 옮겼고, Desktop에서도 정렬·현재 노트로 reveal·전체 펼치기/접기·새 노트 동작이 가능하다. Desktop 정렬 및 펼친 폴더 상태를 저장/복원한다. 실제 화면 확인은 남아 있다.
+Desktop과 Web 모두 Files 툴바의 네 버튼과 sort/auto-reveal/expand-all/toolbar-new-note 동작, sort 및 expanded-folder 저장·복원을 두지 않는다. 트리 행 펼치기와 컨텍스트 메뉴, 명령 팔레트의 새 노트 기능은 유지한다. 기존 workspace JSON 키는 읽기/쓰기에서 건드리지 않는다. Web 좌측 dock의 Files/Search 탭도 제거해 Desktop과 같은 Files 단일 dock으로 맞추고, Search는 메인 영역 탭으로 연다.
 
 Web에서 `Mod+F`를 `editor:open-search` command로 dispatch해 Desktop과 같은 Editor find panel을 연다. `Mod+H`는 브라우저 History 단축키와 충돌하므로 Web에는 아직 등록하지 않았다. Web WASM compile check와 `git diff --check`가 통과했다.
 

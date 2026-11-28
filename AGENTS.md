@@ -52,6 +52,8 @@ cargo clippy --workspace --all-targets -- -D warnings   # CI와 동일: 현재 s
 
 ## Conventions
 
+- 공통 동작과 UI는 `crates/app`에 모읍니다. Desktop/Web이 같은 의미로 쓰는 상태 전이, 화면 조각, command는 공유하고,
+  host는 창·파일시스템·브라우저·Drive 같은 플랫폼 경계만 둡니다. 같은 UI나 전이를 호스트별로 복사하지 않습니다.
 - Vault 기준 경로는 `/`를 쓰고 원래 대소문자를 유지합니다. 비교는 대소문자를 무시합니다.
 - 위치는 0부터 시작하는 line/column과 byte offset을 함께 사용합니다.
 - Vault가 필요한 테스트는 `tempfile::tempdir()`에 직접 만듭니다. 개발자의 vault에 의존하지 않습니다.

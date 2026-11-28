@@ -379,7 +379,10 @@ impl Workspace {
     pub(super) fn open_in_new_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.flush_save(cx);
         self.stash_active_group();
-        let tab = self.active_group_state.copy_of_active_tab();
+        let mut tab = self.active_group_state.copy_of_active_tab();
+        if tab.mode == ViewMode::Terminal {
+            tab.view_state = Some(self.terminal.new_view_state());
+        }
         self.open_group_in_new_window(vec![tab], 0, window, cx);
     }
 

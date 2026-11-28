@@ -778,6 +778,7 @@ pub fn file_tree_row(
     id: impl Into<ElementId>,
     depth: usize,
     active: bool,
+    selected: bool,
     focused: bool,
     theme: &Theme,
 ) -> Stateful<Div> {
@@ -805,6 +806,7 @@ pub fn file_tree_row(
             t.nav_item_color
         })
         .when(active, |d| d.bg(t.nav_item_background_active))
+        .when(selected && !active, |d| d.bg(t.nav_item_background_hover))
         .hover(|s| {
             s.bg(t.nav_item_background_hover)
                 .text_color(t.nav_item_color_hover)

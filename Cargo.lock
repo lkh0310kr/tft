@@ -7079,11 +7079,13 @@ version = "0.7.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "app",
  "arboard",
  "flume 0.12.0",
  "gpui",
  "parking_lot",
  "portable-pty",
+ "regex",
 ]
 
 [[package]]

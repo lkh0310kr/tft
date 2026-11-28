@@ -15,6 +15,7 @@ TFT는 Markdown 노트를 Vault에서 직접 다루는 Rust/GPUI 기반 지식 �
 3. **파일 형식 식별자는 정확히 일치해야 합니다.** Command ID, `.tft` 파일명과 config key, `workspace.json` 노드 구조, Canvas JSON, hotkey 표기는 측정된 형식에 맞춥니다. 전체 목록은 `crates/commands/data/commands.txt`에 있습니다.
 4. **Clean room 구현입니다.** 동작은 프로브 기록과 공개 문서를 바탕으로 구현합니다. 외부 앱의 코드, CSS, 아이콘을 복사하지 않습니다.
 5. **공유 crate에서 네이티브 플랫폼 API를 사용하지 않습니다.** GPUI 앱 진입점은 `apps/desktop`과 `apps/web`에 둡니다. `crates/app`과 `crates/domain`은 window에 종속되지 않으며 플랫폼 runner 없이 테스트할 수 있어야 합니다.
+6. **공통 동작과 UI는 `crates/app`에 모읍니다.** Desktop과 Web이 같은 의미로 쓰는 상태 전이, 화면 조각, command와 사용자 동작은 `crates/app`(필요하면 `crates/domain`)에 두고, 각 host는 창·파일시스템·브라우저·Drive 같은 플랫폼 경계와 callback/event 연결만 제공합니다. 같은 UI나 전이를 호스트별로 복사하지 않으며, 새 차이가 생기면 먼저 공유 경계로 옮길 수 있는지 확인합니다.
 
 ## 2. 저장소 구조
 
@@ -104,7 +105,7 @@ Editor는 `tft-text`를 사용하는 단일 view입니다. buffer, selection, un
 - 오른쪽 아래 status bar는 없습니다(파일명, Ln/Col, property 수를 표시하지 않음).
 - Files는 폴더별 펼치기/접기와 파일 탐색을 제공합니다. New note/New folder header 버튼은 제거했습니다.
 - Settings는 하나의 스크롤 페이지를 가진 단일 창입니다. **Appearance**(기본 색상 scheme)와 **Editor**를 제공합니다. General/Hotkeys/Core plugins/Files and links 탭과 왼쪽 Settings sidebar는 제거했습니다.
-- **Terminal**은 Command Palette의 `terminal:open`으로 메인 영역 탭에 엽니다. 셸은 Vault root에서 시작하고, 탭을 닫아도 세션은 유지되며 같은 명령으로 다시 열 수 있습니다. 탭은 `workspace.json`에 empty leaf로 기록되므로 재시작 뒤에는 빈 탭으로 복원됩니다.
+- **Terminal**은 Command Palette의 `terminal:open`으로 메인 영역 탭에 엽니다. 명령을 실행할 때마다 **새 탭과 새 셸 세션**이 생기고, 탭을 닫으면 그 셸이 종료됩니다. 셸은 Vault root에서 시작합니다. 탭은 `workspace.json`에 empty leaf로 기록되므로 재시작 뒤에는 빈 탭으로 복원됩니다.
 - Notice는 잠시 표시됩니다. 상태 텍스트는 control socket에서 계속 확인할 수 있습니다.
 
 ## 7. 뷰
@@ -113,7 +114,7 @@ Editor는 `tft-text`를 사용하는 단일 view입니다. buffer, selection, un
 - **Search** — `Mod+Shift+F`로 중앙 Search 탭을 엽니다. query 문법(`path:`, `file:`, `tag:`, `line:`, `section:`, `block:`, `task:`, regex, 대소문자/설명 옵션), 강조 표시가 있는 그룹 결과, Copy search results를 지원합니다. 결과는 일반 문서 탭에서 열리고 Search 탭은 유지됩니다.
 - **Quick switcher** — `Mod+P`(macOS `Cmd+P`)로 열고, 파일/alias fuzzy 탐색. 존재하는 파일만 열며, 일치하는 파일이 없거나 "Not created yet" 대상이면 Enter를 눌러도 새 파일을 만들지 않습니다.
 - **Command palette** — `Mod+Shift+P`(macOS `Cmd+Shift+P`)로 열고, 지금 실행할 수 있는 명령을 fuzzy 탐색합니다. 빈 query는 이 세션에서 최근 실행한 명령부터 나열하며, 각 행에 hotkey를 표시합니다. Slash commands popup과 같은 command list를 사용합니다.
-- **Terminal** — alacritty_terminal grid와 portable-pty 셸. 셸의 VTE/ANSI 출력, 16/256/24-bit 색, 커서, 스크롤백(휠, `Shift+PageUp/Down`, `Shift+↑/↓`, `Shift/Cmd+Home/End`, `Cmd+↑/↓`), 마우스 선택(더블클릭 단어·트리플클릭 줄, 가장자리 드래그 자동 스크롤), 애플리케이션 마우스 리포트(SGR/X10), 복사/붙여넣기(macOS `Cmd+C`/`Cmd+V`, 그 외 `Ctrl+Shift+C`/`Ctrl+Shift+V`), IME 조합(preedit) 표시, PTY resize를 제공합니다. macOS 키는 Terminal.app/Zed를 따릅니다: `Cmd+←/→` 줄 시작/끝, `Cmd+Backspace` 줄 지우기, `Cmd+Delete` 줄 끝까지 지우기, `Option+←/→` 단어 이동, `Option+Backspace/Delete` 단어 삭제, `Option+Enter`는 ESC+CR, `Ctrl+Delete`는 `CSI 3;5~`, 그 밖의 Shift/Ctrl/Alt 수정 키는 xterm `CSI 1;<modifier>` 형식입니다. `Cmd+Alt+←/→`는 앱의 back/forward로 남기고, `Ctrl+Tab`/`Ctrl+PageUp/Down`은 앱의 탭 전환으로 남깁니다. 터미널 포커스 중에는 Reading/Graph/Editor 모드 전환이 터미널 탭을 대체하지 않습니다.
+- **Terminal** — alacritty_terminal grid와 portable-pty 셸. 셸의 VTE/ANSI 출력, 16/256/24-bit 색, 커서(block/beam/underline/hollow, blink, 커서 모양은 DECSCUSR), 스크롤백(휠, `Shift+PageUp/Down`, `Shift+↑/↓`, `Shift/Cmd+Home/End`, `Cmd+↑/↓`, 오른쪽 scrollbar drag), `Cmd+F` 검색(Editor find와 같은 floating panel: `TextInput`, Aa/.*, 이전/다음, `Shift+Enter` 이전, hit 수, 닫기; 스크롤백 검색, match highlight), Cmd+클릭 링크(OSC 8, URL, 경로; hover 시 underline·pointing hand·target tooltip, 상대 경로는 OSC 7로 받은 셸 작업 디렉터리 기준), 마우스 선택(더블클릭 단어·트리플클릭 줄, `Option+drag` block, 가장자리 드래그 자동 스크롤, `copyOnSelect`), 애플리케이션 마우스 리포트(SGR/X10), Kitty keyboard protocol(disambiguate, alternate keys, associated text, press/repeat/release, report-all, super modifier), 복사/붙여넣기(macOS `Cmd+C`/`Cmd+V`, 그 외 `Ctrl+Shift+C`/`Ctrl+Shift+V`), 이미지 클립보드는 TUI가 직접 읽도록 raw `Ctrl+V`로 전달, Finder에서 떨어뜨린 파일은 shell-quoted 경로로 입력, IME 조합(preedit) 표시, OSC 0/2 제목을 탭 제목에 반영(사용자가 `terminal:rename`으로 고정한 제목은 유지), BEL은 테두리 flash, 우클릭 context menu(Copy/Paste/Select All/Find/Clear), PTY resize와 터미널 프로토콜 질의(색/DA/DECRQM/픽셀 크기) 응답을 제공합니다. 셸은 `-l` login shell로 시작하고 `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION` 환경을 받습니다. macOS 키는 Terminal.app/Zed를 따릅니다: `Cmd+←/→` 줄 시작/끝, `Cmd+Backspace` 줄 지우기, `Cmd+Delete` 줄 끝까지 지우기, `Option+←/→` 단어 이동, `Option+Backspace/Delete` 단어 삭제, `Option+Enter`는 ESC+CR, `Ctrl+Delete`는 `CSI 3;5~`, 그 밖의 Shift/Ctrl/Alt 수정 키는 xterm `CSI 1;<modifier>` 형식입니다. `Option`을 Meta로 쓰지 않는 설정에서는 Option이 조판 문자를 입력합니다. `Cmd+Alt+←/→`는 앱의 back/forward로 남기고, `Ctrl+Tab`/`Ctrl+PageUp/Down`은 앱의 탭 전환으로 남깁니다. 입력·붙여넣기·키 입력은 스크롤을 맨 아래로 되돌립니다. 터미널 포커스 중에는 Reading/Graph/Editor 모드 전환이 터미널 탭을 대체하지 않습니다.
 - **Graph** — 전체/로컬 graph, filter, group, force, timelapse; 첨부 파일은 선택 사항.
 - **Canvas** — 이동/확대/선택/이동/크기 조절, card, note/image/PDF card, label이 있는 edge, group, 정렬, undo. `.canvas` JSON은 정해진 byte 형식으로 저장합니다.
 - **PDF** — hayro 렌더링, toolbar, sidebar thumbnail, 검색 bar, text 선택, spread, `![[x.pdf]]` embed와 `#page=` 하위 경로.
@@ -127,7 +128,7 @@ Editor는 `tft-text`를 사용하는 단일 view입니다. buffer, selection, un
 - TFT command ID가 API입니다. `hotkeys.json`의 사용자 지정 binding은 기본 binding을 덮어쓰되 원문 그대로 보존합니다. 제거된 기능의 command ID는 목록에서 제외합니다.
 - **Modifier 정책**: `hotkeys.json`과 커맨드 데이터는 Obsidian 표기(`Mod`, `Ctrl`, `Alt`, `Shift`, `Meta`)를 씁니다. `Mod`는 macOS에서 `Cmd`, Windows/Linux에서 `Ctrl`이며, 런타임 바인딩은 `crates/app/src/keymap.rs`를 통해 GPUI `secondary`로만 겁니다. 리터럴 `Ctrl`은 Obsidian이 모든 플랫폼에서 Ctrl로 쓰는 키(탭 전환 `Ctrl+Tab`/`Ctrl+PageUp`/`Ctrl+PageDown`, 제안 팝업 `Ctrl+N`/`Ctrl+P`, 입력 필드의 `Ctrl+E`/`Ctrl+U`)에만 남깁니다. 단어 이동/삭제는 macOS `Option`, 그 외 `Ctrl`; 줄 끝은 `Home`/`End`와 macOS `Cmd+←/→`; 문서 끝은 macOS `Cmd+↑/↓`, 그 외 `Ctrl+Home`/`Ctrl+End`입니다. wasm 빌드는 브라우저의 OS를 알 수 없으므로 `Mod` 키를 `Cmd` 표기로도 함께 바인딩합니다.
 - `app:open-settings`, `workspace:new-tab`, 분할/포커스/탭 명령, 파일 작업, Editor 서식 및 표 명령, 검색/빠른 전환/Graph/Canvas/PDF 명령을 유지합니다.
-- `terminal:open`은 TFT 자체 command입니다(Obsidian에 없는 기능). 기본 hotkey 없이 Command Palette와 slash popup에 나열하며, 터미널 세션은 앱이 종료될 때 자식 셸과 함께 정리됩니다.
+- `terminal:open`, `terminal:new`, `terminal:toggle`, `terminal:close`, `terminal:rename`은 TFT 자체 command입니다(Obsidian에 없는 기능). `terminal:new`는 새 탭과 새 세션을, `terminal:toggle`은 Terminal 탭을 숨기거나(`Ctrl+backtick`) 새 세션을 엽니다. `terminal:close`는 셸을 끝내고 탭을 닫고, `terminal:rename`은 프롬프트에서 탭 이름을 고정합니다(빈 이름은 셸 제목으로 복귀). Command Palette와 slash popup에 나열되며, `Ctrl+Shift+backtick`은 새 세션입니다. Terminal 포커스에서는 `Cmd+F` 검색, `Cmd+K` clear가 Workspace의 같은 단축키보다 우선합니다. 터미널 세션은 탭을 닫거나 앱이 종료되거나 vault를 바꿀 때 자식 셸과 함께 정리됩니다.
 - 탭 번호 이동(`workspace:goto-tab-*`), 표 편집(`editor:table-*`), 분할 포커스(`editor:focus-*`)는 기능과 단축키는 유지하되 커맨드 팔레트와 slash popup 목록에서는 숨깁니다(`PALETTE_HIDDEN`).
 - CLI는 Vault, Vault 내 파일, `tft://` URI를 받을 수 있습니다. Vault 하나당 창 하나를 사용하며, 두 번째 실행은 기존 프로세스에 요청을 전달합니다. `--control <socket>`은 상태, 열기, mode, key, mouse, 파일, command, 종료를 다루는 newline-delimited JSON control socket을 노출합니다. 모든 플랫폼에서 Unix domain socket을 사용합니다. 녹화도 이 인터페이스로 수행합니다.
 - `crates/control`은 wire client이며 `apps/desktop/src/control.rs`는 server입니다.

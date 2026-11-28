@@ -548,6 +548,7 @@ pub struct WebWorkspace {
     pdf_errors: HashMap<NodeId, String>,
     vault: VaultData,
     tree: FileTree,
+    tree_selection: tft_app::explorer::TreeSelection,
     tree_focus: FocusHandle,
     tree_focused_key: Option<String>,
     file_tree_context_menu: Option<FileTreeContextMenu>,
@@ -559,7 +560,6 @@ pub struct WebWorkspace {
     split_dragging: Option<(Vec<usize>, usize)>,
     model: WorkspaceModel,
     closed_tab_history: tft_app::workspace::ClosedTabHistory,
-    sort_menu_open: bool,
     vault_name: String,
     drive_controls: bool,
     pending_link: Option<(reading::LinkTarget, bool)>,
@@ -971,7 +971,7 @@ impl WebWorkspace {
                                     }
                                 }
                             }
-                            "workspace:close-others" => {
+                            "workspace:close-others" | "workspace:close-others-tab-group" => {
                                 let active_index =
                                     this.model.active().map(|group| group.active_tab);
                                 this.close_tabs_except(
@@ -979,6 +979,37 @@ impl WebWorkspace {
                                     window,
                                     cx,
                                 );
+                            }
+                            "workspace:copy-path" => {
+                                if let Some(path) = this.current_path().map(str::to_owned) {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(path));
+                                    cx.notify();
+                                }
+                            }
+                            "canvas:new-file" => {
+                                cx.emit(WebWorkspaceEvent::CreateCanvasRequested {
+                                    parent: String::new(),
+                                });
+                            }
+                            "app:switch-vault" => {
+                                cx.emit(WebWorkspaceEvent::SwitchVaultRequested);
+                            }
+                            "file-explorer:move-file" => {
+                                if let Some(path) = this.current_path().map(str::to_owned) {
+                                    cx.emit(WebWorkspaceEvent::MoveFilePromptRequested { path });
+                                }
+                            }
+                            "editor:context-menu" => {
+                                if this.can_edit_active_markdown() {
+                                    this.active_editor()
+                                        .update(cx, |editor, cx| editor.context_menu_at_caret(cx));
+                                }
+                            }
+                            "editor:focus" => this.focus_editor(window, cx),
+                            "open-with-default-app:open" | "open-with-default-app:show" => {
+                                if let Some(id) = this.active_drive_id() {
+                                    tft_drive_web::open_drive_file(&id);
+                                }
                             }
                             "workspace:undo-close-pane" => this.undo_close_tab(window, cx),
                             "workspace:toggle-pin" => {
@@ -1361,6 +1392,7 @@ impl WebWorkspace {
             pdf_errors: HashMap::new(),
             vault,
             tree,
+            tree_selection: Default::default(),
             tree_focus,
             tree_focused_key: None,
             file_tree_context_menu: None,
@@ -1377,7 +1409,6 @@ impl WebWorkspace {
             last_link_event: String::new(),
             recent_group_order,
             group_subscriptions: std::collections::HashMap::new(),
-            sort_menu_open: false,
             vault_name: "Vault".into(),
             drive_controls: false,
             _subscriptions: subscriptions,
@@ -2631,10 +2662,7 @@ impl WebWorkspace {
         self.model
             .active()
             .and_then(|group| group.active())
-            .is_some_and(|tab| {
-                tab.mode.is_editing()
-                    && self.is_markdown_node(tab.node)
-            })
+            .is_some_and(|tab| tab.mode.is_editing() && self.is_markdown_node(tab.node))
     }
 
     fn is_markdown_node(&self, node: Option<NodeId>) -> bool {
@@ -2765,8 +2793,7 @@ impl WebWorkspace {
         let candidates = self
             .model
             .layout
-            .neighbors(self.model.active_group, direction, forward)
-            ;
+            .neighbors(self.model.active_group, direction, forward);
         let group_id = self
             .recent_group_order
             .iter()
@@ -2975,11 +3002,15 @@ impl WebWorkspace {
             "editor:focus-top",
             "editor:focus-bottom",
             "workspace:close-others",
+            "workspace:close-others-tab-group",
             "workspace:undo-close-pane",
             "workspace:toggle-pin",
             "workspace:split-vertical",
             "workspace:split-horizontal",
             "workspace:close-tab-group",
+            "workspace:copy-path",
+            "canvas:new-file",
+            "app:switch-vault",
             "graph:open-local",
             "global-search:open",
             "app:go-back",
@@ -2994,6 +3025,11 @@ impl WebWorkspace {
             "editor:save-file",
             "editor:open-search",
             "editor:open-search-replace",
+            "editor:context-menu",
+            "editor:focus",
+            "file-explorer:move-file",
+            "open-with-default-app:open",
+            "open-with-default-app:show",
             "editor:toggle-bold",
             "editor:toggle-italics",
             "editor:toggle-comments",
@@ -3080,10 +3116,20 @@ impl WebWorkspace {
         let commands = AVAILABLE
             .iter()
             .filter(|id| match **id {
-                "workspace:close-others" => self
+                "workspace:close-others" | "workspace:close-others-tab-group" => self
                     .model
                     .active()
                     .is_some_and(|group| group.tabs.len() > 1),
+                "workspace:copy-path" => has_document,
+                "canvas:new-file" => true,
+                "app:switch-vault" => true,
+                "file-explorer:move-file" => has_document,
+                "editor:context-menu" => can_edit_markdown,
+                "editor:focus" => has_document,
+                "open-with-default-app:open" | "open-with-default-app:show" => active_tab
+                    .and_then(|tab| tab.node)
+                    .and_then(|node| self.vault.backend(node))
+                    .is_some_and(|backend| matches!(backend, BackendObjectId::Drive(_))),
                 "workspace:undo-close-pane" => !self.closed_tab_history.is_empty(),
                 "workspace:split-vertical" | "workspace:split-horizontal" => {
                     tft_app::workspace::workspace_can_split(self.model.groups.len())
@@ -3766,10 +3812,8 @@ impl WebWorkspace {
                                 self.split_active_group(SplitDirection::Vertical, window, cx);
                             }
                             self.pending_link_source = source;
-                            self.pending_link = Some((
-                                target,
-                                matches!(action, EditorContextAction::OpenInNewTab),
-                            ));
+                            self.pending_link =
+                                Some((target, matches!(action, EditorContextAction::OpenInNewTab)));
                             cx.notify();
                         }
                     }
@@ -3832,8 +3876,7 @@ impl WebWorkspace {
                     self.emit_workspace_state(cx);
                 }
             }
-            EditorContextAction::Cut
-            | EditorContextAction::Copy => {}
+            EditorContextAction::Cut | EditorContextAction::Copy => {}
         }
         cx.notify();
     }
@@ -3846,9 +3889,16 @@ impl WebWorkspace {
     ) -> Option<gpui::AnyElement> {
         let menu = self.editor_context_menu.clone()?;
         let viewport = window.viewport_size();
-        let mut rows: Vec<(usize, SharedString, &'static str, EditorContextAction, bool)> = Vec::new();
+        let mut rows: Vec<(usize, SharedString, &'static str, EditorContextAction, bool)> =
+            Vec::new();
         if menu.link_path.is_some() {
-            rows.push((0, "Open in new tab".into(), "file-plus", EditorContextAction::OpenInNewTab, true));
+            rows.push((
+                0,
+                "Open in new tab".into(),
+                "file-plus",
+                EditorContextAction::OpenInNewTab,
+                true,
+            ));
             rows.push((
                 0,
                 "Open to the right".into(),
@@ -3858,8 +3908,20 @@ impl WebWorkspace {
             ));
         }
         if menu.editor {
-            rows.push((1, "Add link".into(), "link", EditorContextAction::AddLink, true));
-            rows.push((1, "Add external link".into(), "external-link", EditorContextAction::AddExternalLink, true));
+            rows.push((
+                1,
+                "Add link".into(),
+                "link",
+                EditorContextAction::AddLink,
+                true,
+            ));
+            rows.push((
+                1,
+                "Add external link".into(),
+                "external-link",
+                EditorContextAction::AddExternalLink,
+                true,
+            ));
             if !menu.selection.is_empty() {
                 rows.push((
                     2,
@@ -3870,21 +3932,81 @@ impl WebWorkspace {
                 ));
             }
             rows.extend([
-                (3, "Cut".into(), "scissors", EditorContextAction::Cut, menu.selected),
-                (3, "Copy".into(), "copy", EditorContextAction::Copy, menu.selected),
-                (3, "Paste".into(), "clipboard-check", EditorContextAction::Paste, true),
-                (3, "Paste as plain text".into(), "clipboard-type", EditorContextAction::PastePlain, true),
-                (3, "Select all".into(), "square-dashed", EditorContextAction::SelectAll, true),
+                (
+                    3,
+                    "Cut".into(),
+                    "scissors",
+                    EditorContextAction::Cut,
+                    menu.selected,
+                ),
+                (
+                    3,
+                    "Copy".into(),
+                    "copy",
+                    EditorContextAction::Copy,
+                    menu.selected,
+                ),
+                (
+                    3,
+                    "Paste".into(),
+                    "clipboard-check",
+                    EditorContextAction::Paste,
+                    true,
+                ),
+                (
+                    3,
+                    "Paste as plain text".into(),
+                    "clipboard-type",
+                    EditorContextAction::PastePlain,
+                    true,
+                ),
+                (
+                    3,
+                    "Select all".into(),
+                    "square-dashed",
+                    EditorContextAction::SelectAll,
+                    true,
+                ),
             ]);
         }
         if menu.link_path.is_some() {
-            rows.push((4, "Copy path".into(), "clipboard", EditorContextAction::CopyPath, true));
-            rows.push((5, "Rename...".into(), "pen-line", EditorContextAction::RenameFile, true));
-            rows.push((5, "Move file to...".into(), "folder-tree", EditorContextAction::MoveFile, true));
+            rows.push((
+                4,
+                "Copy path".into(),
+                "clipboard",
+                EditorContextAction::CopyPath,
+                true,
+            ));
+            rows.push((
+                5,
+                "Rename...".into(),
+                "pen-line",
+                EditorContextAction::RenameFile,
+                true,
+            ));
+            rows.push((
+                5,
+                "Move file to...".into(),
+                "folder-tree",
+                EditorContextAction::MoveFile,
+                true,
+            ));
             if menu.drive_id.is_some() {
-                rows.push((6, "Open in Google Drive".into(), "external-link", EditorContextAction::OpenInDrive, true));
+                rows.push((
+                    6,
+                    "Open in Google Drive".into(),
+                    "external-link",
+                    EditorContextAction::OpenInDrive,
+                    true,
+                ));
             }
-            rows.push((7, "Reveal in navigation".into(), "folder-open", EditorContextAction::RevealInNavigation, true));
+            rows.push((
+                7,
+                "Reveal in navigation".into(),
+                "folder-open",
+                EditorContextAction::RevealInNavigation,
+                true,
+            ));
         }
         let mut children: Vec<gpui::AnyElement> = Vec::new();
         let mut previous_section = None;
@@ -3912,17 +4034,21 @@ impl WebWorkspace {
         }
         let weak = cx.entity().downgrade();
         let mut menu_view = tft_app::ui::menu("web-editor-context-menu", theme)
-                .absolute()
-                .left(menu.position.x.min((viewport.width - px(230.)).max(px(0.))))
-                .top(menu.position.y.min((viewport.height - px(300.)).max(px(0.))))
-                .children(children)
-                .on_mouse_down_out(move |_, _, cx| {
-                    weak.update(cx, |this, cx| {
-                        this.editor_context_menu = None;
-                        cx.notify();
-                    })
-                    .ok();
-                });
+            .absolute()
+            .left(menu.position.x.min((viewport.width - px(230.)).max(px(0.))))
+            .top(
+                menu.position
+                    .y
+                    .min((viewport.height - px(300.)).max(px(0.))),
+            )
+            .children(children)
+            .on_mouse_down_out(move |_, _, cx| {
+                weak.update(cx, |this, cx| {
+                    this.editor_context_menu = None;
+                    cx.notify();
+                })
+                .ok();
+            });
         let weak = cx.entity().downgrade();
         menu_view = menu_view.capture_key_down(move |event, _, app| {
             if event.keystroke.key == "escape" {
@@ -4269,6 +4395,7 @@ impl WebWorkspace {
                     Some(index) == selected
                         && selected_match.is_none_or(|(hit_index, _)| hit_index != index),
                     false,
+                    false,
                     theme,
                 )
                 .h_auto()
@@ -4486,10 +4613,7 @@ impl WebWorkspace {
                 .active()
                 .and_then(|group| group.tabs.iter().position(|tab| tab.node == Some(node)));
             if let Some(index) = existing {
-                let active_index = self
-                    .model
-                    .active()
-                    .map(|group| group.active_tab);
+                let active_index = self.model.active().map(|group| group.active_tab);
                 if active_index != Some(index) {
                     self.activate_tab(index, window, cx);
                 } else if self
@@ -6231,9 +6355,7 @@ impl WebWorkspace {
                 (tab.0 == ViewMode::Graph)
                     .then(|| self.graph_previous_modes.get(&group_id))
                     .flatten()
-                    .filter(|(node, previous_path, _)| {
-                        *node == tab.3 && previous_path == &tab.2
-                    })
+                    .filter(|(node, previous_path, _)| *node == tab.3 && previous_path == &tab.2)
                     .map(|(_, _, mode)| *mode)
             });
             let mode = ViewMode::markdown_document_mode(
@@ -6551,7 +6673,9 @@ impl WebWorkspace {
 
     fn stash_group_view_state(&mut self, group_id: u64, cx: &App) {
         let Some((node, path, mode)) = self.model.group(group_id).and_then(|group| {
-            group.active().map(|tab| (tab.node, tab.path.clone(), tab.mode))
+            group
+                .active()
+                .map(|tab| (tab.node, tab.path.clone(), tab.mode))
         }) else {
             return;
         };
@@ -6698,7 +6822,10 @@ impl WebWorkspace {
         }
         if let Some(tab) = closed {
             let restorable = tab.path.is_some()
-                || matches!(tab.mode, ViewMode::Graph | ViewMode::Search | ViewMode::Terminal);
+                || matches!(
+                    tab.mode,
+                    ViewMode::Graph | ViewMode::Search | ViewMode::Terminal
+                );
             self.closed_tab_history.remember(index, tab, restorable);
         }
         if let Some(tab) = self.model.active().and_then(|group| group.active()) {
@@ -6801,7 +6928,10 @@ impl WebWorkspace {
             .unwrap_or_default();
         for (index, tab) in closed.into_iter().rev() {
             let restorable = tab.path.is_some()
-                || matches!(tab.mode, ViewMode::Graph | ViewMode::Search | ViewMode::Terminal);
+                || matches!(
+                    tab.mode,
+                    ViewMode::Graph | ViewMode::Search | ViewMode::Terminal
+                );
             self.closed_tab_history.remember(index, tab, restorable);
         }
         for index in remove.into_iter().rev() {
@@ -7208,7 +7338,8 @@ impl WebWorkspace {
         let active_index = group.active_tab;
         let active_tab = group.active();
         let mode = active_tab.map_or(ViewMode::default_editing(), |tab| tab.mode);
-        let active_document_is_markdown = self.is_markdown_node(active_tab.and_then(|tab| tab.node));
+        let active_document_is_markdown =
+            self.is_markdown_node(active_tab.and_then(|tab| tab.node));
         let title = tft_app::workspace::workspace_leaf_title(
             active_tab.and_then(|tab| tab.path.as_deref()),
             mode,
@@ -7522,43 +7653,43 @@ impl WebWorkspace {
                     .when(
                         tft_app::workspace::workspace_can_split(self.model.groups.len()),
                         |tools| {
-                        tools
-                            .child(
-                                tft_app::ui::icon_button_with_id(
-                                    SharedString::from(format!("pane-split-right-{group_id}")),
-                                    SharedString::from(format!("pane-split-right-{group_id}")),
-                                    "separator-vertical",
-                                    theme,
+                            tools
+                                .child(
+                                    tft_app::ui::icon_button_with_id(
+                                        SharedString::from(format!("pane-split-right-{group_id}")),
+                                        SharedString::from(format!("pane-split-right-{group_id}")),
+                                        "separator-vertical",
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.activate_group(group_id, cx);
+                                            this.split_active_group(
+                                                SplitDirection::Vertical,
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    )),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.activate_group(group_id, cx);
-                                        this.split_active_group(
-                                            SplitDirection::Vertical,
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            )
-                            .child(
-                                tft_app::ui::icon_button_with_id(
-                                    SharedString::from(format!("pane-split-down-{group_id}")),
-                                    SharedString::from(format!("pane-split-down-{group_id}")),
-                                    "separator-horizontal",
-                                    theme,
+                                .child(
+                                    tft_app::ui::icon_button_with_id(
+                                        SharedString::from(format!("pane-split-down-{group_id}")),
+                                        SharedString::from(format!("pane-split-down-{group_id}")),
+                                        "separator-horizontal",
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.activate_group(group_id, cx);
+                                            this.split_active_group(
+                                                SplitDirection::Horizontal,
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    )),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, _, window, cx| {
-                                        this.activate_group(group_id, cx);
-                                        this.split_active_group(
-                                            SplitDirection::Horizontal,
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                )),
-                            )
                         },
                     )
                     .when(self.model.groups.len() > 1, |tools| {
@@ -7599,22 +7730,27 @@ impl WebWorkspace {
                             )
                         },
                     )
-                    .when(self.drive_controls && active_document_is_markdown, |tools| {
-                        tools.child(
-                            tft_app::ui::header_button_with_id(
-                                SharedString::from(format!("pane-save-{group_id}")),
-                                SharedString::from(format!("pane-save-{group_id}")),
-                                "check",
-                                "Save to Drive",
-                                false,
-                                theme,
+                    .when(
+                        self.drive_controls && active_document_is_markdown,
+                        |tools| {
+                            tools.child(
+                                tft_app::ui::header_button_with_id(
+                                    SharedString::from(format!("pane-save-{group_id}")),
+                                    SharedString::from(format!("pane-save-{group_id}")),
+                                    "check",
+                                    "Save to Drive",
+                                    false,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.activate_group(group_id, cx);
+                                        cx.emit(WebWorkspaceEvent::SaveRequested);
+                                    },
+                                )),
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_group(group_id, cx);
-                                cx.emit(WebWorkspaceEvent::SaveRequested);
-                            })),
-                        )
-                    }),
+                        },
+                    ),
                 theme,
             ))
             .into_any_element()
@@ -7712,54 +7848,44 @@ impl WebWorkspace {
                             {
                                 let actions = vec![
                                     tft_app::ui::workspace_empty_action(
-                                                    format!("web-empty-new-note-{group_id}"),
-                                                    "New note",
-                                                    Some(SharedString::from(format!(
-                                                        "{mod_key} + N"
-                                                    ))),
-                                                    theme,
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.activate_group(id, cx);
-                                                    cx.emit(
-                                                        WebWorkspaceEvent::FileOperationRequested(
-                                                            FileOperationRequest::CreateNote {
-                                                                parent: String::new(),
-                                                            },
-                                                        ),
-                                                    );
-                                                }))
-                                                .into_any_element(),
+                                        format!("web-empty-new-note-{group_id}"),
+                                        "New note",
+                                        Some(SharedString::from(format!("{mod_key} + N"))),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.activate_group(id, cx);
+                                        cx.emit(WebWorkspaceEvent::FileOperationRequested(
+                                            FileOperationRequest::CreateNote {
+                                                parent: String::new(),
+                                            },
+                                        ));
+                                    }))
+                                    .into_any_element(),
                                     tft_app::ui::workspace_empty_action(
-                                                    format!("web-empty-new-canvas-{group_id}"),
-                                                    "New canvas",
-                                                    None,
-                                                    theme,
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.activate_group(id, cx);
-                                                    cx.emit(
-                                                        WebWorkspaceEvent::CreateCanvasRequested {
-                                                            parent: String::new(),
-                                                        },
-                                                    );
-                                                }))
-                                                .into_any_element(),
+                                        format!("web-empty-new-canvas-{group_id}"),
+                                        "New canvas",
+                                        None,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.activate_group(id, cx);
+                                        cx.emit(WebWorkspaceEvent::CreateCanvasRequested {
+                                            parent: String::new(),
+                                        });
+                                    }))
+                                    .into_any_element(),
                                     tft_app::ui::workspace_empty_action(
-                                                    format!("web-empty-go-to-file-{group_id}"),
-                                                    "Go to file",
-                                                    Some(SharedString::from(format!(
-                                                        "{mod_key} + P"
-                                                    ))),
-                                                    theme,
-                                                )
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.activate_group(id, cx);
-                                                        this.open_quick_switcher(window, cx);
-                                                    },
-                                                ))
-                                                .into_any_element(),
+                                        format!("web-empty-go-to-file-{group_id}"),
+                                        "Go to file",
+                                        Some(SharedString::from(format!("{mod_key} + P"))),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.activate_group(id, cx);
+                                        this.open_quick_switcher(window, cx);
+                                    }))
+                                    .into_any_element(),
                                 ];
                                 tft_app::ui::workspace_empty_tab(theme)
                                     .child(tft_app::ui::workspace_empty_action_list(actions))
@@ -8448,18 +8574,21 @@ impl WebWorkspace {
 
     pub fn move_destination_suggestions(&self, path: &str) -> Option<Vec<String>> {
         let node = self.vault.lookup(path).ok()?;
-        if !matches!(self.vault.node(node).map(|node| &node.kind), Some(NodeKind::File(_))) {
+        if !matches!(
+            self.vault.node(node).map(|node| &node.kind),
+            Some(NodeKind::File(_))
+        ) {
             return None;
         }
-        let parent = path.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+        let parent = path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or("");
         let own_prefix = format!("{path}/");
         let mut suggestions = vec!["/".to_owned()];
-        suggestions.extend(
-            self.vault
-                .folders()
-                .into_iter()
-                .filter(|folder| folder != path && !folder.starts_with(&own_prefix) && folder != parent),
-        );
+        suggestions.extend(self.vault.folders().into_iter().filter(|folder| {
+            folder != path && !folder.starts_with(&own_prefix) && folder != parent
+        }));
         if parent.is_empty() {
             suggestions.remove(0);
         }
@@ -8571,14 +8700,21 @@ impl WebWorkspace {
                 continue;
             };
             self.vault.set_text(rewritten_node, rewrite.text.clone());
-            changed.push((rewritten_node, rewrite.old_path.clone(), rewrite.text.clone()));
+            changed.push((
+                rewritten_node,
+                rewrite.old_path.clone(),
+                rewrite.text.clone(),
+            ));
         }
         for (changed_node, changed_path, contents) in &changed {
             self.upsert_search_document(*changed_node, changed_path.clone(), contents.clone());
         }
 
         let active_group = self.model.active_group;
-        let changed_nodes = changed.iter().map(|(node, _, _)| *node).collect::<HashSet<_>>();
+        let changed_nodes = changed
+            .iter()
+            .map(|(node, _, _)| *node)
+            .collect::<HashSet<_>>();
         let groups = self
             .model
             .groups
@@ -8646,11 +8782,13 @@ impl WebWorkspace {
             .lookup(from)
             .map_err(|_| format!("The file is no longer in the Vault: {from}"))?;
         let parent = if let Some(destination) = destination {
-            let parent = self
-                .vault
-                .lookup(destination)
-                .map_err(|_| format!("The destination folder is no longer in the Vault: {destination}"))?;
-            if !matches!(self.vault.node(parent).map(|node| &node.kind), Some(NodeKind::Folder)) {
+            let parent = self.vault.lookup(destination).map_err(|_| {
+                format!("The destination folder is no longer in the Vault: {destination}")
+            })?;
+            if !matches!(
+                self.vault.node(parent).map(|node| &node.kind),
+                Some(NodeKind::Folder)
+            ) {
                 return Err(format!("Not a destination folder: {destination}"));
             }
             parent
@@ -8738,6 +8876,7 @@ impl WebWorkspace {
         }
         let mut tree = FileTree::from_vault_sorted(&self.vault, self.tree.sort());
         tree.preserve_view_from(&self.tree);
+        self.tree_selection.retain_in(&tree);
         self.tree = tree;
         self.tree.reveal(to);
         self.recent_files = self
@@ -8837,6 +8976,7 @@ impl WebWorkspace {
         self.vault.set_text(node, contents);
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
+        self.tree_selection.retain_in(&tree);
         self.tree = tree;
         let path = self
             .vault
@@ -8911,6 +9051,7 @@ impl WebWorkspace {
         }
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
+        self.tree_selection.retain_in(&tree);
         self.tree = tree;
         self.schedule_graph_rebuild(cx, false);
         self.emit_workspace_state(cx);
@@ -8993,6 +9134,7 @@ impl WebWorkspace {
         self.pdf_errors.remove(&node);
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
+        self.tree_selection.retain_in(&tree);
         self.tree = tree;
         for group_id in &groups {
             self.sync_group_document(*group_id, cx);
@@ -9027,6 +9169,7 @@ impl WebWorkspace {
         let mut tree = FileTree::from_vault(&self.vault);
         tree.preserve_view_from(&self.tree);
         tree.reveal(&path);
+        self.tree_selection.retain_in(&tree);
         self.tree = tree;
         self.tree_focused_key = self
             .tree
@@ -9043,6 +9186,16 @@ impl WebWorkspace {
             .active()
             .and_then(|group| group.active())
             .and_then(|tab| tab.path.as_deref())
+    }
+
+    /// The Drive object id behind the active tab, for the actions that hand
+    /// the document to Google Drive (open in Drive, open with the default app).
+    fn active_drive_id(&self) -> Option<String> {
+        let node = self.model.active()?.active()?.node?;
+        match self.vault.backend(node)? {
+            BackendObjectId::Drive(id) => Some(id.clone()),
+            BackendObjectId::Local(_) => None,
+        }
     }
 
     fn emit_workspace_state(&self, cx: &mut Context<Self>) {
@@ -9472,6 +9625,12 @@ impl WebWorkspace {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key == "escape" && !self.tree_selection.is_empty() {
+            self.tree_selection.clear();
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         if self.tree.is_empty() {
             if matches!(event.keystroke.key.as_str(), "escape" | "tab") {
                 self.focus_editor(window, cx);
@@ -9491,13 +9650,20 @@ impl WebWorkspace {
         let key = event.keystroke.key.as_str();
         let mut handled = true;
         match key {
-            "down" | "up" => {
+            "down" | "up" | "shift-down" | "shift-up" => {
+                let down = key.ends_with("down");
+                let extend = key.starts_with("shift-");
                 if let Some(next) = self.tree.focus_vertical_key(
                     self.tree_focused_key.as_deref(),
                     self.current_path(),
-                    key == "down",
+                    down,
                 ) {
-                    self.tree_focused_key = Some(next);
+                    self.tree_focused_key = Some(next.clone());
+                    if extend {
+                        if let Some(index) = self.tree.visible_index(&next) {
+                            self.tree_selection.click(&self.tree, index, false, true);
+                        }
+                    }
                     cx.notify();
                 }
             }
@@ -9607,11 +9773,6 @@ impl WebWorkspace {
             );
             let _ =
                 js_sys::Reflect::set(&state, &JsValue::from_str("visiblePaths"), &visible_paths);
-            let _ = js_sys::Reflect::set(
-                &state,
-                &JsValue::from_str("sortMenuOpen"),
-                &JsValue::from_bool(self.sort_menu_open),
-            );
             let _ =
                 js_sys::Reflect::set(&state, &JsValue::from_str("searchResults"), &search_results);
             let _ = js_sys::Reflect::set(
@@ -9920,6 +10081,11 @@ impl Render for WebWorkspace {
         }) {
             self.close_canvas_card_editor(window, cx);
         }
+        // Desktop has one Files pane in the left dock; Search is a main-area
+        // tab, not a dock tab. Keeping the dock on Files is the shell parity.
+        if self.model.dock.tab != LeftTab::Files {
+            self.model.dock.select(LeftTab::Files);
+        }
         let active_tab = self.model.active().and_then(|group| group.active());
         let active_node = active_tab.and_then(|tab| tab.node);
         let active_index = self.model.active().map_or(0, |group| group.active_tab);
@@ -9941,6 +10107,7 @@ impl Render for WebWorkspace {
                     row.depth,
                     row.is_folder,
                     row.node.is_some() && row.node == active_node,
+                    self.tree_selection.contains(&row.path),
                     self.tree_focused_key.as_deref() == Some(row.key.as_str()),
                     self.tree.is_collapsed_key(&row.key),
                 )
@@ -9966,9 +10133,9 @@ impl Render for WebWorkspace {
                 )
             })
             .collect::<Vec<_>>();
-        let search_tab = self.model.dock.tab == LeftTab::Search;
         let active_mode = active_tab.map_or(ViewMode::default_editing(), |tab| tab.mode);
-        let active_document_is_markdown = self.is_markdown_node(active_tab.and_then(|tab| tab.node));
+        let active_document_is_markdown =
+            self.is_markdown_node(active_tab.and_then(|tab| tab.node));
         let radial_tree_active = self.radial_tree_active.contains(&active_group_id);
         let main_content = self.render_layout_content(
             &self.model.layout.clone(),
@@ -10007,18 +10174,7 @@ impl Render for WebWorkspace {
             &theme,
         );
         let preview_workspace = cx.entity().downgrade();
-        let files_content = if search_tab {
-            tft_app::ui::workspace_search_view(
-                "web-dock-search-view",
-                self.search_input.clone(),
-                self.render_search_controls(&theme, cx),
-                self.render_search_results("web-dock-search-results", None, &theme, cx),
-                &theme,
-            )
-            .capture_action(cx.listener(Self::capture_search_left))
-            .capture_action(cx.listener(Self::capture_search_right))
-            .into_any_element()
-        } else {
+        let files_content = {
             div()
                 .id("web-files-scroll")
                 .key_context("WebExplorer")
@@ -10044,7 +10200,19 @@ impl Render for WebWorkspace {
                     }),
                 )
                 .children(rows.into_iter().map(
-                    |(node, key, path, name, tag, depth, folder, active, focused, collapsed)| {
+                    |(
+                        node,
+                        key,
+                        path,
+                        name,
+                        tag,
+                        depth,
+                        folder,
+                        active,
+                        selected,
+                        focused,
+                        collapsed,
+                    )| {
                         let row_path = path.clone();
                         let menu_key = key.clone();
                         let menu_path = path.clone();
@@ -10056,12 +10224,25 @@ impl Render for WebWorkspace {
                                 SharedString::from(format!("file-{key}")),
                                 depth,
                                 active,
+                                selected,
                                 focused,
                                 &theme,
                             )
                             .on_click(cx.listener(
                                 move |this, event: &gpui::ClickEvent, window, cx| {
                                     this.file_tree_context_menu = None;
+                                    let modifiers = event.modifiers();
+                                    if let Some(ix) = this.tree.visible_index(&row_path) {
+                                        let range = modifiers.shift;
+                                        let additive = modifiers.control || modifiers.platform;
+                                        this.tree_selection.click(&this.tree, ix, additive, range);
+                                        if additive || range {
+                                            this.tree_focused_key = Some(key.clone());
+                                            window.focus(&this.tree_focus, cx);
+                                            cx.notify();
+                                            return;
+                                        }
+                                    }
                                     this.tree_focused_key = Some(key.clone());
                                     if folder {
                                         window.focus(&this.tree_focus, cx);
@@ -10069,7 +10250,6 @@ impl Render for WebWorkspace {
                                         cx.notify();
                                         this.emit_workspace_state(cx);
                                     } else if let Some(node) = node {
-                                        let modifiers = event.modifiers();
                                         this.open(
                                             node,
                                             row_path.clone(),
@@ -10085,7 +10265,12 @@ impl Render for WebWorkspace {
                                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
                                     window.focus(&this.tree_focus, cx);
-                                    this.sort_menu_open = false;
+                                    if !this.tree_selection.contains(&menu_path) {
+                                        if let Some(index) = this.tree.visible_index(&menu_path) {
+                                            this.tree_selection
+                                                .click(&this.tree, index, false, false);
+                                        }
+                                    }
                                     this.file_tree_context_menu = Some(FileTreeContextMenu {
                                         position: event.position,
                                         node: menu_node,
@@ -10118,46 +10303,17 @@ impl Render for WebWorkspace {
                         )
                     },
                 ))
+                .child(div().flex_1().w_full().min_h(px(0.)).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.tree_selection.clear();
+                        cx.notify();
+                    }),
+                ))
                 .into_any_element()
         };
 
-        let files_tab = self.model.dock.tab == LeftTab::Files;
-        let search_tab = self.model.dock.tab == LeftTab::Search;
         let drive_controls = self.drive_controls;
-        let sort_order = self.tree.sort();
-        let any_expanded = self.tree.any_expanded();
-        let sort_menu = self.sort_menu_open.then(|| {
-            let mut menu = tft_app::ui::menu("web-sort-menu", &theme)
-                .absolute()
-                .top(px(76.))
-                .left(px(40.))
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.sort_menu_open = false;
-                    cx.notify();
-                }));
-            for (index, order) in SortOrder::ALL.into_iter().enumerate() {
-                if index > 0 && index % 2 == 0 {
-                    menu = menu.child(tft_app::ui::file_tree_sort_separator(&theme));
-                }
-                menu = menu.child(
-                    tft_app::ui::file_tree_sort_item(
-                        "web-sort-option",
-                        index,
-                        order,
-                        sort_order,
-                        &theme,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tree.set_sort(order);
-                        this.sort_menu_open = false;
-                        cx.notify();
-                        this.publish_test_state();
-                        this.emit_workspace_state(cx);
-                    })),
-                );
-            }
-            menu.into_any_element()
-        });
         let file_tree_context_menu = self.file_tree_context_menu.clone().map(|target| {
             let viewport = window.bounds().size;
             let parent = if target.is_folder {
@@ -10216,11 +10372,11 @@ impl Render for WebWorkspace {
                     | tft_app::file_tree_menu::FileTreeMenuAction::RevealInSystemExplorer => true,
                     tft_app::file_tree_menu::FileTreeMenuAction::OpenInNewTab => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::Duplicate => is_file,
+                    tft_app::file_tree_menu::FileTreeMenuAction::Move => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::Delete => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::Rename => is_file,
                     tft_app::file_tree_menu::FileTreeMenuAction::OpenToRight => {
-                        is_file
-                            && tft_app::workspace::workspace_can_split(self.model.groups.len())
+                        is_file && tft_app::workspace::workspace_can_split(self.model.groups.len())
                     }
                     tft_app::file_tree_menu::FileTreeMenuAction::OpenInDefaultApp => {
                         is_file && drive_id.is_some()
@@ -10373,6 +10529,15 @@ impl Render for WebWorkspace {
                             item.on_click(cx.listener(move |this, _, _, cx| {
                                 this.file_tree_context_menu = None;
                                 cx.emit(WebWorkspaceEvent::DuplicateFileRequested {
+                                    path: path.clone(),
+                                });
+                            }))
+                        }
+                        tft_app::file_tree_menu::FileTreeMenuAction::Move => {
+                            let path = target.path.clone();
+                            item.on_click(cx.listener(move |this, _, _, cx| {
+                                this.file_tree_context_menu = None;
+                                cx.emit(WebWorkspaceEvent::MoveFilePromptRequested {
                                     path: path.clone(),
                                 });
                             }))
@@ -10927,8 +11092,7 @@ impl Render for WebWorkspace {
             Some(menu.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
         });
 
-        let editor_context_menu =
-            self.render_editor_context_menu(&theme, window, cx);
+        let editor_context_menu = self.render_editor_context_menu(&theme, window, cx);
 
         let preview_overlays =
             self.file_previews
@@ -11036,25 +11200,6 @@ impl Render for WebWorkspace {
         let dock_header = tft_app::ui::workspace_dock_header(&theme)
             .gap(px(3.))
             .px_2()
-            .child(
-                tft_app::ui::dock_tab("web-dock-files", "folder-closed", files_tab, &theme)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.dock.select(LeftTab::Files);
-                        cx.notify();
-                        this.publish_test_state();
-                        this.emit_workspace_state(cx);
-                    })),
-            )
-            .child(
-                tft_app::ui::dock_tab("web-dock-search", "search", search_tab, &theme).on_click(
-                    cx.listener(|this, _, _, cx| {
-                        this.model.dock.select(LeftTab::Search);
-                        cx.notify();
-                        this.publish_test_state();
-                        this.emit_workspace_state(cx);
-                    }),
-                ),
-            )
             .child(div().flex_1())
             .child(
                 tft_app::ui::icon_button("web-sidebar-toggle", "panel-left", &theme)
@@ -11063,79 +11208,7 @@ impl Render for WebWorkspace {
                         this.set_left_dock_visible(false, cx);
                     })),
             );
-        let dock_toolbar = tft_app::ui::file_tree_toolbar(&theme)
-            .child(
-                tft_app::ui::header_button(
-                    "web-explorer-sort",
-                    "arrow-up-narrow-wide",
-                    "Change sort order",
-                    self.sort_menu_open,
-                    &theme,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.sort_menu_open = !this.sort_menu_open;
-                    cx.notify();
-                    this.publish_test_state();
-                    this.emit_workspace_state(cx);
-                })),
-            )
-            .child(
-                tft_app::ui::header_button(
-                    "web-explorer-reveal",
-                    "gallery-vertical",
-                    "Auto-reveal current file",
-                    false,
-                    &theme,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(path) = this.current_path().map(str::to_owned) {
-                        this.tree.reveal(&path);
-                        this.model.dock.select(LeftTab::Files);
-                        this.emit_workspace_state(cx);
-                    }
-                    cx.notify();
-                    this.publish_test_state();
-                })),
-            )
-            .child(
-                tft_app::ui::header_button(
-                    "web-explorer-expand",
-                    "chevrons-up-down",
-                    if any_expanded {
-                        "Collapse all"
-                    } else {
-                        "Expand all"
-                    },
-                    false,
-                    &theme,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if this.tree.any_expanded() {
-                        this.tree.collapse_all();
-                    } else {
-                        this.tree.expand_all();
-                    }
-                    cx.notify();
-                    this.publish_test_state();
-                    this.emit_workspace_state(cx);
-                })),
-            )
-            .child(
-                tft_app::ui::header_button("web-new-note", "plus", "New note", false, &theme)
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        cx.emit(WebWorkspaceEvent::FileOperationRequested(
-                            FileOperationRequest::CreateNote {
-                                parent: String::new(),
-                            },
-                        ))
-                    })),
-            );
-        let dock_panel = div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .when(!search_tab, |panel| panel.child(dock_toolbar))
-            .child(files_content);
+        let dock_panel = div().flex().flex_col().size_full().child(files_content);
         let dock_footer = tft_app::ui::workspace_dock_footer(&theme).child(
             tft_app::ui::workspace_dock_profile_button(
                 "web-vault-switcher",
@@ -11183,13 +11256,44 @@ impl Render for WebWorkspace {
                             }
                         }
                     }
-                    "workspace:close-others" => {
+                    "workspace:close-others" | "workspace:close-others-tab-group" => {
                         let active_index = this.model.active().map(|group| group.active_tab);
                         this.close_tabs_except(
                             |index, tab| Some(index) == active_index || tab.pinned,
                             window,
                             cx,
                         );
+                    }
+                    "workspace:copy-path" => {
+                        if let Some(path) = this.current_path().map(str::to_owned) {
+                            cx.write_to_clipboard(ClipboardItem::new_string(path));
+                            cx.notify();
+                        }
+                    }
+                    "canvas:new-file" => {
+                        cx.emit(WebWorkspaceEvent::CreateCanvasRequested {
+                            parent: String::new(),
+                        });
+                    }
+                    "app:switch-vault" => {
+                        cx.emit(WebWorkspaceEvent::SwitchVaultRequested);
+                    }
+                    "file-explorer:move-file" => {
+                        if let Some(path) = this.current_path().map(str::to_owned) {
+                            cx.emit(WebWorkspaceEvent::MoveFilePromptRequested { path });
+                        }
+                    }
+                    "editor:context-menu" => {
+                        if this.can_edit_active_markdown() {
+                            this.active_editor()
+                                .update(cx, |editor, cx| editor.context_menu_at_caret(cx));
+                        }
+                    }
+                    "editor:focus" => this.focus_editor(window, cx),
+                    "open-with-default-app:open" | "open-with-default-app:show" => {
+                        if let Some(id) = this.active_drive_id() {
+                            tft_drive_web::open_drive_file(&id);
+                        }
                     }
                     "workspace:toggle-pin" => {
                         let index = this.model.active().map(|group| group.active_tab);
@@ -11651,75 +11755,21 @@ impl Render for WebWorkspace {
                                                 )
                                         })
                                         .when(
-                                            tft_app::workspace::workspace_can_split(
-                                                self.model.groups.len(),
+                                            tft_app::workspace::workspace_header_shows_mode_switch(
+                                                active_tab.and_then(|tab| tab.path.as_deref()),
+                                                active_tab.map_or(ViewMode::default_editing(), |tab| tab.mode),
                                             ),
                                             |tools| {
-                                            tools
-                                                .child(
+                                                tools.child(
                                                     tft_app::ui::icon_button(
-                                                        "web-split-right",
-                                                        "separator-vertical",
-                                                        &theme,
+                                                        "web-mode", mode_icon, &theme,
                                                     )
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            this.split_active_group(
-                                                                SplitDirection::Vertical,
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    )),
-                                                )
-                                                .child(
-                                                    tft_app::ui::icon_button(
-                                                        "web-split-down",
-                                                        "separator-horizontal",
-                                                        &theme,
-                                                    )
-                                                    .on_click(cx.listener(
-                                                        |this, _, window, cx| {
-                                                            this.split_active_group(
-                                                                SplitDirection::Horizontal,
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    )),
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.toggle_view(window, cx)
+                                                    })),
                                                 )
                                             },
                                         )
-                                        .when(self.model.groups.len() > 1, |tools| {
-                                            tools.child(
-                                                tft_app::ui::icon_button(
-                                                    "web-close-pane",
-                                                    "x",
-                                                    &theme,
-                                                )
-                                                .on_click(cx.listener(
-                                                    |this, _, window, cx| {
-                                                        this.close_active_group(window, cx);
-                                                    },
-                                                )),
-                                    )
-                                        })
-                                    .when(
-                                        tft_app::workspace::workspace_header_shows_mode_switch(
-                                            active_tab.and_then(|tab| tab.path.as_deref()),
-                                            active_tab.map_or(ViewMode::default_editing(), |tab| tab.mode),
-                                        ),
-                                            |tools| {
-                                                tools.child(
-                                                tft_app::ui::icon_button(
-                                                    "web-mode", mode_icon, &theme,
-                                                )
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.toggle_view(window, cx)
-                                                })),
-                                            )
-                                        },
-                                    )
                                         .when(drive_controls && active_document_is_markdown, |tools| {
                                             tools.child(
                                             tft_app::ui::header_button(
@@ -11742,7 +11792,6 @@ impl Render for WebWorkspace {
                             .child(div().flex_1().min_h_0().child(main_content)),
                     ),
             )
-            .children(sort_menu)
             .children(file_tree_context_menu)
             .children(tab_context_menu)
             .children(editor_context_menu)

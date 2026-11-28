@@ -133,6 +133,9 @@ impl Workspace {
         for id in ids {
             self.close_group(id, false, cx);
         }
+        // Terminal tabs in a group that was already gone must not leave a
+        // shell running for a vault that is no longer open.
+        self.terminal.close_all();
         self.windows.clear();
         self.closed_tab_history.clear();
         self.active_group_state.detached = None;

@@ -86,6 +86,26 @@
 use alacritty_terminal::term::TermMode;
 use gpui::Keystroke;
 
+/// What the platform did to the key: pressed it, held it down (auto-repeat),
+/// or let it go. Kitty's progressive keyboard protocol reports all three when
+/// the application asked for event types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyEventKind {
+    Press,
+    Repeat,
+    Release,
+}
+
+impl KeyEventKind {
+    fn kitty_code(self) -> u8 {
+        match self {
+            KeyEventKind::Press => 1,
+            KeyEventKind::Repeat => 2,
+            KeyEventKind::Release => 3,
+        }
+    }
+}
+
 /// Convert a GPUI keystroke to terminal escape sequence bytes.
 ///
 /// This function translates GPUI keyboard events into the appropriate byte sequences
@@ -114,10 +134,30 @@ use gpui::Keystroke;
 /// assert_eq!(bytes, Some(b"\r".to_vec()));
 /// ```
 pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
+    keystroke_to_bytes_for_event(keystroke, mode, KeyEventKind::Press)
+}
+
+/// [`keystroke_to_bytes`] that also says whether the key was pressed,
+/// repeated, or released. Only the kitty protocol distinguishes them; a
+/// release in a legacy application produces nothing.
+pub fn keystroke_to_bytes_for_event(
+    keystroke: &Keystroke,
+    mode: TermMode,
+    kind: KeyEventKind,
+) -> Option<Vec<u8>> {
     if keystroke.modifiers.control
         && !keystroke.modifiers.alt
         && matches!(keystroke.key.as_str(), "tab" | "pageup" | "pagedown")
     {
+        return None;
+    }
+    if let Some(bytes) = kitty_key(keystroke, mode, kind) {
+        // An empty vector means the protocol consumed the event without
+        // producing a report (a release without event types, or printable
+        // text that takes the input handler's commit).
+        return Some(bytes);
+    }
+    if kind == KeyEventKind::Release {
         return None;
     }
     if let Some(bytes) = modified_key(keystroke, mode) {
@@ -136,7 +176,8 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
             if keystroke.modifiers.control {
                 return Some(b"\x00".to_vec()); // Ctrl+Space = NUL
             }
-            return Some(b" ".to_vec());
+            // Plain space is text and reaches the shell through the input
+            // handler, as every other printable character does.
         }
         "enter" => return Some(b"\r".to_vec()),
         "escape" => return Some(b"\x1b".to_vec()),
@@ -254,43 +295,142 @@ pub fn keystroke_to_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u
         }
     }
 
-    // Handle regular printable characters
-    // Use key_char if available (contains the actual typed character with modifiers like Shift)
-    if let Some(key_char) = &keystroke.key_char
-        && !keystroke.modifiers.control
-        && !keystroke.modifiers.alt
-    {
-        // On macOS a non-ASCII character here came from an input method
-        // (a composing jamo or a committed syllable). The IME commits text
-        // through `EntityInputHandler`; typing it here as well would put a
-        // stray jamo before the composed character.
-        if cfg!(target_os = "macos") && !key_char.is_ascii() {
-            return None;
-        }
-        return Some(key_char.as_bytes().to_vec());
-    }
-
-    // Fallback to key for single characters
-    let key = keystroke.key.as_str();
-    if key.len() == 1 {
-        let ch = key.chars().next().unwrap();
-        if ch.is_ascii() && !keystroke.modifiers.control {
-            // Handle shift modifier for uppercase
-            let ch = if keystroke.modifiers.shift {
-                ch.to_ascii_uppercase()
-            } else {
-                ch
-            };
-            return Some(vec![ch as u8]);
-        }
-        // For non-ASCII characters, encode as UTF-8
-        if !keystroke.modifiers.control && !keystroke.modifiers.alt {
-            return Some(key.as_bytes().to_vec());
-        }
-    }
-
+    // Printable text — letters, digits, punctuation, space, and IME
+    // commits — reaches the shell through `EntityInputHandler`. gpui sends
+    // input-context text there after keybindings; sending it here as well
+    // would duplicate it, and a composing jamo would arrive before the
+    // syllable the input method commits.
     // If we get here, the keystroke doesn't produce any output
     None
+}
+
+/// Kitty keyboard protocol (and its disambiguate mode): the application
+/// opted into unambiguous key reports, so Escape/Enter/Tab/modified keys are
+/// sent as `CSI codepoint ; modifier u` instead of their legacy bytes.
+///
+/// The optional progressive flags are honoured too: alternative keys
+/// (`codepoint:shifted`), associated text (`;text`), all keys as escape
+/// sequences, and press/repeat/release event types.
+fn kitty_key(keystroke: &Keystroke, mode: TermMode, kind: KeyEventKind) -> Option<Vec<u8>> {
+    if !mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+        return None;
+    }
+    let report_events = mode.contains(TermMode::REPORT_EVENT_TYPES);
+    // Without event types a release is not part of the protocol: consume it
+    // rather than letting the legacy table type a second character.
+    if kind == KeyEventKind::Release && !report_events {
+        return Some(Vec::new());
+    }
+    let m = &keystroke.modifiers;
+    let key = keystroke.key.as_str();
+    let codepoint = match key {
+        "escape" => 27,
+        "enter" => 13,
+        "tab" => 9,
+        "backspace" => 127,
+        "space" => 32,
+        "up" => 57352,
+        "down" => 57353,
+        "left" => 57354,
+        "right" => 57355,
+        "home" => 57356,
+        "end" => 57357,
+        "pageup" => 57358,
+        "pagedown" => 57359,
+        "insert" => 57360,
+        "delete" => 57361,
+        "f1" => 57364,
+        "f2" => 57365,
+        "f3" => 57366,
+        "f4" => 57367,
+        "f5" => 57368,
+        "f6" => 57369,
+        "f7" => 57370,
+        "f8" => 57371,
+        "f9" => 57372,
+        "f10" => 57373,
+        "f11" => 57374,
+        "f12" => 57375,
+        other if other.chars().count() == 1 => other.chars().next()? as u32,
+        _ => return None,
+    };
+    let printable = key.chars().count() == 1 || key == "space";
+    // A shifted letter normally reaches the shell through the input
+    // handler as text; with alternate-key reporting the key itself becomes
+    // a protocol report instead.
+    let shift_report = m.shift && mode.contains(TermMode::REPORT_ALTERNATE_KEYS);
+    let plain_text = printable && !m.control && !m.alt && !m.platform && !shift_report;
+    if plain_text && !mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+        // Plain printable text still goes through the input handler's
+        // commit, unless the application asked for every key as an escape
+        // sequence. Modified printables are protocol reports.
+        return None;
+    }
+    let modifiers = 1
+        + u32::from(m.shift)
+        + (u32::from(m.alt) << 1)
+        + (u32::from(m.control) << 2)
+        + (u32::from(m.platform) << 3);
+    // Alternate key: the shifted codepoint, reported after a colon. Kitty
+    // defines it only for keys whose shifted form is a different character.
+    let alternate = mode
+        .contains(TermMode::REPORT_ALTERNATE_KEYS)
+        .then(|| shifted_codepoint(keystroke, codepoint))
+        .flatten();
+    let key_field = match alternate {
+        Some(shifted) => format!("{codepoint}:{shifted}"),
+        None => codepoint.to_string(),
+    };
+    let event = if report_events {
+        format!(":{}", kind.kitty_code())
+    } else {
+        String::new()
+    };
+    // Associated text: the codepoints the key produced, colon-separated.
+    let associated = mode
+        .contains(TermMode::REPORT_ASSOCIATED_TEXT)
+        .then(|| associated_text(keystroke, printable))
+        .flatten();
+    let seq = if modifiers == 1 && event.is_empty() && associated.is_none() {
+        format!("\x1b[{key_field}u")
+    } else if let Some(text) = associated {
+        format!("\x1b[{key_field};{modifiers}{event};{text}u")
+    } else {
+        format!("\x1b[{key_field};{modifiers}{event}u")
+    };
+    Some(seq.into_bytes())
+}
+
+/// The shifted key's codepoint for `REPORT_ALTERNATE_KEYS`, when it differs
+/// from the unshifted one.
+fn shifted_codepoint(keystroke: &Keystroke, codepoint: u32) -> Option<u32> {
+    if !keystroke.modifiers.shift {
+        return None;
+    }
+    let shifted = keystroke
+        .key_char
+        .as_deref()
+        .filter(|text| text.chars().count() == 1)
+        .map(|text| text.chars().next().unwrap() as u32)?;
+    (shifted != codepoint).then_some(shifted)
+}
+
+/// The text a key produced, for `REPORT_ASSOCIATED_TEXT`: one codepoint per
+/// colon-separated field, as kitty defines it.
+fn associated_text(keystroke: &Keystroke, printable: bool) -> Option<String> {
+    if !printable {
+        return None;
+    }
+    let text = keystroke
+        .key_char
+        .as_deref()
+        .filter(|text| !text.is_empty())?;
+    Some(
+        text.chars()
+            .map(|c| (c as u32).to_string())
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 /// Keys a terminal sends that the plain table does not cover: Cmd's
@@ -518,14 +658,14 @@ mod tests {
     fn test_regular_characters() {
         let mode = TermMode::empty();
 
-        let a = Keystroke::parse("a").unwrap();
-        assert_eq!(keystroke_to_bytes(&a, mode), Some(b"a".to_vec()));
-
-        let z = Keystroke::parse("z").unwrap();
-        assert_eq!(keystroke_to_bytes(&z, mode), Some(b"z".to_vec()));
-
-        let zero = Keystroke::parse("0").unwrap();
-        assert_eq!(keystroke_to_bytes(&zero, mode), Some(b"0".to_vec()));
+        // Printable text is committed by the input handler, not the key table.
+        for key in ["a", "z", "0", "space"] {
+            assert_eq!(
+                keystroke_to_bytes(&Keystroke::parse(key).unwrap(), mode),
+                None,
+                "{key}"
+            );
+        }
     }
 
     #[test]
@@ -533,7 +673,7 @@ mod tests {
         let mode = TermMode::empty();
 
         let space = Keystroke::parse("space").unwrap();
-        assert_eq!(keystroke_to_bytes(&space, mode), Some(b" ".to_vec()));
+        assert_eq!(keystroke_to_bytes(&space, mode), None);
     }
 
     #[test]
@@ -599,9 +739,91 @@ mod tests {
             key_char: Some("g".into()),
             ..Keystroke::default()
         };
+        assert_eq!(keystroke_to_bytes(&ascii, TermMode::empty()), None);
+    }
+
+    #[test]
+    fn kitty_keyboard_protocol_is_used_when_enabled() {
+        let mode = TermMode::DISAMBIGUATE_ESC_CODES;
+        let bytes = |keys: &str| keystroke_to_bytes(&Keystroke::parse(keys).unwrap(), mode);
+        assert_eq!(bytes("enter"), Some(b"\x1b[13u".to_vec()));
+        assert_eq!(bytes("shift-enter"), Some(b"\x1b[13;2u".to_vec()));
+        assert_eq!(bytes("ctrl-enter"), Some(b"\x1b[13;5u".to_vec()));
+        assert_eq!(bytes("escape"), Some(b"\x1b[27u".to_vec()));
+        assert_eq!(bytes("ctrl-a"), Some(b"\x1b[97;5u".to_vec()));
+        assert_eq!(bytes("shift-up"), Some(b"\x1b[57352;2u".to_vec()));
+        // Plain printable text still takes the input-handler commit path.
+        assert_eq!(bytes("a"), None);
+
+        let reporting = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES;
         assert_eq!(
-            keystroke_to_bytes(&ascii, TermMode::empty()),
-            Some(b"g".to_vec())
+            keystroke_to_bytes(&Keystroke::parse("enter").unwrap(), reporting),
+            Some(b"\x1b[13;1:1u".to_vec())
+        );
+    }
+
+    #[test]
+    fn kitty_progressive_flags_report_alternate_keys_text_and_events() {
+        let mut keystroke = Keystroke::parse("shift-a").unwrap();
+        keystroke.key_char = Some("A".into());
+
+        let alternate = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+        assert_eq!(
+            keystroke_to_bytes(&keystroke, alternate),
+            Some(b"\x1b[97:65;2u".to_vec())
+        );
+
+        let text = TermMode::DISAMBIGUATE_ESC_CODES
+            | TermMode::REPORT_ALL_KEYS_AS_ESC
+            | TermMode::REPORT_ASSOCIATED_TEXT;
+        let mut plain_a = Keystroke::parse("a").unwrap();
+        plain_a.key_char = Some("a".into());
+        assert_eq!(
+            keystroke_to_bytes(&plain_a, text),
+            Some(b"\x1b[97;1;97u".to_vec())
+        );
+
+        let events = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_EVENT_TYPES;
+        assert_eq!(
+            keystroke_to_bytes_for_event(
+                &Keystroke::parse("enter").unwrap(),
+                events,
+                KeyEventKind::Repeat
+            ),
+            Some(b"\x1b[13;1:2u".to_vec())
+        );
+        assert_eq!(
+            keystroke_to_bytes_for_event(
+                &Keystroke::parse("enter").unwrap(),
+                events,
+                KeyEventKind::Release
+            ),
+            Some(b"\x1b[13;1:3u".to_vec())
+        );
+        // A release in a legacy terminal types nothing at all.
+        assert_eq!(
+            keystroke_to_bytes_for_event(
+                &Keystroke::parse("enter").unwrap(),
+                TermMode::empty(),
+                KeyEventKind::Release
+            ),
+            None
+        );
+
+        // Report-all sends plain text as escape sequences instead of
+        // leaving it to the input handler.
+        let all = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALL_KEYS_AS_ESC;
+        let mut letter = Keystroke::parse("a").unwrap();
+        letter.key_char = Some("a".into());
+        assert_eq!(keystroke_to_bytes(&letter, all), Some(b"\x1b[97u".to_vec()));
+    }
+
+    #[test]
+    fn the_shifted_special_key_reports_its_modifier() {
+        let mode = TermMode::DISAMBIGUATE_ESC_CODES;
+        assert_eq!(
+            keystroke_to_bytes(&Keystroke::parse("shift-tab").unwrap(), mode),
+            Some(b"\x1b[9;2u".to_vec())
         );
     }
 }

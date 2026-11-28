@@ -62,6 +62,8 @@ pub(super) enum PendingOp {
         path: String,
         line: u32,
     },
+    /// `terminal:rename`: the tab's own name, instead of the shell's title.
+    RenameTerminal,
 }
 
 /// The prompt view and the file operation its response continues.
@@ -605,6 +607,11 @@ impl Workspace {
                 }
             }
             PendingOp::UpdateLinks { from, to } => self.finish_rename(&from, &to, true, window, cx),
+            PendingOp::RenameTerminal => {
+                self.rename_terminal_to(value, cx);
+                self.prompt.pending = None;
+                self.close_modal(window, cx);
+            }
         }
     }
 

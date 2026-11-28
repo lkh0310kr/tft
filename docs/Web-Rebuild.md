@@ -50,8 +50,10 @@ GPUI Web은 별도 `apps/web` 진입점에서 동작한다. Desktop crate depend
 - Files pane의 새 노트 버튼은 GPUI Workspace 이벤트를 Drive host로 넘겨 root 폴더에 Markdown을 생성하고, 반환된 Drive ID로 공유 `VaultData`, FileTree, 검색 인덱스를 갱신해 새 문서를 연다. Mocked Drive 통합에서 생성 요청과 `# 제목` 원문을 검증했다. 현재 생성 위치는 Vault root다.
 - Files pane은 Desktop과 같은 `tft_search` query matcher/snippet builder 및 `tft_search::inputs` metadata 추출을 사용한다. Markdown 본문/경로, tag, frontmatter property, section/task scopes를 검색하고 결과를 탭으로 연다. 검색 직전 현재 Editor buffer를 Vault와 metadata index에 반영한다. ArrowUp/Down으로 결과를 선택하고 Enter로 여는 동작도 TextInput 이벤트를 통해 연결했다. Playwright에서 tag 검색, 다른 노트 검색, 편집 직후 본문 검색과 결과 키보드 탐색을 검증했다.
 - Chrome/Playwright에서 공유 셸 렌더링, FileTree 선택 후 탭 열기, 탭 전환 중 각 편집 버퍼 보존과 편집 원문의 `VaultData` 반영을 확인했다. Editor 입력 회귀도 계속 통과한다.
+- Web 좌측 dock은 Desktop과 같은 Files 단일 트리이고, Search는 메인 영역 탭으로 연다. Files 툴바와 dock 탭, 문서 헤더의 분할 아이콘은 제거해 Desktop shell과 정보 구조를 맞췄다. Drive 저장 버튼은 Web host 고유의 저장 경계로만 남긴다.
 - 기존 Google Drive 브라우저 어댑터를 `crates/drive-web`으로 분리해 GPUI Web과 기존 셸이 공유한다. 일반 GPUI Web 빌드는 설정 입력, 로그인, 폴더 선택, Drive `VaultData` 구성과 Markdown 원문 로드를 거쳐 공통 Workspace를 연다. 활성 노트를 저장하는 `Save to Drive` 동작도 연결했다.
 - Drive Workspace는 Cmd+S/macOS와 Ctrl+S/Windows·Linux에서 현재 Editor 원문을 저장한다. Mocked Drive 브라우저 회귀는 단축키와 `Save to Drive` 버튼의 PATCH 본문을 각각 확인한다.
+- Google 로그인 토큰은 브라우저 저장소에 만료 시각과 함께 보관하고, reload 때 GIS 로드보다 먼저 복원한다. 유효한 토큰이 있으면 GIS가 늦게 로드되거나 실패해도 마지막 Vault를 다시 열며, 만료 시에는 GIS의 silent(`prompt: none`) 갱신을 시도한다. GIS token client는 refresh token을 노출하지 않으므로, Google 세션도 만료된 뒤의 완전한 재로그인 없는 복원은 서버 측 token broker 없이는 보장하지 않는다.
 - Production Editor의 수정 이벤트를 Drive host로 전달해 Desktop과 같은 2초 debounce 자동 저장을 한다. Drive ETag와 per-note 저장 대기열을 사용해 저장 요청을 직렬화하고, Vault 교체 뒤 이전 요청 결과를 무시한다. Mocked Drive 브라우저 회귀에서 원문 PATCH를 확인했다.
 - 저장되지 않은 문서가 남아 있으면 `Switch Vault`는 저장을 즉시 시작하고 성공할 때까지 Workspace를 유지한다. Mock Drive 흐름에서 debounce 전에 전환을 눌러도 최신 Markdown PATCH 후에만 Vault를 닫는 것을 확인했다.
 - Chrome에서 GPUI Drive 시작 화면, 입력 컴포넌트 동작, OAuth/Picker 설정의 browser storage 저장 및 reload 유지, 콘솔 오류가 없음을 확인했다. OAuth 실제 승인, Picker 응답, Drive 파일 읽기/쓰기 왕복은 유효한 Google Cloud 설정과 실제 Vault가 없어 아직 검증하지 않았다.

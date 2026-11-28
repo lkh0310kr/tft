@@ -245,6 +245,71 @@ pub struct FileTree {
     visible: Vec<usize>,
 }
 
+/// Transient path-based selection for a Files tree. The anchor is the row
+/// where a range began; ranges use the currently visible row order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TreeSelection {
+    paths: HashSet<String>,
+    anchor: Option<String>,
+}
+
+impl TreeSelection {
+    pub fn contains(&self, path: &str) -> bool {
+        self.paths.contains(path)
+    }
+    pub fn paths(&self) -> impl Iterator<Item = &String> {
+        self.paths.iter()
+    }
+    pub fn clear(&mut self) {
+        self.paths.clear();
+        self.anchor = None;
+    }
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Select, toggle, or extend to a visible row. `additive` is Cmd/Ctrl;
+    /// when combined with Shift it extends the current range additively.
+    pub fn click(&mut self, tree: &FileTree, index: usize, additive: bool, range: bool) {
+        let Some(row) = tree.row(index) else { return };
+        let path = row.path.clone();
+        if range {
+            let anchor_path = self.anchor.clone().unwrap_or_else(|| path.clone());
+            let anchor = tree.visible_index(&anchor_path).unwrap_or(index);
+            self.anchor = Some(anchor_path);
+            if !additive {
+                self.paths.clear();
+            }
+            for i in anchor.min(index)..=anchor.max(index) {
+                if let Some(row) = tree.row(i) {
+                    self.paths.insert(row.path.clone());
+                }
+            }
+        } else if additive {
+            if !self.paths.remove(&path) {
+                self.paths.insert(path.clone());
+            }
+            self.anchor = Some(path);
+        } else {
+            self.paths.clear();
+            self.paths.insert(path.clone());
+            self.anchor = Some(path);
+        }
+    }
+
+    /// Remove paths absent from a rebuilt tree while preserving valid picks.
+    pub fn retain_in(&mut self, tree: &FileTree) {
+        self.paths.retain(|p| tree.all.iter().any(|r| r.path == *p));
+        if self
+            .anchor
+            .as_ref()
+            .is_some_and(|p| !tree.all.iter().any(|r| r.path == *p))
+        {
+            self.anchor = None;
+        }
+    }
+}
+
 impl FileTree {
     /// Builds the tree. Files of unknown kind are hidden unless
     /// `show_unsupported` (Obsidian's "Detect all file extensions");

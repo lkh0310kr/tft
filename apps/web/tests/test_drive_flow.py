@@ -15,8 +15,9 @@ URL = "http://127.0.0.1:8092/"
 SOURCE = "# TFT workspace\n\nThis is a local sample vault for comparing the **Desktop** and **Web** application shells.\n\n- [ ] Shared editor\n- [x] GPUI Web canvas\n\n[[Architecture]] #tft\n"
 
 GSI_SHIM = r"""
+window.__tokenRequests = 0;
 window.google = {
-  accounts: { oauth2: { initTokenClient: ({callback}) => ({requestAccessToken: () => callback({access_token: 'mock-token'})}) } },
+  accounts: { oauth2: { initTokenClient: ({callback}) => ({requestAccessToken: () => { window.__tokenRequests += 1; callback({access_token: 'mock-token', expires_in: 3600}); }}) } },
   picker: {
     ViewId: { FOLDERS: 'folders' },
     Action: { PICKED: 'picked', CANCEL: 'cancel' },
@@ -127,6 +128,17 @@ def main():
                     f"calls={calls!r}; screenshot=/tmp/tft-drive-flow-failure.png"
                 ) from error
             page.wait_for_timeout(250)
+            # A stored access token must survive a reload: the app reopens the
+            # last Vault without asking GIS for another token.
+            page.reload(wait_until="domcontentloaded")
+            page.locator("canvas").wait_for(timeout=30000)
+            page.wait_for_function(
+                "window.__tftDriveAppState?.signedIn === true && window.__tftDriveAppState?.activePath === 'Welcome.md'",
+                timeout=15000,
+            )
+            if page.evaluate("window.__tokenRequests") != 0:
+                raise AssertionError("Reload requested a new Google token instead of restoring the stored one")
+            print("PASS stored Google token reopens the last Vault after reload")
             page.set_viewport_size({"width": 1400, "height": 900})
             page.wait_for_timeout(300)
             page.screenshot(path="/tmp/tft-drive-vault.png")
@@ -173,8 +185,13 @@ def main():
                 raise AssertionError(f"Save button did not send the current Markdown source: {calls!r}")
             print("PASS Save to Drive button persists the latest Markdown source")
 
-            page.once("dialog", lambda dialog: dialog.accept("Created"))
-            page.mouse.click(195, 60)
+            # New note lives on the command/Mod+N path now that the Files
+            # toolbar is gone; the in-app prompt asks for the name.
+            page.keyboard.press("Meta+N")
+            page.wait_for_timeout(180)
+            page.keyboard.press("Meta+A")
+            page.keyboard.type("Created")
+            page.keyboard.press("Enter")
             try:
                 page.wait_for_function("window.__tftDriveAppState?.activePath === 'Created.md'", timeout=12000)
             except Exception as error:

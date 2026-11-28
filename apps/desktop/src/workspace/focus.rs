@@ -64,6 +64,9 @@ impl Workspace {
             .unwrap_or_else(|| self.graph.focus_handle(cx));
         let unpainted =
             |view: MainView, handle: &FocusHandle| painted != view && handle.is_focused(window);
+        if painted != MainView::Terminal && self.terminal.any_focus(window, cx) {
+            return true;
+        }
         if unpainted(
             MainView::Editor,
             self.active_editor().read(cx).focus_handle_ref(),
@@ -199,7 +202,7 @@ impl Workspace {
                 "canvas-editor"
             }
             "terminal" => {
-                if let Some(session) = self.terminal.session.as_ref() {
+                if let Some(session) = self.active_terminal_session() {
                     session.write(text, window, cx);
                 }
                 "terminal"

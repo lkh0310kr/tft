@@ -262,7 +262,7 @@ impl Workspace {
         }
         self.active_group_state.mode = tab.mode;
         if tab.mode == ViewMode::Terminal {
-            self.ensure_terminal(cx);
+            self.ensure_terminal_for_active(cx);
         }
         if tab.mode.is_editing() {
             self.active_editor().update(cx, |e, cx| {
@@ -401,6 +401,9 @@ impl Workspace {
         ) else {
             return;
         };
+        if tab.mode == ViewMode::Terminal {
+            self.close_terminal_tabs(std::iter::once(&tab));
+        }
         self.remember_closed(ix, tab);
         if self.active_group_state.tabs.is_empty() {
             // A group whose last tab closes goes with it, unless it is the main area's
@@ -501,6 +504,7 @@ impl Workspace {
                 closed.push((i, tab));
             }
         }
+        self.close_terminal_tabs(closed.iter().map(|(_, tab)| tab));
         for (index, tab) in closed.into_iter().rev() {
             self.remember_closed(index, tab);
         }
@@ -679,7 +683,7 @@ impl Workspace {
         self.flush_save(cx);
         self.stash_active_group();
         let from = self.active_group_id();
-        let (tab, mode_before_graph) = match path {
+        let (mut tab, mode_before_graph) = match path {
             None => (
                 self.active_group_state.copy_of_active_tab(),
                 self.active_group_state.mode_before_graph,
@@ -690,6 +694,9 @@ impl Workspace {
                 (tab, mode)
             }
         };
+        if tab.mode == ViewMode::Terminal {
+            tab.view_state = Some(self.terminal.new_view_state());
+        }
         let id = self.new_group(tab.mode, window, cx);
         self.place_beside(from, id, direction, true);
         let Some(ix) = self.group_ix(id) else {
@@ -788,6 +795,7 @@ impl Workspace {
             self.flush_save(cx);
             self.active_group_state.stash_active_tab();
             let tabs = std::mem::take(&mut self.active_group_state.tabs);
+            self.close_terminal_tabs(tabs.iter());
             if remember {
                 for (i, tab) in tabs.into_iter().enumerate().rev() {
                     self.remember_closed(i, tab);
@@ -808,9 +816,10 @@ impl Workspace {
             self.flush_save(cx);
             self.stash_active_group();
         }
+        let group_tabs = self.groups[ix].state.tabs.clone();
+        self.close_terminal_tabs(group_tabs.iter());
         if remember {
-            let tabs = self.groups[ix].state.tabs.clone();
-            for (i, tab) in tabs.into_iter().enumerate().rev() {
+            for (i, tab) in group_tabs.into_iter().enumerate().rev() {
                 self.remember_closed(i, tab);
             }
         }

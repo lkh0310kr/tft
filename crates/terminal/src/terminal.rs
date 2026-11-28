@@ -161,7 +161,10 @@ impl TerminalState {
     pub fn new(cols: usize, rows: usize, event_proxy: GpuiEventProxy) -> Self {
         // Create a default configuration
         // The Config struct controls various terminal behaviors like scrolling history
-        let config = Config::default();
+        let config = Config {
+            kitty_keyboard: true,
+            ..Config::default()
+        };
 
         // Create dimensions for terminal initialization
         let dimensions = TermDimensions::new(cols, rows);
@@ -403,6 +406,27 @@ mod tests {
             // We can't easily test the exact content without more complex grid inspection
             assert!(grid.columns() == 80);
         });
+    }
+
+    #[test]
+    fn kitty_push_flags_reach_the_keyboard_mode() {
+        let (tx, _rx) = channel();
+        let event_proxy = GpuiEventProxy::new(tx);
+        let mut terminal = TerminalState::new(80, 24, event_proxy);
+
+        terminal.process_bytes(b"\x1b[>1u");
+        assert!(
+            terminal
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::DISAMBIGUATE_ESC_CODES)
+        );
+
+        terminal.process_bytes(b"\x1b[>0u");
+        assert!(
+            !terminal
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::DISAMBIGUATE_ESC_CODES)
+        );
     }
 
     #[test]

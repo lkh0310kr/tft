@@ -496,8 +496,11 @@ impl Workspace {
                 .text_color(theme.tokens.text_muted)
                 .child("Search is open in another pane")
                 .into_any_element(),
-            MainView::Terminal if self.terminal_group() == Some(view.id) => self
-                .terminal_view()
+            MainView::Terminal => view
+                .tabs
+                .get(view.active_tab)
+                .and_then(super::terminal::terminal_id)
+                .and_then(|id| self.terminal.view(id))
                 .map(|view| view.into_any_element())
                 .unwrap_or_else(|| {
                     div()
@@ -509,14 +512,6 @@ impl Workspace {
                         .child("The terminal is not running")
                         .into_any_element()
                 }),
-            MainView::Terminal => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(theme.tokens.text_muted)
-                .child("The terminal is open in another pane")
-                .into_any_element(),
             MainView::Canvas => view.canvas.clone().into_any_element(),
             MainView::Pdf => view.pdf.clone().into_any_element(),
             MainView::Graph if self.graph_group() == Some(view.id) => {

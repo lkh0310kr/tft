@@ -136,3 +136,7 @@ graph:open-local	Graph view: Open local graph
 canvas:new-file	Canvas: Create new canvas
 canvas:export-as-image	Canvas: Export as image
 terminal:open	Terminal: Open terminal
+terminal:new	Terminal: New terminal
+terminal:toggle	Terminal: Toggle terminal
+terminal:close	Terminal: Close terminal
+terminal:rename	Terminal: Rename terminal

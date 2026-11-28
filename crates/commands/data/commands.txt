@@ -153,3 +153,7 @@ editor:table-col-copy
 
 # TFT's own command: an embedded shell pane (not an Obsidian command).
 terminal:open
+terminal:new
+terminal:toggle
+terminal:close
+terminal:rename

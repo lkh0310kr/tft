@@ -412,6 +412,7 @@ impl Workspace {
                 Some(PendingOp::RenameHeading { path, line }) => {
                     json!({"op": "rename-heading", "path": path, "line": line})
                 }
+                Some(PendingOp::RenameTerminal) => json!({"op": "rename-terminal"}),
             },
         );
         Value::Object(modal)

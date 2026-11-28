@@ -43,14 +43,16 @@
 //!
 //! [`EventListener`]: alacritty_terminal::event::EventListener
 
-use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::vte::ansi::Rgb;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
 /// Events emitted by the terminal that the GPUI application cares about.
 ///
 /// This enum represents a subset of alacritty's events that are relevant
 /// for the GPUI terminal emulator implementation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum TerminalEvent {
     /// The terminal has new content to display and needs a redraw.
     Wakeup,
@@ -69,6 +71,37 @@ pub enum TerminalEvent {
 
     /// The terminal process has exited.
     Exit,
+
+    /// A response the terminal engine wants written back to the PTY
+    /// (device attributes, mode reports, cursor position, ...).
+    PtyWrite(String),
+
+    /// An application asked for a palette colour (OSC 10/11 etc.); the
+    /// formatter turns the colour into the reply string.
+    ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
+
+    /// An application asked for the text area size in pixels.
+    TextAreaSizeRequest(Arc<dyn Fn(WindowSize) -> String + Send + Sync>),
+}
+
+impl std::fmt::Debug for TerminalEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TerminalEvent::Wakeup => f.write_str("Wakeup"),
+            TerminalEvent::Bell => f.write_str("Bell"),
+            TerminalEvent::Title(title) => f.debug_tuple("Title").field(title).finish(),
+            TerminalEvent::ClipboardStore(text) => {
+                f.debug_tuple("ClipboardStore").field(text).finish()
+            }
+            TerminalEvent::ClipboardLoad => f.write_str("ClipboardLoad"),
+            TerminalEvent::Exit => f.write_str("Exit"),
+            TerminalEvent::PtyWrite(text) => f.debug_tuple("PtyWrite").field(text).finish(),
+            TerminalEvent::ColorRequest(index, _) => {
+                f.debug_tuple("ColorRequest").field(index).finish()
+            }
+            TerminalEvent::TextAreaSizeRequest(_) => f.write_str("TextAreaSizeRequest"),
+        }
+    }
 }
 
 /// An event proxy that implements alacritty's EventListener trait.
@@ -144,14 +177,14 @@ impl EventListener for GpuiEventProxy {
             }
             // Ignore events we don't care about
             Event::MouseCursorDirty => {}
-            Event::PtyWrite(ref _data) => {
-                // This is handled internally by alacritty
+            Event::PtyWrite(data) => {
+                self.send(TerminalEvent::PtyWrite(data));
             }
-            Event::ColorRequest(ref _index, ref _format) => {
-                // Color requests are not commonly used
+            Event::ColorRequest(index, format) => {
+                self.send(TerminalEvent::ColorRequest(index, format));
             }
-            Event::TextAreaSizeRequest(ref _format) => {
-                // Text area size requests are handled internally
+            Event::TextAreaSizeRequest(format) => {
+                self.send(TerminalEvent::TextAreaSizeRequest(format));
             }
             Event::CursorBlinkingChange => {
                 // Cursor blinking changes could be handled if needed
@@ -298,5 +331,47 @@ mod tests {
 
         // Sending should not panic even though the channel is disconnected
         proxy.send_event(Event::Wakeup);
+    }
+
+    #[test]
+    fn protocol_replies_are_forwarded() {
+        let (tx, rx) = channel();
+        let proxy = GpuiEventProxy::new(tx);
+
+        proxy.send_event(Event::PtyWrite("\x1b[?1;2c".into()));
+        match rx.recv().unwrap() {
+            TerminalEvent::PtyWrite(text) => assert_eq!(text, "\x1b[?1;2c"),
+            other => panic!("{other:?}"),
+        }
+
+        proxy.send_event(Event::ColorRequest(
+            256,
+            Arc::new(|c| format!("{:02x}{:02x}{:02x}", c.r, c.g, c.b)),
+        ));
+        match rx.recv().unwrap() {
+            TerminalEvent::ColorRequest(index, format) => {
+                assert_eq!(index, 256);
+                assert_eq!(format(Rgb { r: 1, g: 2, b: 3 }), "010203");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        proxy.send_event(Event::TextAreaSizeRequest(Arc::new(|size| {
+            format!("{}x{}", size.num_cols, size.num_lines)
+        })));
+        match rx.recv().unwrap() {
+            TerminalEvent::TextAreaSizeRequest(format) => {
+                assert_eq!(
+                    format(WindowSize {
+                        num_lines: 24,
+                        num_cols: 80,
+                        cell_width: 9,
+                        cell_height: 18,
+                    }),
+                    "80x24"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

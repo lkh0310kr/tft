@@ -27,6 +27,7 @@ pub struct TerminalSession {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     exited: Arc<AtomicBool>,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl TerminalSession {
@@ -39,6 +40,7 @@ impl TerminalSession {
     ) -> Result<TerminalSession> {
         let shell = shell
             .map(str::to_string)
+            .or_else(|| config.shell.clone())
             .or_else(|| std::env::var("SHELL").ok())
             .or_else(|| std::env::var("COMSPEC").ok())
             .unwrap_or_else(|| {
@@ -59,12 +61,23 @@ impl TerminalSession {
             .context("could not open a PTY")?;
 
         let mut command = CommandBuilder::new(&shell);
+        // A login shell reads the profile a desktop session would; an
+        // interactive one still reads zshrc/bashrc after it.
+        if config.login_shell && cfg!(unix) {
+            command.arg("-l");
+        }
         if cwd.is_dir() {
             command.cwd(cwd);
+        } else if let Ok(current) = std::env::current_dir() {
+            command.cwd(current);
         }
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("TERM_PROGRAM", "tft");
+        command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+        for (key, value) in &config.env {
+            command.env(key, value);
+        }
         let child = pair
             .slave
             .spawn_command(command)
@@ -84,6 +97,8 @@ impl TerminalSession {
         let master_for_resize = master.clone();
         let exited = Arc::new(AtomicBool::new(false));
         let exit_flag = exited.clone();
+        let title = Arc::new(Mutex::new(None));
+        let title_slot = title.clone();
         let view = cx.new(|cx| {
             TerminalView::new(writer, reader, config, cx)
                 .with_resize_callback(move |cols, rows| {
@@ -93,6 +108,13 @@ impl TerminalSession {
                         pixel_width: 0,
                         pixel_height: 0,
                     });
+                })
+                .with_title_callback(move |_, _, title| {
+                    *title_slot.lock() = if title.is_empty() {
+                        None
+                    } else {
+                        Some(title.to_string())
+                    };
                 })
                 .with_exit_callback(move |_, _| {
                     exit_flag.store(true, Ordering::SeqCst);
@@ -104,6 +126,7 @@ impl TerminalSession {
             master,
             child,
             exited,
+            title,
         })
     }
 
@@ -114,6 +137,11 @@ impl TerminalSession {
     /// The shell process has ended; its output stays in the grid.
     pub fn has_exited(&self) -> bool {
         self.exited.load(Ordering::SeqCst)
+    }
+
+    /// The title the running application set with OSC 0/2, if any.
+    pub fn title(&self) -> Option<String> {
+        self.title.lock().clone()
     }
 
     /// A colour scheme and font the terminal was started with.

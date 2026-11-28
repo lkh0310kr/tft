@@ -363,6 +363,6 @@ pub use render::TerminalRenderer;
 pub use session::TerminalSession;
 pub use terminal::TerminalState;
 pub use view::{
-    BellCallback, ClipboardStoreCallback, ExitCallback, KeyHandler, ResizeCallback, TerminalConfig,
-    TerminalView, TitleCallback,
+    BellCallback, Clear, ClipboardStoreCallback, ExitCallback, Find, FindPrevious, KeyHandler,
+    ResizeCallback, TerminalConfig, TerminalLink, TerminalTitle, TerminalView, TitleCallback,
 };

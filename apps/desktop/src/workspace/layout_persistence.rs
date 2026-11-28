@@ -9,7 +9,6 @@ use crate::theme::SIDEBAR_WIDTH;
 use gpui::{Context, Window};
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tft_app::explorer::SortOrder;
 use tft_app::Layout;
 
 /// How many paths `workspace.json`'s `lastOpenFiles` keeps after a new open.
@@ -23,8 +22,6 @@ pub(super) struct WorkspacePersistenceState {
     restored: bool,
     /// Recently opened vault-relative paths stored in `workspace.json`.
     last_open_files: Vec<String>,
-    file_tree_sort: SortOrder,
-    file_tree_expanded: std::collections::HashSet<String>,
 }
 
 impl WorkspacePersistenceState {
@@ -32,8 +29,6 @@ impl WorkspacePersistenceState {
         self.snapshot = None;
         self.restored = false;
         self.last_open_files.clear();
-        self.file_tree_sort = SortOrder::default();
-        self.file_tree_expanded.clear();
     }
 
     pub(super) fn load_last_open_files(&mut self, layout: &Value) {
@@ -50,35 +45,10 @@ impl WorkspacePersistenceState {
             .unwrap_or_default();
     }
 
-    pub(super) fn load_file_tree_settings(&mut self, layout: &Value) {
-        let tft = layout.get("tft");
-        self.file_tree_sort = tft
-            .and_then(|value| value.get("fileTreeSort"))
-            .and_then(Value::as_str)
-            .and_then(SortOrder::parse)
-            .unwrap_or_default();
-        self.file_tree_expanded = tft
-            .and_then(|value| value.get("fileTreeExpanded"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect();
-    }
-
     pub(super) fn record_open_file(&mut self, path: &str) {
         self.last_open_files.retain(|recent| recent != path);
         self.last_open_files.insert(0, path.to_string());
         self.last_open_files.truncate(LAST_OPEN_FILES_KEPT);
-    }
-
-    pub(super) fn set_file_tree_sort(&mut self, sort: SortOrder) {
-        self.file_tree_sort = sort;
-    }
-
-    pub(super) fn set_file_tree_expanded(&mut self, folders: &[String]) {
-        self.file_tree_expanded = folders.iter().cloned().collect();
     }
 }
 
@@ -121,13 +91,6 @@ impl Workspace {
     ) {
         self.layout_persistence.restored = true;
         self.layout_persistence.load_last_open_files(&layout);
-        self.layout_persistence.load_file_tree_settings(&layout);
-        let sort = self.layout_persistence.file_tree_sort;
-        let expanded = self.layout_persistence.file_tree_expanded.clone();
-        self.explorer.update(cx, |explorer, cx| {
-            explorer.set_sort(sort, cx);
-            explorer.set_expanded_folders(&expanded, cx);
-        });
         let default_mode = self.default_mode();
         // A leaf naming a file the vault no longer has is dropped, as Obsidian drops one it cannot open.
         let known = |file: &str| state.vault().absolute(file).is_file();
@@ -350,29 +313,6 @@ impl Workspace {
             "lastOpenFiles".into(),
             json!(self.layout_persistence.last_open_files),
         );
-        let sort = self.layout_persistence.file_tree_sort;
-        let expanded = &self.layout_persistence.file_tree_expanded;
-        if sort != SortOrder::default() || !expanded.is_empty() {
-            let tft = object.entry("tft").or_insert_with(|| json!({}));
-            if let Some(tft) = tft.as_object_mut() {
-                if sort != SortOrder::default() {
-                    tft.insert("fileTreeSort".into(), json!(sort.as_str()));
-                }
-                if !expanded.is_empty() {
-                    let mut expanded: Vec<_> = expanded.iter().collect();
-                    expanded.sort();
-                    tft.insert("fileTreeExpanded".into(), json!(expanded));
-                }
-            }
-        }
-        if let Some(tft) = object.get_mut("tft").and_then(Value::as_object_mut) {
-            if sort == SortOrder::default() {
-                tft.shift_remove("fileTreeSort");
-            }
-            if expanded.is_empty() {
-                tft.shift_remove("fileTreeExpanded");
-            }
-        }
         layout
     }
 

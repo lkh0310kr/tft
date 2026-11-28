@@ -19,6 +19,14 @@ pub(super) trait TabTitle {
 
 impl TabTitle for Tab {
     fn title(&self) -> SharedString {
+        if let Some(title) = self
+            .view_state
+            .as_ref()
+            .and_then(|state| state.get("title"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return title.to_string().into();
+        }
         match release_notes::version_of(self) {
             Some(version) => release_notes::title(&version).into(),
             None => leaf_title(self.path.as_deref(), self.mode),

@@ -72,19 +72,14 @@ def main():
                 page.mouse.click(x, y)
 
             def click_search_field():
-                page.mouse.click(52, 20)  # Search dock icon in the Desktop header
-                page.wait_for_function("window.__tftWorkspaceState?.leftTab === 'search'")
-                page.wait_for_timeout(80)  # wait for GPUI to mount the input row
-                page.mouse.click(154, 98)  # search input below Explorer controls
+                # Search is a main-area tab on Desktop, not a dock tab.
+                page.keyboard.press("Meta+Shift+F")
+                page.wait_for_function("window.__tftWorkspaceState?.activeMode === 'search'")
+                page.wait_for_timeout(80)
 
             initial = load()
             assert_eq(page.locator("canvas").count(), 1, "GPUI canvas rendered")
             assert_eq(page.evaluate("window.__tftWorkspaceState.leftTab"), "files", "Files dock starts selected")
-            page.mouse.click(52, 20)
-            page.wait_for_function("window.__tftWorkspaceState?.leftTab === 'search'")
-            page.mouse.click(22, 20)
-            page.wait_for_function("window.__tftWorkspaceState?.leftTab === 'files'")
-            print("PASS Desktop-style dock icons switch Files and Search")
             assert_eq(page.evaluate("window.__tftDriveAdapterLoaded"), True, "shared Drive adapter JS binding loaded")
             assert "한글 입력 테스트" in initial["text"]
             screenshot = Path(os.environ.get("TFT_POC_SCREENSHOT", "/tmp/tft-shared-editor.png"))
@@ -100,22 +95,22 @@ def main():
 
             # Select a second file in the shared FileTree model and verify the
             # shared TabGroup keeps both files. Edits must survive tab changes.
-            click_sidebar(35, 118)
+            click_sidebar(35, 78)
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'Notes/B.md'")
             assert_eq(page.evaluate("window.__tftWorkspaceState.tabs"), ["A.md", "Notes/B.md"], "file selection opens a shared-model tab")
             page.keyboard.press("Meta+ArrowDown")
             page.keyboard.type("web-draft")
             page.wait_for_function("window.__tftEditorState?.text.endsWith('web-draft')")
-            click_main(285, 56)
+            page.keyboard.press("Meta+1")
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'A.md'")
-            click_main(480, 56)
+            page.keyboard.press("Meta+2")
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'Notes/B.md'")
             page.wait_for_function("window.__tftEditorState?.source.includes('web-draft')")
             assert "web-draft" in state()["source"]
             assert "web-draft" in page.evaluate("window.__tftWorkspaceState.vaultText")
             print("PASS shared tabs preserve each Editor buffer while switching")
             print("PASS active Editor text is written to shared VaultData on tab switch")
-            click_main(627, 56)
+            page.keyboard.press("Meta+W")
             page.wait_for_function("window.__tftWorkspaceState?.tabs.length === 1")
             assert_eq(page.evaluate("window.__tftWorkspaceState.tabs"), ["A.md"], "closing the active tab removes it from the shared WorkspaceModel")
             assert_eq(page.evaluate("window.__tftWorkspaceState.activePath"), "A.md", "closing the active tab activates the remaining note")
@@ -224,9 +219,9 @@ def main():
             assert_eq(page.evaluate("window.__tftWorkspaceState.activePath"), "Notes/B.md", "Workspace Forward restores the next note")
             click_main(260, 96)
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'A.md'")
-            click_sidebar(35, 118)
+            click_sidebar(35, 78)
             page.wait_for_function("window.__tftWorkspaceState?.tabs.length === 2 && window.__tftWorkspaceState.activePath === 'Notes/B.md'")
-            click_main(285, 56)
+            page.keyboard.press("Meta+1")
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'A.md'")
             page.wait_for_function("window.__tftWorkspaceState?.activeMode === 'reading'")
             page.keyboard.down("Meta")
@@ -238,7 +233,7 @@ def main():
                 ["A.md", "Notes/B.md", "Notes/B.md"],
                 "Meta-click opens a duplicate target tab through the shared model",
             )
-            click_main(270, 56)
+            page.keyboard.press("Meta+1")
             page.wait_for_function("window.__tftWorkspaceState?.activePath === 'A.md'")
             page.wait_for_function("window.__tftWorkspaceState?.activeMode === 'reading'")
             page.mouse.click(1253, 58)
@@ -279,7 +274,7 @@ def main():
                 "shared search matcher finds the matching Vault note",
             )
             page.screenshot(path="/tmp/tft-web-search.png")
-            page.mouse.click(45, 135)  # first Search result below the input
+            page.mouse.click(330, 132)  # first Search result in the main Search tab
             try:
                 page.wait_for_function("window.__tftWorkspaceState?.activePath === 'Notes/B.md'", timeout=3000)
             except Exception as error:
@@ -306,25 +301,6 @@ def main():
             page.keyboard.type("web-live-index-phrase")
             page.wait_for_function("window.__tftWorkspaceState?.searchResults?.length === 1 && window.__tftWorkspaceState.searchResults[0] === 'Notes/B.md'")
             print("PASS search index reflects the active editor's latest Markdown")
-
-            page.mouse.click(22, 20)  # return to Files dock
-            page.wait_for_function("window.__tftWorkspaceState?.leftTab === 'files'")
-            page.mouse.click(103, 60)
-            page.wait_for_function("window.__tftWorkspaceState?.sortMenuOpen === true")
-            page.wait_for_timeout(120)  # allow the canvas menu to paint before selecting an item
-            page.mouse.click(120, 126)  # File name (Z to A)
-            page.wait_for_function("window.__tftWorkspaceState?.sortOrder === 'alphabeticalReverse'")
-            print("PASS Explorer sort menu changes the shared FileTree ordering")
-            page.mouse.click(164, 60)  # collapse all
-            page.wait_for_function("!window.__tftWorkspaceState?.visiblePaths.includes('Notes/B.md')")
-            page.mouse.click(164, 60)  # expand all
-            page.wait_for_function("window.__tftWorkspaceState?.visiblePaths.includes('Notes/B.md')")
-            print("PASS Explorer expand/collapse all changes visible rows")
-            page.mouse.click(164, 60)  # collapse all again
-            page.wait_for_function("!window.__tftWorkspaceState?.visiblePaths.includes('Notes/B.md')")
-            page.mouse.click(134, 60)  # reveal current file
-            page.wait_for_function("window.__tftWorkspaceState?.visiblePaths.includes('Notes/B.md')")
-            print("PASS Explorer reveal expands the active file's ancestor folders")
 
             if errors:
                 raise AssertionError("browser errors:\n" + "\n".join(errors))

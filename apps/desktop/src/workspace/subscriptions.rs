@@ -71,14 +71,6 @@ pub(super) fn workspace_subscriptions(
             explorer,
             window,
             |this, _, event: &ExplorerEvent, window, cx| match event {
-                ExplorerEvent::SortChanged(sort) => {
-                    this.layout_persistence.set_file_tree_sort(*sort);
-                    this.save_layout(cx);
-                }
-                ExplorerEvent::FoldersExpanded(folders) => {
-                    this.layout_persistence.set_file_tree_expanded(folders);
-                    this.save_layout(cx);
-                }
                 ExplorerEvent::Open(path) => {
                     // A row's click or Enter hands the keyboard to the note it opened.
                     this.open_file(path.clone(), None, cx);

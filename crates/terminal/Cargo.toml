@@ -16,7 +16,9 @@ name = "tft_terminal"
 doctest = false
 
 [dependencies]
+app = { workspace = true, features = ["gpui-ui"] }
 gpui.workspace = true
+regex.workspace = true
 anyhow.workspace = true
 alacritty_terminal.workspace = true
 portable-pty.workspace = true
