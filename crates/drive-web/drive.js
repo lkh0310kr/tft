@@ -13,6 +13,10 @@ let videoViewer = null;
 
 const SESSION_TOKEN_KEY = "tft.drive-session-token";
 const PERSISTED_TOKEN_KEY = "tft.drive-access-token";
+// `drive.file` covers writes to files the app created/opened; `drive.readonly`
+// covers listing the children of a Picker-selected folder and reading them.
+const DRIVE_SCOPE =
+  "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
 
 function restoreSessionToken(clientId) {
   // Check each store independently: a stale local copy must not erase a valid
@@ -40,6 +44,7 @@ function restoreSessionToken(clientId) {
     if (
       candidate?.token &&
       candidate.clientId === clientId &&
+      candidate.scope === DRIVE_SCOPE &&
       Number.isFinite(candidate.expiresAt) &&
       Date.now() < candidate.expiresAt
     ) {
@@ -60,7 +65,7 @@ function restoreSessionToken(clientId) {
 }
 
 function rememberSessionToken(token, expiresAt, clientId = tokenClientId) {
-  const value = JSON.stringify({ token, expiresAt, clientId });
+  const value = JSON.stringify({ token, expiresAt, clientId, scope: DRIVE_SCOPE });
   try {
     sessionStorage.setItem(SESSION_TOKEN_KEY, value);
   } catch {}
@@ -112,7 +117,7 @@ export function initTokenClient(clientId) {
   const generation = ++tokenClientGeneration;
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: clientId,
-    scope: "https://www.googleapis.com/auth/drive.file",
+    scope: DRIVE_SCOPE,
     callback: (response) => {
       if (generation !== tokenClientGeneration) return;
       const p = pending;
@@ -403,7 +408,7 @@ export function sanitizeHtml(html) {
 export async function driveBlobUrl(id) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(
-    `https://www.googleapis.com/drive/v3/files/${id}?alt=media`,
+    `https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`,
     {},
   );
   if (!response.ok) throw new Error(`Drive media ${response.status}`);
@@ -413,7 +418,7 @@ export async function driveBlobUrl(id) {
 export async function driveFileBytes(id) {
   if (!accessToken) throw new Error("Sign in first");
   const response = await authorizedFetch(
-    `https://www.googleapis.com/drive/v3/files/${id}?alt=media`,
+    `https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`,
     {},
   );
   if (!response.ok) throw new Error(`Drive file ${response.status}`);
@@ -563,7 +568,7 @@ export async function updateTextFile(id, content, etag) {
   const headers = { "Content-Type": "text/plain; charset=UTF-8" };
   if (etag) headers["If-Match"] = etag;
   const response = await authorizedFetch(
-    `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media&fields=id,modifiedTime`,
+    `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media&fields=id,modifiedTime&supportsAllDrives=true`,
     { method: "PATCH", headers, body: content },
   );
   const body = await response.text();

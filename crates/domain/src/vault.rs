@@ -293,6 +293,21 @@ impl VaultData {
         self.rebuild_indexes();
     }
 
+    /// Applies children discovered later (a lazy backend folder expansion)
+    /// without removing objects that are still valid.
+    pub fn apply_partial_scan(&mut self, scanned: Vec<ScannedNode>) {
+        for node in scanned {
+            self.upsert_object(
+                node.backend,
+                node.parent,
+                node.name,
+                node.kind,
+                node.revision,
+            );
+        }
+        self.rebuild_indexes();
+    }
+
     pub fn remove(&mut self, id: NodeId) -> Vec<NodeId> {
         if id == self.root {
             return Vec::new();
@@ -495,6 +510,11 @@ impl VaultData {
         let meta = index_markdown(&text);
         self.texts.insert(id, Arc::new(text));
         self.cache.insert_file(path, meta);
+    }
+
+    /// Forgets a text placeholder so a failed lazy read can be retried.
+    pub fn clear_text(&mut self, id: NodeId) {
+        self.texts.remove(&id);
     }
 
     /// Moves local backend tokens after a TFT rename, so the node that was at

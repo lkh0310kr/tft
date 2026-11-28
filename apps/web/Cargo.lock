@@ -7432,6 +7432,7 @@ dependencies = [
  "cache",
  "drive-web",
  "formats",
+ "futures",
  "gpui",
  "gpui_platform",
  "js-sys",

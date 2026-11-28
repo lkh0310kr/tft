@@ -3,7 +3,6 @@
 #![cfg(target_arch = "wasm32")]
 
 use serde::Deserialize;
-use std::collections::HashMap;
 use tft_app::formats::config::AppearanceConfig;
 use tft_app::formats::files::VaultFile;
 use tft_app::formats::FileKind;
@@ -173,7 +172,7 @@ async fn fetch(url: &str) -> Result<String, String> {
 fn list_url(folder_id: &str, page: Option<&str>) -> String {
     let q = format!("'{folder_id}' in parents and trashed=false");
     let mut url = format!(
-        "https://www.googleapis.com/drive/v3/files?q={}&pageSize=1000",
+        "https://www.googleapis.com/drive/v3/files?q={}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType,size,modifiedTime,createdTime),nextPageToken",
         encode(&q)
     );
     if let Some(page) = page {
@@ -183,9 +182,74 @@ fn list_url(folder_id: &str, page: Option<&str>) -> String {
     url
 }
 
+/// Every page of one folder's direct children. The caller controls how many
+/// folders are in flight at once.
+async fn list_children(folder_id: &str) -> Result<Vec<DriveItem>, String> {
+    let mut files = Vec::new();
+    let mut page = None;
+    loop {
+        let body = fetch(&list_url(folder_id, page.as_deref())).await?;
+        let parsed: ListPage =
+            serde_json::from_str(&body).map_err(|e| format!("list parse: {e}"))?;
+        files.extend(parsed.files);
+        page = parsed.next_page_token;
+        if page.is_none() {
+            break;
+        }
+    }
+    Ok(files)
+}
+
+/// One folder's direct children, as nodes ready for `VaultData`. This is the
+/// unit of a lazy tree: a folder is listed the first time the user expands it.
+pub async fn list_folder(
+    folder_id: &str,
+    parent: &BackendObjectId,
+) -> Result<Vec<ScannedNode>, String> {
+    let mut scanned = Vec::new();
+    for item in list_children(folder_id).await? {
+        if item.name.starts_with('.') {
+            continue;
+        }
+        match item.mime_type.as_deref() {
+            Some("application/vnd.google-apps.folder") => {
+                let id = item.id.clone();
+                scanned.push(ScannedNode {
+                    backend: BackendObjectId::Drive(id),
+                    parent: Some(parent.clone()),
+                    name: item.name,
+                    kind: NodeKind::Folder,
+                    revision: item.etag,
+                });
+            }
+            Some(mime) if mime.starts_with("application/vnd.google-apps.") => {}
+            _ => {
+                let mtime = millis(&item.modified_time);
+                scanned.push(ScannedNode {
+                    backend: BackendObjectId::Drive(item.id),
+                    parent: Some(parent.clone()),
+                    name: item.name.clone(),
+                    kind: NodeKind::File(FileMeta {
+                        kind: FileKind::from_path(&item.name),
+                        size: item
+                            .size
+                            .as_deref()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        mtime,
+                        ctime: millis(&item.created_time).max(mtime),
+                    }),
+                    revision: item.etag,
+                });
+            }
+        }
+    }
+    Ok(scanned)
+}
+
 pub async fn index_vault(root_id: &str) -> Result<VaultIndex, String> {
     let meta = fetch(&format!(
-        "https://www.googleapis.com/drive/v3/files/{root_id}?fields=id,name,mimeType"
+        "https://www.googleapis.com/drive/v3/files/{root_id}?fields=id,name,mimeType&supportsAllDrives=true"
     ))
     .await?;
     let meta: serde_json::Value =
@@ -206,64 +270,8 @@ pub async fn index_vault(root_id: &str) -> Result<VaultIndex, String> {
     index
         .data
         .set_root_backend(BackendObjectId::Drive(root_id.to_string()));
-    let mut scanned = Vec::new();
-    let mut etags: HashMap<String, Option<String>> = HashMap::new();
-    let mut queue = vec![(root_id.to_string(), None::<BackendObjectId>)];
-
-    while let Some((folder_id, parent)) = queue.pop() {
-        let mut page = None;
-        loop {
-            let body = fetch(&list_url(&folder_id, page.as_deref())).await?;
-            let parsed: ListPage =
-                serde_json::from_str(&body).map_err(|e| format!("list parse: {e}"))?;
-            for item in parsed.files {
-                if item.name.starts_with('.') {
-                    continue;
-                }
-                match item.mime_type.as_deref() {
-                    Some("application/vnd.google-apps.folder") => {
-                        let id = item.id.clone();
-                        scanned.push(ScannedNode {
-                            backend: BackendObjectId::Drive(id.clone()),
-                            parent: parent.clone(),
-                            name: item.name,
-                            kind: NodeKind::Folder,
-                            revision: item.etag,
-                        });
-                        queue.push((id.clone(), Some(BackendObjectId::Drive(id))));
-                    }
-                    Some(mime) if mime.starts_with("application/vnd.google-apps.") => {}
-                    _ => {
-                        let mtime = millis(&item.modified_time);
-                        let id = item.id.clone();
-                        etags.insert(id.clone(), item.etag.clone());
-                        scanned.push(ScannedNode {
-                            backend: BackendObjectId::Drive(id),
-                            parent: parent.clone(),
-                            name: item.name.clone(),
-                            kind: NodeKind::File(FileMeta {
-                                kind: FileKind::from_path(&item.name),
-                                size: item
-                                    .size
-                                    .as_deref()
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0),
-                                mtime,
-                                ctime: millis(&item.created_time).max(mtime),
-                            }),
-                            revision: item.etag,
-                        });
-                    }
-                }
-            }
-            page = parsed.next_page_token;
-            if page.is_none() {
-                break;
-            }
-        }
-    }
-
-    index.data.apply_scan(scanned);
+    let scanned = list_folder(root_id, &BackendObjectId::Drive(root_id.to_string())).await?;
+    index.data.apply_partial_scan(scanned);
     let entries = index
         .data
         .file_ids()
@@ -277,7 +285,7 @@ pub async fn index_vault(root_id: &str) -> Result<VaultIndex, String> {
                 path: file.path,
                 kind: file.kind,
                 id: id.clone(),
-                etag: etags.get(id).cloned().flatten(),
+                etag: None,
             })
         })
         .collect();
@@ -417,7 +425,7 @@ pub async fn write_graph_config(
 async fn find_child(parent: &str, name: &str, folder: bool) -> Result<Option<DriveItem>, String> {
     let query = format!("'{parent}' in parents and name = '{name}' and trashed = false");
     let url = format!(
-        "https://www.googleapis.com/drive/v3/files?q={}&pageSize=1000&fields=files(id,name,mimeType),nextPageToken",
+        "https://www.googleapis.com/drive/v3/files?q={}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=files(id,name,mimeType),nextPageToken",
         encode(&query)
     );
     let body = fetch(&url).await?;
@@ -708,7 +716,7 @@ pub fn open_drive_file(id: &str) {
 
 pub async fn read_file(id: &str) -> Result<String, String> {
     fetch(&format!(
-        "https://www.googleapis.com/drive/v3/files/{id}?alt=media"
+        "https://www.googleapis.com/drive/v3/files/{id}?alt=media&supportsAllDrives=true"
     ))
     .await
 }

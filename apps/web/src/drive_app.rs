@@ -1,9 +1,7 @@
 //! GPUI Web entry flow for configuring Drive, opening a Vault and saving notes.
 
 use crate::web_workspace::{WebWorkspace, WebWorkspaceEvent};
-#[cfg(feature = "drive-smoke-test")]
-use gpui::App;
-use gpui::{div, prelude::*, px, Context, Entity, Render, SharedString, Subscription, Window};
+use gpui::{div, prelude::*, px, App, Context, Entity, Render, SharedString, Subscription, Window};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tft_app::formats::config::{
@@ -15,6 +13,11 @@ use tft_app::theme::Theme;
 use tft_app::ui;
 use tft_app::{FileOperationRequest, NodeId, VaultData};
 use tft_drive_web::{self as drive, IndexedFile, VaultIndex};
+
+/// TFT's default public OAuth client, used when the browser has no saved
+/// configuration. It is a public identifier, not a secret.
+const DEFAULT_CLIENT_ID: &str =
+    "130397210046-intlp507spke9u1b659ef1ccp85s270v.apps.googleusercontent.com";
 
 struct PendingVault {
     id: String,
@@ -126,7 +129,6 @@ pub struct DriveApp {
     pending_saves: HashMap<NodeId, (u64, String)>,
     dirty_nodes: HashMap<NodeId, String>,
     close_when_saved: bool,
-    reopen_after_sign_in: bool,
     pending_workspace_state: Option<String>,
     workspace_saving: bool,
     vault_workspace_epoch: u64,
@@ -136,7 +138,12 @@ pub struct DriveApp {
 
 impl DriveApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let (client_id, api_key, _) = drive::config();
+        let (configured_client_id, api_key, _) = drive::config();
+        let client_id = if configured_client_id.trim().is_empty() {
+            DEFAULT_CLIENT_ID.to_string()
+        } else {
+            configured_client_id
+        };
         let client_id_input = cx.new(|cx| TextInput::new("Google OAuth Client ID", cx));
         let api_key_input = cx.new(|cx| TextInput::new("Google Picker API key", cx));
         client_id_input.update(cx, |input, cx| input.set_text(client_id.clone(), cx));
@@ -180,7 +187,6 @@ impl DriveApp {
             pending_saves: HashMap::new(),
             dirty_nodes: HashMap::new(),
             close_when_saved: false,
-            reopen_after_sign_in: false,
             pending_workspace_state: None,
             workspace_saving: false,
             vault_workspace_epoch: 0,
@@ -226,21 +232,6 @@ impl DriveApp {
         app
     }
 
-    fn configure(&mut self, cx: &mut Context<Self>) {
-        let client_id = self.client_id.read(cx).text().trim().to_string();
-        let api_key = self.api_key.read(cx).text().trim().to_string();
-        if client_id.is_empty() {
-            self.status = "Enter the OAuth Client ID first.".into();
-        } else {
-            self.status = if drive::save_config(&client_id, &api_key) {
-                "Drive configuration saved in this browser.".into()
-            } else {
-                "Drive configuration is active for this session but could not be saved in browser storage.".into()
-            };
-        }
-        cx.notify();
-    }
-
     fn sign_in(&mut self, cx: &mut Context<Self>) {
         let client_id = self.client_id.read(cx).text().trim().to_string();
         let api_key = self.api_key.read(cx).text().trim().to_string();
@@ -264,7 +255,8 @@ impl DriveApp {
         self.status = if config_persisted {
             "Waiting for Google sign-in…".into()
         } else {
-            "Waiting for Google sign-in… Drive settings could not be saved in browser storage.".into()
+            "Waiting for Google sign-in… Drive settings could not be saved in browser storage."
+                .into()
         };
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -274,12 +266,11 @@ impl DriveApp {
                 match result {
                     Ok(()) => {
                         app.signed_in = true;
-                        if app.reopen_after_sign_in {
-                            app.reopen_after_sign_in = false;
+                        if drive::last_vault().is_some() {
                             app.open_last_vault(cx);
                         } else {
-                            app.status =
-                                "Signed in. Choose a Drive folder to open as a Vault.".into();
+                            // First run after sign-in: go straight to Picker.
+                            app.pick_vault(cx);
                         }
                     }
                     Err(error) => {
@@ -347,11 +338,6 @@ impl DriveApp {
             return;
         };
         self.load_vault_id(id, name, cx);
-    }
-
-    fn continue_to_last_vault(&mut self, cx: &mut Context<Self>) {
-        self.reopen_after_sign_in = true;
-        self.sign_in(cx);
     }
 
     fn schedule_workspace_save(&mut self, state: String, cx: &mut Context<Self>) {
@@ -633,7 +619,9 @@ impl DriveApp {
             cx.notify();
             return;
         }
-        let Some(pending) = self.pending_drive_prompt.take() else { return; };
+        let Some(pending) = self.pending_drive_prompt.take() else {
+            return;
+        };
         self.prompt_open = false;
         match pending {
             PendingDrivePrompt::Rename { from, to, rewrites } => {
@@ -727,7 +715,8 @@ impl DriveApp {
                 return;
             };
             if workspace.current_path() != Some(path.as_str()) {
-                self.status = "The active note changed before the heading rename was applied.".into();
+                self.status =
+                    "The active note changed before the heading rename was applied.".into();
                 cx.notify();
                 return;
             }
@@ -872,7 +861,10 @@ impl DriveApp {
                     return;
                 }
             };
-            let source_parent = from.rsplit_once('/').map(|(parent, _)| parent).unwrap_or("");
+            let source_parent = from
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or("");
             let Some(file_id) = workspace.drive_file_id(&from) else {
                 self.status = format!("Could not find the Drive file for {from}.");
                 cx.notify();
@@ -966,7 +958,8 @@ impl DriveApp {
             let mut writes = Vec::new();
             for rewrite in rewrites {
                 let Some(id) = workspace.read(cx).drive_file_id(&rewrite.old_path) else {
-                    self.status = format!("Could not find the Drive file for {}.", rewrite.old_path);
+                    self.status =
+                        format!("Could not find the Drive file for {}.", rewrite.old_path);
                     cx.notify();
                     return;
                 };
@@ -981,7 +974,8 @@ impl DriveApp {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = async {
-                let move_etag = drive::move_entry(&file_id, &destination_parent_id, &source_parent_id).await?;
+                let move_etag =
+                    drive::move_entry(&file_id, &destination_parent_id, &source_parent_id).await?;
                 let mut applied = Vec::new();
                 let mut failed = Vec::new();
                 for (id, rewrite) in rewrite_writes {
@@ -997,25 +991,37 @@ impl DriveApp {
                 app.busy = false;
                 match result {
                     Ok((applied, failed, move_etag)) => {
-                        let rewritten = applied.iter().map(|(rewrite, _, _)| rewrite.clone()).collect::<Vec<_>>();
+                        let rewritten = applied
+                            .iter()
+                            .map(|(rewrite, _, _)| rewrite.clone())
+                            .collect::<Vec<_>>();
                         let update_result = workspace.update(cx, |workspace, cx| {
                             workspace.apply_drive_move(&from, &to, &destination, &rewritten, cx)
                         });
                         for (_, etag, id) in &applied {
-                            if let Some(entry) = app.entries.iter_mut().find(|entry| &entry.id == id) {
+                            if let Some(entry) =
+                                app.entries.iter_mut().find(|entry| &entry.id == id)
+                            {
                                 entry.etag = etag.clone();
                             }
                         }
-                        if let Some(entry) = app.entries.iter_mut().find(|entry| entry.id == file_id) {
+                        if let Some(entry) =
+                            app.entries.iter_mut().find(|entry| entry.id == file_id)
+                        {
                             entry.etag = move_etag;
                             entry.path = to.clone();
                         }
                         if let Err(error) = update_result {
-                            app.status = format!("Drive moved the file, but the workspace could not update: {error}");
+                            app.status = format!(
+                                "Drive moved the file, but the workspace could not update: {error}"
+                            );
                         } else if failed.is_empty() {
                             app.status = format!("Moved {from} to {to}.");
                         } else {
-                            app.status = format!("Moved {from} to {to}; some links could not be updated: {}", failed.join("; "));
+                            app.status = format!(
+                                "Moved {from} to {to}; some links could not be updated: {}",
+                                failed.join("; ")
+                            );
                         }
                     }
                     Err(error) => app.status = format!("Could not move {from}: {error}"),
@@ -1023,8 +1029,10 @@ impl DriveApp {
                 app.prompt_open = false;
                 app.pending_drive_prompt = None;
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn duplicate_drive_file(
@@ -1717,6 +1725,89 @@ impl DriveApp {
         .detach();
     }
 
+    /// A folder expanded for the first time: fetch only its direct children.
+    fn load_folder_children(&mut self, node: NodeId, path: String, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let Some(folder_id) = workspace.read(cx).folder_drive_id(node) else {
+            workspace.update(cx, |workspace, cx| {
+                workspace.folder_children_failed(node, cx)
+            });
+            return;
+        };
+        let epoch = self.vault_epoch;
+        cx.spawn(async move |this, cx| {
+            let parent = tft_app::BackendObjectId::Drive(folder_id.clone());
+            let result = drive::list_folder(&folder_id, &parent).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.vault_epoch != epoch {
+                    return;
+                }
+                match result {
+                    Ok(scanned) => {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.add_folder_children(node, &path, scanned, cx);
+                        });
+                        app.entries = workspace.read(cx).drive_entries();
+                    }
+                    Err(error) => {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.folder_children_failed(node, cx)
+                        });
+                        app.status = format!("Could not list {path}: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// A note opened before its background read arrived: fetch just that file
+    /// and let the workspace fill the editor if it is still the active note.
+    fn load_note_text(&mut self, node: NodeId, path: String, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        // The entries table is normally populated by the folder expansion
+        // that revealed this row, but the Vault model already knows the Drive
+        // backend id even if the table lags one frame.
+        let Some(id) = self
+            .entries
+            .iter()
+            .find(|entry| entry.node == node)
+            .map(|entry| entry.id.clone())
+            .or_else(|| workspace.read(cx).folder_drive_id(node))
+        else {
+            workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
+            return;
+        };
+        let epoch = self.vault_epoch;
+        cx.spawn(async move |this, cx| {
+            let Ok(text) = drive::read_file(&id).await else {
+                let _ = this.update(cx, |app, cx| {
+                    if app.vault_epoch != epoch {
+                        return;
+                    }
+                    workspace.update(cx, |workspace, cx| workspace.note_text_failed(node, cx));
+                });
+                return;
+            };
+            let _ = this.update(cx, |app, cx| {
+                if app.vault_epoch != epoch {
+                    return;
+                }
+                workspace.update(cx, |workspace, cx| {
+                    // `open` may have written the empty placeholder into the
+                    // Vault before this read finished; ingest must replace it.
+                    workspace.ingest_text(node, path, text, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
     fn close_vault(&mut self, cx: &mut Context<Self>) {
         if !self.dirty_nodes.is_empty() {
             self.close_when_saved = true;
@@ -1764,23 +1855,40 @@ impl DriveApp {
 }
 
 async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
-    let mut index: VaultIndex = drive::index_vault(&id).await?;
-    let appearance = drive::read_appearance_config(&id).await.unwrap_or_default();
-    let app_config = drive::read_app_config(&id).await.unwrap_or_default();
-    let switcher_config = drive::read_switcher_config(&id).await.unwrap_or_default();
-    let page_preview_config = drive::read_page_preview_config(&id)
-        .await
-        .unwrap_or_default();
-    let hotkeys = drive::read_hotkeys_config(&id).await.unwrap_or_default();
-    let drive_workspace_result = drive::read_web_workspace_state(&id).await;
+    // The tree and the host configuration are independent reads; start them
+    // together so a Picker selection reaches the workspace in one round trip
+    // instead of a chain of sequential Drive calls.
+    let (
+        index,
+        appearance,
+        app_config,
+        switcher_config,
+        page_preview_config,
+        hotkeys,
+        drive_workspace_result,
+        graph_config_from_file,
+    ) = futures::join!(
+        drive::index_vault(&id),
+        drive::read_appearance_config(&id),
+        drive::read_app_config(&id),
+        drive::read_switcher_config(&id),
+        drive::read_page_preview_config(&id),
+        drive::read_hotkeys_config(&id),
+        drive::read_web_workspace_state(&id),
+        drive::read_graph_config(&id),
+    );
+    let index: VaultIndex = index?;
+    let appearance = appearance.unwrap_or_default();
+    let app_config = app_config.unwrap_or_default();
+    let switcher_config = switcher_config.unwrap_or_default();
+    let page_preview_config = page_preview_config.unwrap_or_default();
+    let hotkeys = hotkeys.unwrap_or_default();
+    let graph_config_from_file = graph_config_from_file?;
     let local_workspace_state = drive::local_workspace_state(&id);
     let workspace_state = match (local_workspace_state, drive_workspace_result) {
         (Some(local_state), drive_result) => {
-            let drive_has_local_state = drive_result
-                .as_ref()
-                .ok()
-                .and_then(Option::as_deref)
-                == Some(local_state.as_str());
+            let drive_has_local_state =
+                drive_result.as_ref().ok().and_then(Option::as_deref) == Some(local_state.as_str());
             if !drive_has_local_state {
                 // The local copy is the recovery source when Drive reads fail.
                 // A failed read must not prevent a fresh write attempt: if the
@@ -1801,7 +1909,6 @@ async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
             return Err(format!("Could not restore the saved workspace: {error}"));
         }
     };
-    let graph_config_from_file = drive::read_graph_config(&id).await?;
     let workspace_graph_config = || {
         workspace_state
             .as_deref()
@@ -1815,10 +1922,8 @@ async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
     let graph_config = workspace_graph_config()
         .or_else(|| graph_config_from_file.clone())
         .unwrap_or_default();
-    let loaded = drive::read_markdown_strict(&index.entries).await?;
-    for (node, contents) in loaded {
-        index.data.set_text(node, contents);
-    }
+    // Metadata alone opens the workspace; the active note's body arrives
+    // through the same on-demand read every other file uses.
     let initial_node = index
         .entries
         .iter()
@@ -1846,6 +1951,8 @@ async fn load_vault(id: String, name: String) -> Result<PendingVault, String> {
 
 impl Render for DriveApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        self.publish_debug_state(cx);
         if !self.busy {
             if let Some((path, line, name)) = self.pending_heading_rename.take() {
                 self.finish_drive_heading_rename(path, line, &name, window, cx);
@@ -2094,8 +2201,17 @@ impl Render for DriveApp {
                             this.schedule_workspace_save(state.clone(), cx)
                         }
                         WebWorkspaceEvent::SwitchVaultRequested => this.close_vault(cx),
+                        WebWorkspaceEvent::NoteTextRequested { node, path } => {
+                            this.load_note_text(*node, path.clone(), cx)
+                        }
+                        WebWorkspaceEvent::FolderChildrenRequested { node, path } => {
+                            this.load_folder_children(*node, path.clone(), cx)
+                        }
                     },
                 ));
+                if let Some((node, path)) = workspace.read(cx).active_missing_text() {
+                    self.load_note_text(node, path, cx);
+                }
                 self.workspace = Some(workspace);
             }
         }
@@ -2186,12 +2302,9 @@ impl Render for DriveApp {
                 });
         }
 
-        let client_id = self.client_id.clone();
-        let api_key = self.api_key.clone();
         let status = self.status.clone();
         let busy = self.busy;
         let signed_in = self.signed_in;
-        let last_vault = drive::last_vault();
         div()
             .size_full()
             .flex()
@@ -2201,9 +2314,10 @@ impl Render for DriveApp {
             .text_color(tokens.text_normal)
             .child(
                 div()
-                    .w(px(560.))
+                    .w(px(360.))
                     .flex()
                     .flex_col()
+                    .items_center()
                     .gap_3()
                     .rounded_lg()
                     .border_1()
@@ -2211,60 +2325,15 @@ impl Render for DriveApp {
                     .bg(tokens.background_secondary)
                     .p_6()
                     .child(div().text_size(px(24.)).child("TFT"))
-                    .child(
-                        div()
-                            .text_size(px(14.))
-                            .text_color(tokens.text_muted)
-                            .child("Open and edit your Markdown Vault from Google Drive."),
-                    )
-                    .child(client_id)
-                    .child(api_key)
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                button("Save configuration", &theme)
-                                    .on_click(cx.listener(|this, _, _, cx| this.configure(cx))),
-                            )
-                            .when(!signed_in, |row| {
-                                row.child(if last_vault.is_some() {
-                                    button("Continue to last Vault", &theme).when(!busy, |button| {
-                                        button.on_click(cx.listener(|this, _, _, cx| {
-                                            this.continue_to_last_vault(cx)
-                                        }))
-                                    })
-                                } else {
-                                    button("Sign in with Google", &theme).when(!busy, |button| {
-                                        button.on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
-                                    })
-                                })
-                            }),
-                    )
+                    .when(!signed_in, |panel| {
+                        panel.child(button("Sign in with Google", &theme).when(!busy, |button| {
+                            button.on_click(cx.listener(|this, _, _, cx| this.sign_in(cx)))
+                        }))
+                    })
                     .when(signed_in, |panel| {
-                        panel.child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(button("Choose Drive folder", &theme).when(
-                                    !busy,
-                                    |button| {
-                                        button.on_click(
-                                            cx.listener(|this, _, _, cx| this.pick_vault(cx)),
-                                        )
-                                    },
-                                ))
-                                .when(last_vault.is_some(), |row| {
-                                    row.child(button("Reopen last Vault", &theme).when(
-                                        !busy,
-                                        |button| {
-                                            button.on_click(cx.listener(|this, _, _, cx| {
-                                                this.open_last_vault(cx)
-                                            }))
-                                        },
-                                    ))
-                                }),
-                        )
+                        panel.child(button("Choose Drive folder", &theme).when(!busy, |button| {
+                            button.on_click(cx.listener(|this, _, _, cx| this.pick_vault(cx)))
+                        }))
                     })
                     .child(
                         div()
@@ -2273,6 +2342,38 @@ impl Render for DriveApp {
                             .child(SharedString::from(status)),
                     ),
             )
+    }
+}
+
+#[cfg(debug_assertions)]
+impl DriveApp {
+    /// Debug builds publish a small, token-free diagnostic object so a local
+    /// browser can report why a Drive Vault did or did not produce files.
+    fn publish_debug_state(&self, cx: &App) {
+        use wasm_bindgen::JsValue;
+        let path = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.read(cx).current_path().map(str::to_owned))
+            .unwrap_or_default();
+        let state = js_sys::Object::new();
+        for (key, value) in [
+            ("signedIn", JsValue::from_bool(self.signed_in)),
+            ("busy", JsValue::from_bool(self.busy)),
+            ("status", JsValue::from_str(&self.status)),
+            ("vaultName", JsValue::from_str(&self.vault_name)),
+            ("vaultId", JsValue::from_str(&self.vault_id)),
+            ("entries", JsValue::from_f64(self.entries.len() as f64)),
+            ("workspace", JsValue::from_bool(self.workspace.is_some())),
+            ("activePath", JsValue::from_str(&path)),
+        ] {
+            let _ = js_sys::Reflect::set(&state, &JsValue::from_str(key), &value);
+        }
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__tftDriveDebug"),
+            &state,
+        );
     }
 }
 

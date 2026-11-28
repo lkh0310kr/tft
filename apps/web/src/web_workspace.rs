@@ -3,12 +3,12 @@
 //! production Editor and document bytes live in `VaultData`.
 
 use gpui::{
-    canvas, div, fill, img, point, prelude::*, px, size, Action, App, Bounds, ClipboardItem,
-    Context, DispatchPhase, DragMoveEvent, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle, HitboxBehavior, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    PathBuilder, Pixels, Point, Render, ScrollWheelEvent, SharedString, SharedUri, StyledText,
-    Subscription, UTF16Selection, Window,
+    canvas, div, fill, img, point, prelude::*, px, relative, size, Action, Animation, AnimationExt,
+    App, Bounds, ClipboardItem, Context, DispatchPhase, DragMoveEvent, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, FontWeight, HighlightStyle,
+    HitboxBehavior, KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, PathBuilder, Pixels, Point, Render, ScrollWheelEvent, SharedString,
+    SharedUri, StyledText, Subscription, UTF16Selection, Window,
 };
 use radial_tree_explorer::{RadialTree, RadialTreeEvent, TreeViewOptions};
 use std::cell::RefCell;
@@ -524,6 +524,12 @@ pub struct WebWorkspace {
     search_error: Option<String>,
     search_generation: u64,
     search_documents: Vec<SearchDocument>,
+    /// Notes whose text has been requested but not streamed in yet.
+    requested_text: std::collections::HashSet<NodeId>,
+    /// Folders whose direct children have been fetched from Drive.
+    loaded_folders: std::collections::HashSet<NodeId>,
+    requested_folders: std::collections::HashSet<NodeId>,
+    loading_folders: std::collections::HashSet<NodeId>,
     recent_files: Vec<String>,
     excluded: tft_search::ExcludeFilters,
     switcher_config: tft_formats::config::SwitcherConfig,
@@ -595,6 +601,14 @@ pub enum WebWorkspaceEvent {
     },
     SaveRequested,
     SwitchVaultRequested,
+    NoteTextRequested {
+        node: NodeId,
+        path: String,
+    },
+    FolderChildrenRequested {
+        node: NodeId,
+        path: String,
+    },
     RenameFileRequested {
         from: String,
         to: String,
@@ -743,7 +757,6 @@ impl WebWorkspace {
                 .unwrap_or(false),
         };
         let mut tree = FileTree::from_vault(&vault);
-        tree.expand_all();
         let mut model = WorkspaceModel::new(ViewMode::default_editing());
         let mut recent_files = Vec::new();
         let mut restored_active = None;
@@ -854,9 +867,17 @@ impl WebWorkspace {
                 .get("expandedFolders")
                 .and_then(serde_json::Value::as_array)
             {
+                // Lazy folders have no children until expanded; restoring
+                // them as expanded would show a down arrow over an empty row.
                 let folders = folders
                     .iter()
                     .filter_map(serde_json::Value::as_str)
+                    .filter(|path| {
+                        vault
+                            .lookup(path)
+                            .ok()
+                            .is_some_and(|node| !vault.children(node).is_empty())
+                    })
                     .map(str::to_owned)
                     .collect();
                 tree.expand_folders(&folders);
@@ -1371,6 +1392,10 @@ impl WebWorkspace {
             search_error: None,
             search_generation: 0,
             search_documents,
+            requested_text: std::collections::HashSet::new(),
+            loaded_folders: std::collections::HashSet::new(),
+            requested_folders: std::collections::HashSet::new(),
+            loading_folders: std::collections::HashSet::new(),
             recent_files,
             excluded,
             switcher_config,
@@ -4586,6 +4611,9 @@ impl WebWorkspace {
             self.vault.node(node).map(|node| &node.kind),
             Some(NodeKind::File(meta)) if meta.kind == tft_formats::FileKind::Markdown
         );
+        if is_markdown && !self.has_text(node) {
+            self.request_note_text(node, &path, cx);
+        }
         if !is_markdown
             && matches!(
                 self.vault.node(node).map(|node| &node.kind),
@@ -6536,6 +6564,11 @@ impl WebWorkspace {
             .and_then(|group| group.active())
             .map(|tab| (tab.node, tab.path.clone(), tab.mode));
         if let Some((node, selected_path, mode)) = selected {
+            if let (Some(node), Some(path)) = (node, selected_path.as_deref()) {
+                if mode != ViewMode::Graph && !self.has_text(node) {
+                    self.request_note_text(node, path, cx);
+                }
+            }
             if let Some(node) = node {
                 match self.vault.node(node).map(|node| &node.kind) {
                     Some(NodeKind::File(meta))
@@ -9193,6 +9226,150 @@ impl WebWorkspace {
             .and_then(|tab| tab.path.as_deref())
     }
 
+    /// Best-effort text stream: read a note before the user opens it so the
+    /// local search index and graph fill in without blocking the tree.
+    pub fn ingest_text(
+        &mut self,
+        node: NodeId,
+        path: String,
+        contents: String,
+        cx: &mut Context<Self>,
+    ) {
+        let requested = self.requested_text.remove(&node);
+        self.vault.set_text(node, contents.clone());
+        self.upsert_search_document(node, path.clone(), contents.clone());
+        let active = self
+            .model
+            .active()
+            .and_then(|group| group.active())
+            .map(|tab| (tab.node, tab.path.clone(), tab.mode));
+        if let Some((Some(active_node), active_path, mode)) = active {
+            if active_node == node {
+                let editor_is_dirty = self.active_editor().read(cx).is_dirty();
+                if (requested || !editor_is_dirty) && active_path.as_deref() == Some(path.as_str())
+                {
+                    self.active_editor().update(cx, |editor, cx| {
+                        editor.set_workspace_document(path.clone(), contents.clone(), mode, cx)
+                    });
+                    if mode == ViewMode::Reading {
+                        self.refresh_reading(cx);
+                    }
+                }
+            }
+        }
+        self.schedule_graph_rebuild(cx, false);
+        cx.notify();
+    }
+
+    fn folder_needs_load(&self, node: NodeId) -> bool {
+        self.vault.children(node).is_empty() && !self.loaded_folders.contains(&node)
+    }
+
+    fn request_folder_children(&mut self, node: NodeId, path: &str, cx: &mut Context<Self>) {
+        if self.loaded_folders.contains(&node) {
+            return;
+        }
+        if self.requested_folders.insert(node) {
+            self.loading_folders.insert(node);
+            cx.emit(WebWorkspaceEvent::FolderChildrenRequested {
+                node,
+                path: path.to_string(),
+            });
+        }
+    }
+
+    /// Applies one folder's direct children fetched on expansion.
+    pub fn add_folder_children(
+        &mut self,
+        parent: NodeId,
+        path: &str,
+        scanned: Vec<tft_app::ScannedNode>,
+        cx: &mut Context<Self>,
+    ) {
+        self.requested_folders.remove(&parent);
+        self.loading_folders.remove(&parent);
+        self.loaded_folders.insert(parent);
+        self.vault.apply_partial_scan(scanned);
+        let mut tree = FileTree::from_vault_sorted(&self.vault, self.tree.sort());
+        tree.preserve_view_from(&self.tree);
+        if tree.is_collapsed(path) {
+            tree.toggle(path);
+        }
+        self.tree_selection.retain_in(&tree);
+        self.tree = tree;
+        cx.notify();
+        self.publish_test_state();
+        self.emit_workspace_state(cx);
+    }
+
+    /// Every Drive file currently known to the lazy vault, for the host's
+    /// file-operation table.
+    pub fn drive_entries(&self) -> Vec<tft_drive_web::IndexedFile> {
+        self.vault
+            .file_ids()
+            .into_iter()
+            .filter_map(|(node, file)| {
+                let BackendObjectId::Drive(id) = self.vault.backend(node)? else {
+                    return None;
+                };
+                Some(tft_drive_web::IndexedFile {
+                    node,
+                    path: file.path,
+                    kind: file.kind,
+                    id: id.clone(),
+                    etag: None,
+                })
+            })
+            .collect()
+    }
+
+    pub fn folder_drive_id(&self, node: NodeId) -> Option<String> {
+        match self.vault.backend(node)? {
+            BackendObjectId::Drive(id) => Some(id.clone()),
+            BackendObjectId::Local(_) => None,
+        }
+    }
+
+    pub fn folder_children_failed(&mut self, node: NodeId, cx: &mut Context<Self>) {
+        self.requested_folders.remove(&node);
+        self.loading_folders.remove(&node);
+        cx.notify();
+    }
+
+    pub fn note_text_failed(&mut self, node: NodeId, cx: &mut Context<Self>) {
+        self.requested_text.remove(&node);
+        // `open` may have stored an empty placeholder; clear it so clicking
+        // the file again actually retries the Drive read.
+        self.vault.clear_text(node);
+        cx.notify();
+    }
+
+    pub fn has_text(&self, node: NodeId) -> bool {
+        self.vault.text(node).is_some()
+    }
+
+    /// The active note's text, when a restored tab references a note whose
+    /// body has not streamed in yet.
+    pub fn active_missing_text(&self) -> Option<(NodeId, String)> {
+        let tab = self.model.active()?.active()?;
+        let node = tab.node?;
+        let path = tab.path.clone()?;
+        (tab.mode != ViewMode::Graph && !self.has_text(node)).then_some((node, path))
+    }
+
+    fn request_note_text(&mut self, node: NodeId, path: &str, cx: &mut Context<Self>) {
+        if self.vault.text(node).is_some() {
+            self.requested_text.remove(&node);
+            return;
+        }
+        if self.requested_text.insert(node) {
+            cx.emit(WebWorkspaceEvent::NoteTextRequested {
+                node,
+                path: path.to_string(),
+            });
+        }
+    }
+
     /// The Drive object id behind the active tab, for the actions that hand
     /// the document to Google Drive (open in Drive, open with the default app).
     fn active_drive_id(&self) -> Option<String> {
@@ -9686,6 +9863,17 @@ impl WebWorkspace {
                     .and_then(|key| self.tree.rows().find(|row| row.key == key).cloned())
                 {
                     if row.is_folder {
+                        if let Some(node) = row.node {
+                            if self.folder_needs_load(node) {
+                                self.tree_focused_key = Some(row.key.clone());
+                                if self.tree.is_collapsed_key(&row.key) {
+                                    self.tree.toggle_key(&row.key);
+                                }
+                                self.request_folder_children(node, &row.path, cx);
+                                cx.notify();
+                                return;
+                            }
+                        }
                         self.tree.toggle_key(&row.key);
                         self.tree_focused_key = Some(row.key);
                         cx.notify();
@@ -9703,6 +9891,61 @@ impl WebWorkspace {
         if handled {
             cx.stop_propagation();
         }
+    }
+
+    #[cfg(debug_assertions)]
+    fn publish_web_debug(&self, cx: &App) {
+        use wasm_bindgen::JsValue;
+        let active = self.model.active().and_then(|group| group.active());
+        let node = active.and_then(|tab| tab.node);
+        let node_ix = node.map_or(-1, |node| node.0 as i32);
+        let vault_text = node
+            .and_then(|node| self.vault.text(node))
+            .map_or(0, |text| text.len());
+        let editor_text = self.active_editor().read(cx).text().len();
+        let mode = active.map_or("none", |tab| match tab.mode {
+            ViewMode::Reading => "reading",
+            ViewMode::LivePreview => "live-preview",
+            ViewMode::Source => "source",
+            ViewMode::Graph => "graph",
+            ViewMode::Search => "search",
+            ViewMode::Terminal => "terminal",
+        });
+        let state = js_sys::Object::new();
+        for (key, value) in [
+            (
+                "activePath",
+                JsValue::from_str(active.and_then(|tab| tab.path.as_deref()).unwrap_or("")),
+            ),
+            ("activeNode", JsValue::from_f64(node_ix as f64)),
+            ("mode", JsValue::from_str(mode)),
+            ("vaultText", JsValue::from_f64(vault_text as f64)),
+            ("editorText", JsValue::from_f64(editor_text as f64)),
+            (
+                "requestedText",
+                JsValue::from_f64(self.requested_text.len() as f64),
+            ),
+            (
+                "loadingFolders",
+                JsValue::from_f64(self.loading_folders.len() as f64),
+            ),
+            (
+                "treeRows",
+                JsValue::from_f64(self.tree.rows().count() as f64),
+            ),
+            (
+                "folders",
+                JsValue::from_f64(self.vault.folders().len() as f64),
+            ),
+            ("files", JsValue::from_f64(self.vault.files().len() as f64)),
+        ] {
+            let _ = js_sys::Reflect::set(&state, &JsValue::from_str(key), &value);
+        }
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &JsValue::from_str("__tftWebDebug"),
+            &state,
+        );
     }
 
     fn publish_test_state(&self) {
@@ -10033,6 +10276,8 @@ impl EntityInputHandler for WebWorkspace {
 
 impl Render for WebWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        self.publish_web_debug(cx);
         if let Some((group_id, path)) = self.pending_radial_open.take() {
             if self.model.group(group_id).is_some() {
                 self.activate_group(group_id, cx);
@@ -10179,6 +10424,7 @@ impl Render for WebWorkspace {
             &theme,
         );
         let preview_workspace = cx.entity().downgrade();
+        let loading_folders = self.loading_folders.clone();
         let files_content = {
             div()
                 .id("web-files-scroll")
@@ -10224,7 +10470,7 @@ impl Render for WebWorkspace {
                         let menu_node = node;
                         let hover_path = path.clone();
                         let hover_workspace = preview_workspace.clone();
-                        tft_app::ui::hover_row(
+                        let row_element = tft_app::ui::hover_row(
                             tft_app::ui::file_tree_row(
                                 SharedString::from(format!("file-{key}")),
                                 depth,
@@ -10251,6 +10497,17 @@ impl Render for WebWorkspace {
                                     this.tree_focused_key = Some(key.clone());
                                     if folder {
                                         window.focus(&this.tree_focus, cx);
+                                        if let Some(node) = node {
+                                            if this.folder_needs_load(node) {
+                                                this.tree_focused_key = Some(key.clone());
+                                                if this.tree.is_collapsed_key(&key) {
+                                                    this.tree.toggle_key(&key);
+                                                }
+                                                this.request_folder_children(node, &row_path, cx);
+                                                cx.notify();
+                                                return;
+                                            }
+                                        }
                                         this.tree.toggle_key(&key);
                                         cx.notify();
                                         this.emit_workspace_state(cx);
@@ -10305,7 +10562,44 @@ impl Render for WebWorkspace {
                                     })
                                     .ok();
                             },
-                        )
+                        );
+                        let loading =
+                            folder && node.is_some_and(|node| loading_folders.contains(&node));
+                        div()
+                            .relative()
+                            .w_full()
+                            .when(loading, |wrapper| {
+                                let accent = theme.tokens.interactive_accent;
+                                wrapper.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(26.))
+                                        .left_0()
+                                        .right_0()
+                                        .h(px(2.))
+                                        .overflow_hidden()
+                                        .bg(accent.opacity(0.16))
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(relative(0.32))
+                                                .bg(accent)
+                                                .with_animation(
+                                                    SharedString::from(format!(
+                                                        "folder-loading-{}",
+                                                        node.map_or(0, |node| node.0)
+                                                    )),
+                                                    Animation::new(Duration::from_millis(1100))
+                                                        .repeat(),
+                                                    |segment, delta| {
+                                                        segment.left(relative(delta * 0.68))
+                                                    },
+                                                ),
+                                        ),
+                                )
+                            })
+                            .child(row_element)
+                            .into_any_element()
                     },
                 ))
                 .child(div().flex_1().w_full().min_h(px(0.)).on_mouse_down(
@@ -11256,6 +11550,16 @@ impl Render for WebWorkspace {
                     this.file_preview_modifiers_changed(event.modifiers, cx)
                 },
             ))
+            .capture_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                let keystroke = &event.keystroke;
+                if keystroke.key == "r"
+                    && keystroke.modifiers.shift
+                    && (keystroke.modifiers.platform || keystroke.modifiers.control)
+                {
+                    let _ = js_sys::eval("window.location.reload()");
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, action: &RunWebCommand, window, cx| {
                 if action.binding.as_deref().is_some_and(|binding| {
                     !this.hotkey_is_active(&action.id, binding)
